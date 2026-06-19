@@ -192,7 +192,7 @@ class ActionNetworkScraper:
     async def _fetch(self, client: httpx.AsyncClient, url: str) -> str | None:
         try:
             r = await client.get(url, headers=HEADERS, timeout=20)
-            if r.status_code == 200:
+            if 200 <= r.status_code < 300:
                 return r.text
             logger.warning(f"ActionNetwork {url} → {r.status_code}")
             return None

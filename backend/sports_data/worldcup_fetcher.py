@@ -258,7 +258,16 @@ async def link_picks_to_matches() -> int:
             db.table("picks").update({"match_id": best["id"]}).eq("id", pick["id"]).execute()
             linked += 1
         except Exception as exc:
-            logger.warning(f"Failed to link pick {pick['id']}: {exc}")
+            msg = str(exc)
+            if "picks_influencer_match_unique" in msg:
+                # Another pick from the same influencer is already linked to this
+                # match — this is a duplicate video pick; delete the orphan.
+                try:
+                    db.table("picks").delete().eq("id", pick["id"]).execute()
+                except Exception:
+                    pass
+            else:
+                logger.warning(f"Failed to link pick {pick['id']}: {exc}")
 
     logger.info(f"Linked {linked} picks to matches")
     return linked
