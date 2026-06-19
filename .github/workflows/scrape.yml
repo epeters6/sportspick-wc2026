@@ -1,10 +1,9 @@
 name: Scrape Picks
 
 on:
-  schedule:
-    # Every 30 minutes
-    - cron: "*/30 * * * *"
   workflow_dispatch:
+  # Scheduled scraping is handled by sync.yml (run_sync.py)
+  # This legacy file is kept for reference only — schedule disabled
 
 jobs:
   scrape:
