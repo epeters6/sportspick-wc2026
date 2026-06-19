@@ -103,13 +103,12 @@ class YouTubeScraper:
             return existing[0]["id"]
 
         # New channel — check subscriber gate
-        if require_min_subs:
-            subs = sub_count if sub_count is not None else self._sub_count_cache.get(channel_id, -1)
-            if subs < MIN_SUBSCRIBERS:
-                logger.debug(
-                    f"Skipping new channel {channel_title!r} — {subs:,} subscribers < {MIN_SUBSCRIBERS:,}"
-                )
-                return None
+        subs = sub_count if sub_count is not None else self._sub_count_cache.get(channel_id, 0)
+        if require_min_subs and subs < MIN_SUBSCRIBERS:
+            logger.debug(
+                f"Skipping new channel {channel_title!r} — {subs:,} subscribers < {MIN_SUBSCRIBERS:,}"
+            )
+            return None
 
         created = (
             db.table("influencers")
@@ -118,7 +117,7 @@ class YouTubeScraper:
                 "handle": channel_id,
                 "display_name": channel_title,
                 "profile_url": f"https://www.youtube.com/channel/{channel_id}",
-                "follower_count": sub_count or 0,
+                "follower_count": subs,
                 "is_active": True,
             })
             .execute()
