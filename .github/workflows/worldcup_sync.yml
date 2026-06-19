@@ -1,0 +1,71 @@
+name: World Cup Sync
+
+on:
+  schedule:
+    # Every 15 minutes — fast enough to catch match results shortly after final whistle
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  worldcup-sync:
+    name: Fetch WC Results + Resolve Picks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      WC_API_KEY: ${{ secrets.WC_API_KEY }}
+      WC_API_BASE: ${{ secrets.WC_API_BASE }}
+      APP_ENV: production
+      LOG_LEVEL: INFO
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install Python dependencies
+        # Only the packages needed for WC fetch — skip heavy scraper deps
+        run: |
+          pip install \
+            fastapi==0.115.5 \
+            httpx==0.28.1 \
+            aiohttp==3.11.10 \
+            supabase==2.10.0 \
+            pydantic==2.10.3 \
+            pydantic-settings==2.6.1 \
+            python-dotenv==1.0.1 \
+            loguru==0.7.3 \
+            python-dateutil==2.9.0 \
+            pytz==2024.2 \
+            tenacity==9.0.0
+
+      - name: Sync World Cup match data
+        run: |
+          python - <<'EOF'
+          import asyncio
+          from backend.sports_data.worldcup_fetcher import sync_matches
+          async def main():
+              count = await sync_matches()
+              print(f"Matches synced: {count}")
+          asyncio.run(main())
+          EOF
+
+      - name: Resolve pending picks
+        run: |
+          python - <<'EOF'
+          import asyncio
+          from backend.sports_data.worldcup_fetcher import resolve_pending_picks
+          async def main():
+              resolved = await resolve_pending_picks()
+              print(f"Picks resolved: {resolved}")
+          asyncio.run(main())
+          EOF

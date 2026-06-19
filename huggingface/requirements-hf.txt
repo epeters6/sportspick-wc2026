@@ -1,0 +1,29 @@
+# ── SportsPick Tracker — Hugging Face Spaces requirements ──────────────────────
+# This file is intentionally trimmed: scraper dependencies (twikit, tiktok-api,
+# instaloader, playwright) are NOT included — scraping runs in GitHub Actions.
+
+# Core API
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-dotenv==1.0.1
+pydantic==2.10.3
+pydantic-settings==2.6.1
+
+# Database
+supabase==2.10.0
+
+# HTTP / data fetching
+httpx==0.28.1
+aiohttp==3.11.10
+
+# ML
+scikit-learn==1.6.0
+numpy==2.2.0
+pandas==2.2.3
+joblib==1.4.2
+
+# Utilities
+tenacity==9.0.0
+loguru==0.7.3
+python-dateutil==2.9.0
+pytz==2024.2

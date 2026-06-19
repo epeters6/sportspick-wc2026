@@ -1,0 +1,39 @@
+# Core
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic>=2.0
+pydantic-settings>=2.0
+
+# Database
+supabase
+
+# Scheduling
+apscheduler
+
+# Scrapers
+twifork[impersonate]
+TikTok-Api
+instaloader
+playwright
+
+# HTTP / parsing
+httpx
+aiohttp
+beautifulsoup4
+lxml
+
+# ML
+scikit-learn>=1.7.0
+numpy>=2.3.0
+pandas>=2.2.3
+joblib
+
+# NLP
+spacy>=3.8.3
+
+# Utilities
+tenacity
+loguru
+python-dateutil
+pytz

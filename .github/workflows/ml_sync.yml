@@ -1,0 +1,67 @@
+name: ML Sync
+
+on:
+  schedule:
+    # Every hour at minute 5 (staggered from scraper)
+    - cron: "5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ml-sync:
+    name: Elo Ranking + Consensus + Accuracy Scoring
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      APP_ENV: production
+      LOG_LEVEL: INFO
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install Python dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Recompute Elo scores
+        run: |
+          python - <<'EOF'
+          from backend.ml.elo_ranker import update_all_elo_scores
+          updated = update_all_elo_scores()
+          print(f"Elo scores updated: {updated}")
+          EOF
+
+      - name: Recompute consensus picks
+        run: |
+          python - <<'EOF'
+          from backend.ml.consensus_engine import compute_all_consensus
+          computed = compute_all_consensus()
+          print(f"Consensus picks computed: {computed}")
+          EOF
+
+      - name: Recompute accuracy scores + streaks
+        run: |
+          python - <<'EOF'
+          from backend.ml.accuracy_scorer import compute_pick_streaks, compute_consensus_scores
+          compute_pick_streaks()
+          compute_consensus_scores()
+          print("Accuracy scoring complete")
+          EOF
+
+      - name: Daily snapshot (runs every hour, idempotent)
+        run: |
+          python - <<'EOF'
+          from backend.ml.elo_ranker import snapshot_daily_stats
+          snapshot_daily_stats()
+          print("Daily snapshot written")
+          EOF
