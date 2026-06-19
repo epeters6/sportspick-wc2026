@@ -1,0 +1,11 @@
+fastapi
+httpx
+aiohttp
+supabase
+pydantic>=2.0
+pydantic-settings>=2.0
+python-dotenv
+loguru
+python-dateutil
+pytz
+tenacity

@@ -30,24 +30,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: scripts/requirements-worldcup.txt
 
       - name: Install Python dependencies
-        # Only the packages needed for WC fetch — skip heavy scraper deps
-        # httpx is NOT pinned here; supabase 2.10.0 requires httpx<0.28
-        # so we let pip resolve a compatible version automatically.
-        run: |
-          pip install \
-            fastapi==0.115.5 \
-            aiohttp==3.11.10 \
-            supabase==2.10.0 \
-            pydantic==2.10.3 \
-            pydantic-settings==2.6.1 \
-            python-dotenv==1.0.1 \
-            loguru==0.7.3 \
-            python-dateutil==2.9.0 \
-            pytz==2024.2 \
-            tenacity==9.0.0
+        run: pip install -r scripts/requirements-worldcup.txt
 
       - name: Sync World Cup match data
         run: |
