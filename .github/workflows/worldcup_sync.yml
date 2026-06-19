@@ -34,10 +34,11 @@ jobs:
 
       - name: Install Python dependencies
         # Only the packages needed for WC fetch — skip heavy scraper deps
+        # httpx is NOT pinned here; supabase 2.10.0 requires httpx<0.28
+        # so we let pip resolve a compatible version automatically.
         run: |
           pip install \
             fastapi==0.115.5 \
-            httpx==0.28.1 \
             aiohttp==3.11.10 \
             supabase==2.10.0 \
             pydantic==2.10.3 \
