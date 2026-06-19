@@ -47,8 +47,11 @@ WC_URL_PATTERNS = [
     r"/soccer/world-cup-picks",
 ]
 
-# Explicit pick-line pattern: "#### Pick: {anything}"
-PICK_LINE_RE = re.compile(r"####\s*Pick:\s*(.+)", re.IGNORECASE)
+# Explicit pick-line patterns (ActionNetwork uses both h4 and list-item formats)
+PICK_LINE_RE = re.compile(
+    r"(?:#{1,4}|-|\*)\s*Pick:\s*(.+)|Our (?:best |top )?bet[:\s]+(.+)",
+    re.IGNORECASE,
+)
 
 # Known ActionNetwork soccer experts — pre-seeded as influencers
 ACTION_NETWORK_EXPERTS = [
@@ -261,37 +264,88 @@ class ActionNetworkScraper:
 
     # ── Article parsing ────────────────────────────────────────────────────────
 
+    def _extract_author(self, soup: BeautifulSoup) -> str:
+        """Return the article author name, falling back to known AN experts."""
+        # Try structured author tags first
+        for candidate in [
+            soup.find("span", {"data-testid": "author-name"}),
+            soup.find(class_=re.compile(r"author|byline", re.I)),
+            soup.find("a", href=re.compile(r"/authors?/|/@")),
+        ]:
+            if candidate:
+                name = candidate.get_text(strip=True)
+                if len(name) > 2:
+                    return name
+
+        # Scan plain text for known expert names right after the h1
+        text = soup.get_text(" ")
+        for name in ACTION_NETWORK_EXPERTS:
+            if name in text:
+                return name
+
+        return "Action Network Staff"
+
+    def _extract_projected_winner(self, soup: BeautifulSoup) -> str | None:
+        """
+        ActionNetwork articles always include a 'Projected Chance of Winning' table:
+            | Croatia | Draw | England |
+            |---------|------|---------|
+            | 19.3%   | 23.9%| 56.9%  |
+
+        Parse it and return the team with the highest projected win probability.
+        Only returns a winner if one team is clearly ahead (>40%).
+        """
+        for table in soup.find_all("table"):
+            headers = [th.get_text(strip=True) for th in table.find_all("th")]
+            if len(headers) != 3:
+                continue
+            # Middle header should be "Draw"
+            if "draw" not in headers[1].lower():
+                continue
+
+            rows = table.find_all("tr")
+            # Find the data row with percentages
+            for row in rows[1:]:
+                cells = row.find_all(["td", "th"])
+                if len(cells) != 3:
+                    continue
+                try:
+                    pcts = [
+                        float(c.get_text(strip=True).replace("%", "").strip())
+                        for c in cells
+                    ]
+                except ValueError:
+                    continue
+                # pcts[0]=team1, pcts[1]=draw, pcts[2]=team2
+                if pcts[0] > pcts[2] and pcts[0] > 40:
+                    return _canonicalise_team(headers[0])
+                if pcts[2] > pcts[0] and pcts[2] > 40:
+                    return _canonicalise_team(headers[2])
+                # If very close (both <40 / draw game), skip — don't force a pick
+        return None
+
     def _parse_article(self, html: str, url: str) -> list[dict]:
         """
         Parse an ActionNetwork article and return a list of pick dicts:
         {expert, predicted_winner, raw_text, post_id, published_at}
+
+        Priority:
+        1. Explicit moneyline/winner pick lines (- Pick: {Team}, #### Pick: {Team})
+        2. Projected Chance of Winning table (model projection attributed to expert)
         """
         soup = BeautifulSoup(html, "lxml")
-        results = []
 
-        # Extract author
-        author_tag = (
-            soup.find("span", {"data-testid": "author-name"})
-            or soup.find(class_=re.compile(r"author|byline", re.I))
-            or soup.find("a", href=re.compile(r"/authors?/"))
-        )
-        expert = author_tag.get_text(strip=True) if author_tag else "Action Network Staff"
-        # Normalise "Action Network Staff" variants
-        if not expert or len(expert) < 3:
-            expert = "Action Network Staff"
-
-        # Published date
+        expert = self._extract_author(soup)
         time_tag = soup.find("time")
         published_at = time_tag["datetime"] if time_tag and time_tag.get("datetime") else None
-
-        # Article slug as base post_id
         slug = url.rstrip("/").split("/")[-1][:80]
-
-        # Find all "#### Pick:" lines in raw text
         full_text = soup.get_text(" ", strip=True)
-        pick_line_matches = PICK_LINE_RE.findall(full_text)
 
-        for idx, raw_pick_line in enumerate(pick_line_matches):
+        results = []
+
+        # Phase 1: explicit "Pick:" lines in article text
+        for idx, groups in enumerate(PICK_LINE_RE.finditer(full_text)):
+            raw_pick_line = groups.group(1) or groups.group(2) or ""
             winner = _extract_team_from_pick_line(raw_pick_line)
             if not winner:
                 continue
@@ -304,29 +358,18 @@ class ActionNetworkScraper:
                 "published_at": published_at,
             })
 
-        # Fallback: if no explicit Pick lines, try table-based picks
+        # Phase 2: if no winner pick found, use win-probability projection table
         if not results:
-            for table in soup.find_all("table"):
-                headers = [th.get_text(strip=True).lower() for th in table.find_all("th")]
-                if "pick" not in headers:
-                    continue
-                pick_col = headers.index("pick")
-                for row in table.find_all("tr")[1:]:
-                    cells = row.find_all(["td", "th"])
-                    if len(cells) <= pick_col:
-                        continue
-                    pick_text = cells[pick_col].get_text(strip=True)
-                    winner = _extract_team_from_pick_line(pick_text)
-                    if not winner:
-                        continue
-                    post_id = f"an_{slug}_t{pick_col}"
-                    results.append({
-                        "expert": expert,
-                        "predicted_winner": winner,
-                        "raw_text": f"{url}\n{pick_text}",
-                        "post_id": post_id,
-                        "published_at": published_at,
-                    })
+            winner = self._extract_projected_winner(soup)
+            if winner:
+                post_id = f"an_{slug}_proj"
+                results.append({
+                    "expert": expert,
+                    "predicted_winner": winner,
+                    "raw_text": f"{url}\nProjected winner: {winner}",
+                    "post_id": post_id,
+                    "published_at": published_at,
+                })
 
         return results
 
