@@ -15,8 +15,8 @@ from typing import Any
 
 TEAM_ALIASES: dict[str, str] = {
     # USA — DB uses "USA" (openfootball format)
-    "usa": "USA", "usmnt": "USA", "united states": "USA",
-    "us": "USA", "america": "USA", "u.s.": "USA",
+    # NOTE: "us" and "america" intentionally omitted — too ambiguous in English prose
+    "usa": "USA", "usmnt": "USA", "united states": "USA", "u.s.": "USA",
     # South America
     "brazil": "Brazil", "brasil": "Brazil",
     "argentina": "Argentina", "messi": "Argentina",
@@ -104,11 +104,21 @@ MEDIUM_CONFIDENCE = ["think", "believe", "predict", "feeling", "leaning", "proba
 LOW_CONFIDENCE = ["maybe", "might", "could", "possibly", "not sure", "50/50"]
 
 
-def extract_all_picks(text: str) -> list[dict[str, Any]]:
+def extract_all_picks(
+    text: str,
+    allowed_teams: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """
-    Like extract_pick but returns ALL picks found in the text.
-    Handles multi-match videos where a creator backs multiple teams.
-    Returns a list of dicts, each with predicted_winner/score/confidence.
+    Like extract_pick but returns ALL explicitly-backed picks in the text.
+
+    Uses only structured WIN_PATTERNS (requires clear betting language like
+    "backing X", "X to win", "prediction: X") — deliberately avoids the broad
+    fallback so match preview articles don't generate a pick for every team
+    mentioned in passing.
+
+    allowed_teams: if provided, only picks for these canonical team names are
+    returned. Pass the two teams from a video title to prevent false positives
+    from match previews that describe both sides in detail.
     """
     if not text:
         return []
@@ -116,42 +126,32 @@ def extract_all_picks(text: str) -> list[dict[str, Any]]:
     text_lower = text.lower()
     score = _extract_score(text_lower)
     confidence = _extract_confidence(text_lower)
-    found: dict[str, dict] = {}  # canonical → pick data (deduped)
+    found: dict[str, dict] = {}
 
-    # Phase 1: structured WIN_PATTERNS — find every match, not just the first
     for pattern in WIN_PATTERNS:
         for m in re.finditer(pattern, text_lower):
             raw = m.group(1).strip()
             canonical = _canonicalise_team(raw)
-            if canonical and canonical not in found:
+            if not canonical:
+                continue
+            if allowed_teams and canonical not in allowed_teams:
+                continue
+            if canonical not in found:
                 found[canonical] = {
                     "predicted_winner": canonical,
                     "predicted_score": score,
                     "confidence": confidence,
                 }
 
-    # Phase 2: fallback — every team alias near a win-signal word
-    WIN_SIGNALS = [
-        "win", "beat", "pick", "predict", "back", "going",
-        "final", "winner", "best bet", "backing", "take",
-    ]
-    for alias, canonical in TEAM_ALIASES.items():
-        if canonical in found:
-            continue
-        start = 0
-        while True:
-            idx = text_lower.find(alias, start)
-            if idx == -1:
-                break
-            window = text_lower[max(0, idx - 50): idx + len(alias) + 50]
-            if any(sig in window for sig in WIN_SIGNALS):
-                found[canonical] = {
-                    "predicted_winner": canonical,
-                    "predicted_score": score,
-                    "confidence": confidence,
-                }
-                break
-            start = idx + 1
+    # If structured patterns found nothing, fall back to single-pick extraction
+    # (which uses a narrower window-based heuristic on the first mention only)
+    if not found:
+        single = extract_pick(text)
+        if single.get("predicted_winner"):
+            winner = single["predicted_winner"]
+            if not allowed_teams or winner in allowed_teams:
+                return [single]
+        return []
 
     return list(found.values())
 

@@ -15,6 +15,7 @@ FREE tier: 10,000 quota units/day.
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -22,7 +23,7 @@ from loguru import logger
 
 from backend.config import get_settings
 from backend.db import get_db
-from backend.scrapers.pick_extractor import extract_all_picks
+from backend.scrapers.pick_extractor import extract_all_picks, TEAM_ALIASES
 
 YT_BASE = "https://www.googleapis.com/youtube/v3"
 
@@ -221,7 +222,8 @@ class YouTubeScraper:
             published_at = snippet.get("publishedAt")
             raw_text = f"{title}\n{description}".strip()
 
-            all_picks = extract_all_picks(raw_text)
+            allowed = self._teams_from_title(title)
+            all_picks = extract_all_picks(raw_text, allowed_teams=allowed)
             if not all_picks:
                 continue
 
@@ -378,7 +380,8 @@ class YouTubeScraper:
                 published_at = snippet.get("publishedAt")
                 raw_text = f"{title}\n{description}".strip()
 
-                all_picks = extract_all_picks(raw_text)
+                allowed = self._teams_from_title(title)
+                all_picks = extract_all_picks(raw_text, allowed_teams=allowed)
                 if not all_picks:
                     continue
 
@@ -395,6 +398,21 @@ class YouTubeScraper:
 
         logger.info(f"YouTube: saved {total} picks")
         return total
+
+    def _teams_from_title(self, title: str) -> set[str] | None:
+        """
+        If the title contains 'TeamA vs TeamB', return {TeamA, TeamB} canonical names.
+        Used to restrict pick extraction to only the two teams in focus.
+        Returns None if no clear match-up found in title.
+        """
+        m = re.search(r"([a-z\s]+?)\s+vs\.?\s+([a-z\s]+?)(?:\s*[|\-–|&]|$)",
+                      title.lower())
+        if not m:
+            return None
+        t1 = TEAM_ALIASES.get(m.group(1).strip())
+        t2 = TEAM_ALIASES.get(m.group(2).strip())
+        teams = {t for t in (t1, t2) if t}
+        return teams if len(teams) == 2 else None
 
     async def _search_videos(self, client: httpx.AsyncClient, query: str) -> list[dict]:
         params = {
