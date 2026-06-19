@@ -22,7 +22,7 @@ from loguru import logger
 
 from backend.config import get_settings
 from backend.db import get_db
-from backend.scrapers.pick_extractor import extract_pick
+from backend.scrapers.pick_extractor import extract_all_picks
 
 YT_BASE = "https://www.googleapis.com/youtube/v3"
 
@@ -210,7 +210,7 @@ class YouTubeScraper:
             logger.warning(f"Could not fetch uploads for {channel_id}: {exc}")
             return []
 
-        picks = []
+        results = []
         for item in items:
             snippet = item.get("snippet", {})
             vid_id = snippet.get("resourceId", {}).get("videoId")
@@ -221,18 +221,18 @@ class YouTubeScraper:
             published_at = snippet.get("publishedAt")
             raw_text = f"{title}\n{description}".strip()
 
-            pick_data = extract_pick(raw_text)
-            if not pick_data.get("predicted_winner"):
+            all_picks = extract_all_picks(raw_text)
+            if not all_picks:
                 continue
 
-            picks.append({
+            results.append({
                 "influencer_id": influencer_id,
                 "vid_id": vid_id,
                 "raw_text": raw_text,
-                "pick_data": pick_data,
+                "picks": all_picks,
                 "published_at": published_at,
             })
-        return picks
+        return results
 
     # ── Subscriber count lookup ───────────────────────────────────────────────
 
@@ -264,25 +264,30 @@ class YouTubeScraper:
 
     # ── Save pick to DB ───────────────────────────────────────────────────────
 
-    def _save_pick(self, db, influencer_id: str, vid_id: str, raw_text: str,
-                   pick_data: dict, published_at: str | None) -> bool:
-        record = {
-            "influencer_id": influencer_id,
-            "platform": "youtube",
-            "post_id": vid_id,
-            "post_url": f"https://www.youtube.com/watch?v={vid_id}",
-            "raw_text": raw_text[:2000],
-            "predicted_winner": pick_data.get("predicted_winner"),
-            "predicted_score": pick_data.get("predicted_score"),
-            "confidence": pick_data.get("confidence"),
-            "posted_at": published_at,
-        }
-        try:
-            db.table("picks").upsert(record, on_conflict="platform,post_id").execute()
-            return True
-        except Exception as exc:
-            logger.warning(f"Failed to save YouTube pick: {exc}")
-            return False
+    def _save_picks(self, db, influencer_id: str, vid_id: str, raw_text: str,
+                    picks: list[dict], published_at: str | None) -> int:
+        """Save all picks from a video. Returns count saved."""
+        saved = 0
+        for i, pick_data in enumerate(picks):
+            # Give each pick a unique post_id so multi-pick videos all get stored
+            post_id = f"{vid_id}_{i}" if len(picks) > 1 else vid_id
+            record = {
+                "influencer_id": influencer_id,
+                "platform": "youtube",
+                "post_id": post_id,
+                "post_url": f"https://www.youtube.com/watch?v={vid_id}",
+                "raw_text": raw_text[:2000],
+                "predicted_winner": pick_data.get("predicted_winner"),
+                "predicted_score": pick_data.get("predicted_score"),
+                "confidence": pick_data.get("confidence"),
+                "posted_at": published_at,
+            }
+            try:
+                db.table("picks").upsert(record, on_conflict="platform,post_id").execute()
+                saved += 1
+            except Exception as exc:
+                logger.warning(f"Failed to save YouTube pick: {exc}")
+        return saved
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
@@ -325,11 +330,10 @@ class YouTubeScraper:
                         if vid_id in seen_video_ids:
                             continue
                         seen_video_ids.add(vid_id)
-                        if self._save_pick(
+                        total += self._save_picks(
                             db, influencer_id, vid_id,
-                            cp["raw_text"], cp["pick_data"], cp["published_at"]
-                        ):
-                            total += 1
+                            cp["raw_text"], cp["picks"], cp["published_at"]
+                        )
                     await asyncio.sleep(0.5)
 
             # ── Phase 2: Keyword search for new channels ──────────────────────
@@ -374,8 +378,8 @@ class YouTubeScraper:
                 published_at = snippet.get("publishedAt")
                 raw_text = f"{title}\n{description}".strip()
 
-                pick_data = extract_pick(raw_text)
-                if not pick_data.get("predicted_winner"):
+                all_picks = extract_all_picks(raw_text)
+                if not all_picks:
                     continue
 
                 sub_count = self._sub_count_cache.get(channel_id, 0)
@@ -387,8 +391,7 @@ class YouTubeScraper:
                 if not influencer_id:
                     continue
 
-                if self._save_pick(db, influencer_id, vid_id, raw_text, pick_data, published_at):
-                    total += 1
+                total += self._save_picks(db, influencer_id, vid_id, raw_text, all_picks, published_at)
 
         logger.info(f"YouTube: saved {total} picks")
         return total

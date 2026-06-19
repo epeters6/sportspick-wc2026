@@ -104,6 +104,58 @@ MEDIUM_CONFIDENCE = ["think", "believe", "predict", "feeling", "leaning", "proba
 LOW_CONFIDENCE = ["maybe", "might", "could", "possibly", "not sure", "50/50"]
 
 
+def extract_all_picks(text: str) -> list[dict[str, Any]]:
+    """
+    Like extract_pick but returns ALL picks found in the text.
+    Handles multi-match videos where a creator backs multiple teams.
+    Returns a list of dicts, each with predicted_winner/score/confidence.
+    """
+    if not text:
+        return []
+
+    text_lower = text.lower()
+    score = _extract_score(text_lower)
+    confidence = _extract_confidence(text_lower)
+    found: dict[str, dict] = {}  # canonical → pick data (deduped)
+
+    # Phase 1: structured WIN_PATTERNS — find every match, not just the first
+    for pattern in WIN_PATTERNS:
+        for m in re.finditer(pattern, text_lower):
+            raw = m.group(1).strip()
+            canonical = _canonicalise_team(raw)
+            if canonical and canonical not in found:
+                found[canonical] = {
+                    "predicted_winner": canonical,
+                    "predicted_score": score,
+                    "confidence": confidence,
+                }
+
+    # Phase 2: fallback — every team alias near a win-signal word
+    WIN_SIGNALS = [
+        "win", "beat", "pick", "predict", "back", "going",
+        "final", "winner", "best bet", "backing", "take",
+    ]
+    for alias, canonical in TEAM_ALIASES.items():
+        if canonical in found:
+            continue
+        start = 0
+        while True:
+            idx = text_lower.find(alias, start)
+            if idx == -1:
+                break
+            window = text_lower[max(0, idx - 50): idx + len(alias) + 50]
+            if any(sig in window for sig in WIN_SIGNALS):
+                found[canonical] = {
+                    "predicted_winner": canonical,
+                    "predicted_score": score,
+                    "confidence": confidence,
+                }
+                break
+            start = idx + 1
+
+    return list(found.values())
+
+
 def extract_pick(text: str) -> dict[str, Any]:
     """
     Parse a social media post and return:
