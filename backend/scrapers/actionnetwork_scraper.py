@@ -2,12 +2,14 @@
 ActionNetwork.com expert picks scraper.
 
 Strategy:
-1. Fetch the /soccer listing page to discover recent WC2026 prediction articles.
-2. Each article is written by a named expert (William Boor, Sam Farley, etc.).
-3. Inside each article, find explicit moneyline picks:
-   - "#### Pick: {Team} Moneyline" patterns
-   - Table rows with "Pick" column containing a team name
-4. Each expert becomes a separate influencer; one pick per (expert, match).
+  ActionNetwork renders its listing page via JavaScript, so we cannot discover
+  articles by scraping /soccer. Instead we:
+  1. Pull today's + recent WC matches from our DB.
+  2. Construct the expected ActionNetwork article URL for each match — they use
+     a very consistent pattern:
+       /soccer/{team1}-vs-{team2}-prediction-pick-odds-world-cup-{weekday}-{month}-{day}
+  3. Try a few URL variants until one returns 2xx.
+  4. Parse the article for the author and explicit "#### Pick:" lines.
 
 No API key required — public HTML pages.
 """
@@ -15,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from bs4 import BeautifulSoup
@@ -200,25 +202,62 @@ class ActionNetworkScraper:
             logger.warning(f"ActionNetwork fetch error {url}: {exc}")
             return None
 
-    # ── Article discovery ──────────────────────────────────────────────────────
+    # ── Article URL construction from match schedule ───────────────────────────
 
-    def _discover_article_urls(self, html: str) -> list[str]:
-        """Extract WC2026 prediction article URLs from the /soccer listing page."""
-        soup = BeautifulSoup(html, "lxml")
-        urls = []
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if not href.startswith("/soccer/"):
-                continue
-            if "world-cup" not in href:
-                continue
-            # Skip PRO-gated model projection articles — they 403 without a subscription
-            if "model-projections" in href or "betting-edges" in href:
-                continue
-            full = BASE + href if href.startswith("/") else href
-            if full not in urls:
-                urls.append(full)
-        return urls
+    @staticmethod
+    def _team_slug(team_name: str) -> str:
+        """Convert a canonical team name to an ActionNetwork URL slug."""
+        overrides = {
+            "USA": "united-states",
+            "Bosnia-Herzegovina": "bosnia-herzegovina",
+            "Bosnia & Herzegovina": "bosnia-herzegovina",
+            "Ivory Coast": "ivory-coast",
+            "DR Congo": "dr-congo",
+            "South Korea": "south-korea",
+            "Saudi Arabia": "saudi-arabia",
+            "New Zealand": "new-zealand",
+            "Czech Republic": "czech-republic",
+            "Costa Rica": "costa-rica",
+            "Trinidad & Tobago": "trinidad-tobago",
+        }
+        if team_name in overrides:
+            return overrides[team_name]
+        return re.sub(r"[^a-z0-9]+", "-", team_name.lower()).strip("-")
+
+    def _build_article_urls(self, home: str, away: str, match_date: datetime) -> list[str]:
+        """
+        Generate candidate ActionNetwork article URLs for a given match.
+        AN uses several slightly different patterns — we try all of them.
+        """
+        h = self._team_slug(home)
+        a = self._team_slug(away)
+        weekday = match_date.strftime("%A").lower()     # e.g. "friday"
+        month = match_date.strftime("%B").lower()       # e.g. "june"
+        day = str(match_date.day)                       # e.g. "19"
+
+        templates = [
+            f"{BASE}/soccer/{h}-vs-{a}-prediction-pick-odds-world-cup-{weekday}-{month}-{day}",
+            f"{BASE}/soccer/{h}-vs-{a}-prediction-pick-world-cup-odds-{weekday}-{month}-{day}",
+            f"{BASE}/soccer/{h}-vs-{a}-prediction-pick-world-cup-{weekday}-{month}-{day}",
+            f"{BASE}/soccer/{h}-vs-{a}-predictions-lineups-odds-world-cup-{weekday}-{month}-{day}",
+            f"{BASE}/soccer/{h}-vs-{a}-prediction-lineups-odds-world-cup-{weekday}-{month}-{day}",
+        ]
+        return templates
+
+    def _get_recent_matches(self, days_back: int = 4) -> list[dict]:
+        """Fetch WC matches from the last N days + the next day."""
+        db = get_db()
+        cutoff_past = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
+        cutoff_future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        rows = (
+            db.table("matches")
+            .select("id, home_team, away_team, scheduled_at")
+            .gte("scheduled_at", cutoff_past)
+            .lte("scheduled_at", cutoff_future)
+            .execute()
+            .data or []
+        )
+        return rows
 
     # ── Article parsing ────────────────────────────────────────────────────────
 
@@ -301,26 +340,49 @@ class ActionNetworkScraper:
     # ── Main entry ─────────────────────────────────────────────────────────────
 
     async def scrape_all(self) -> int:
-        """Discover and scrape ActionNetwork WC2026 prediction articles."""
+        """
+        For each recent WC match, construct candidate ActionNetwork article URLs
+        and scrape the first one that returns a valid response.
+        """
         total = 0
         async with httpx.AsyncClient() as client:
             await self._seed_experts()
 
-            listing_html = await self._fetch(client, LISTING_URL)
-            if not listing_html:
-                logger.warning("ActionNetwork: could not fetch listing page")
-                return 0
+            matches = self._get_recent_matches(days_back=4)
+            logger.info(f"ActionNetwork: checking {len(matches)} recent matches")
 
-            article_urls = self._discover_article_urls(listing_html)
-            logger.info(f"ActionNetwork: found {len(article_urls)} WC article URLs")
-
-            for url in article_urls:
-                await asyncio.sleep(1.5)  # polite delay
-                article_html = await self._fetch(client, url)
-                if not article_html:
+            for match in matches:
+                scheduled_raw = match.get("scheduled_at", "")
+                try:
+                    match_date = datetime.fromisoformat(
+                        scheduled_raw.replace("Z", "+00:00")
+                    )
+                except Exception:
                     continue
 
-                picks = self._parse_article(article_html, url)
+                home = match.get("home_team", "")
+                away = match.get("away_team", "")
+                candidate_urls = self._build_article_urls(home, away, match_date)
+
+                article_html = None
+                used_url = None
+                for url in candidate_urls:
+                    await asyncio.sleep(1.0)
+                    html = await self._fetch(client, url)
+                    if html:
+                        article_html = html
+                        used_url = url
+                        break
+
+                if not article_html:
+                    logger.debug(f"ActionNetwork: no article found for {home} vs {away}")
+                    continue
+
+                picks = self._parse_article(article_html, used_url)
+                if not picks:
+                    logger.debug(f"ActionNetwork: no picks parsed from {used_url}")
+                    continue
+
                 for p in picks:
                     iid = self._get_or_create_expert(p["expert"])
                     if not iid:
