@@ -16,6 +16,7 @@ async def main():
     )
     from backend.scrapers.covers_scraper import CoversScraper
     from backend.scrapers.youtube_scraper import YouTubeScraper
+    from backend.scrapers.actionnetwork_scraper import ActionNetworkScraper
     from backend.ml.elo_ranker import (
         sync_influencer_pick_counts, update_all_elo_scores, deactivate_poor_performers,
     )
@@ -37,6 +38,11 @@ async def main():
     yt_picks = await yt.scrape_all()
     print(f"  {yt_picks} picks saved")
 
+    print("Scraping ActionNetwork...")
+    an = ActionNetworkScraper()
+    an_picks = await an.scrape_all()
+    print(f"  {an_picks} picks saved")
+
     print("Linking picks to matches...")
     linked = await link_picks_to_matches()
     resolved = await resolve_pending_picks()
@@ -48,7 +54,7 @@ async def main():
     update_all_elo_scores()
     compute_all_consensus()
 
-    print(f"=== Done: WC={wc} Covers={covers_picks} YT={yt_picks} linked={linked} resolved={resolved} ===")
+    print(f"=== Done: WC={wc} Covers={covers_picks} YT={yt_picks} AN={an_picks} linked={linked} resolved={resolved} ===")
 
 
 if __name__ == "__main__":

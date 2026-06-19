@@ -44,8 +44,9 @@ GROUP_URL = "https://www.covers.com/world-cup/group-{group}-daily-expert-picks-2
 
 # Known Covers experts — pre-seed them as influencers
 COVERS_EXPERTS = [
+    # Core soccer staff
     "Chris Vasile",    # 13+ yrs, soccer specialist, also runs Game Day Wagers YT
-    "Sam Farley",      # UK-based, soccer & NFL
+    "Sam Farley",      # UK-based, soccer & NFL; also writes for ActionNetwork
     "Jason Ence",      # writes daily WC match articles
     "Emanuel Rosu",    # Bucharest-based, Guardian/BBC contributor
     "James Eastham",   # 20+ yrs, France/UK, Guardian/Betfair/ESPN
@@ -53,8 +54,21 @@ COVERS_EXPERTS = [
     "Tom Oldfield",
     "John Ryan",
     "R.J. White",
-    "Kyle LaRusic",    # confirmed in research
-    "Eric Rasimowicz", # covers NFL, NBA, soccer
+    "Kyle LaRusic",
+    "Eric Rasimowicz",
+    # Additional Covers soccer/WC contributors
+    "Matt McEwan",
+    "Dan Kilpatrick",
+    "Joe Osborne",
+    "Wil Burrows",
+    "Alex Selvig",
+    "Drew Davison",
+    "Nick Raffoul",
+    "Adam Thompson",
+    "Levi Buckley",
+    "Warren Sharp",
+    "Dave Cokin",
+    "Bruce Marshall",
 ]
 
 # Maps Covers.com team names → canonical DB names (openfootball names)

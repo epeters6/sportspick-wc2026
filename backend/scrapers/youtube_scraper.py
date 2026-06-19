@@ -34,16 +34,34 @@ MIN_SUBSCRIBERS = 10_000
 # Manually vetted channels — scraped every sync, bypass subscriber gate.
 # Add the @handle (YouTube handle format) — resolved to channel IDs automatically.
 KNOWN_CHANNEL_HANDLES = [
+    # Betting / picks focused
     "@TheActionNetwork",       # The Action Network — covers every WC match
     "@thefull90",              # thefull90 — active WC2026 picks
     "@Dimers",                 # Dimers Sports Betting Analytics
     "@DocsSports",             # Doc's Sports — in business since 1971, 74k subs
     "@BettingPros",            # BettingPros
-    "@Thogden",                # Thogden — large soccer audience
     "@GameDayWagers",          # Chris Vasile (Covers.com expert's own channel)
-    "@WagerTalkTV",            # WagerTalk TV — already tracked but ensure it's here
-    "@CBSSports",              # CBS Sports — already tracked
-    "@PickDawgz",              # PickDawgz — already tracked
+    "@WagerTalkTV",            # WagerTalk TV
+    "@PickDawgz",              # PickDawgz
+    "@Pickswise",              # Pickswise — daily expert picks
+    "@VSiN",                   # Vegas Stats & Information Network
+    "@SportsbettingDime",      # Sportsbetting Dime — sharp analysis
+
+    # Major soccer / sports media
+    "@CBSSports",              # CBS Sports
+    "@FOXSports",              # FOX Sports
+    "@NBCSports",              # NBC Sports
+    "@SkySports",              # Sky Sports — UK's biggest sports broadcaster
+    "@ESPN",                   # ESPN
+    "@BR_Football",            # Bleacher Report Football
+    "@GOAL",                   # Goal.com
+    "@90minofficial",          # 90min
+    "@beINSPORTS",             # beIN SPORTS
+
+    # Soccer-specific
+    "@Thogden",                # Thogden — large soccer audience
+    "@433",                    # 433 — massive global soccer channel
+    "@UtdPassion",             # Man Utd / general soccer predictions
 ]
 
 # Search queries — each costs 100 quota units. Keep to ≤6.
