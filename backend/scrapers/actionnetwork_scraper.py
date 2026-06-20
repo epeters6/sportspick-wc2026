@@ -167,7 +167,7 @@ class ActionNetworkScraper:
             self._influencer_cache[expert_name] = iid
         return iid
 
-    def _save_pick(self, influencer_id: str, post_id: str, raw_text: str, predicted_winner: str, published_at: str | None) -> bool:
+    def _save_pick(self, influencer_id: str, post_id: str, raw_text: str, predicted_winner: str) -> bool:
         """Insert a pick, skip on duplicate (influencer+post or influencer+match)."""
         db = get_db()
         try:
@@ -181,7 +181,6 @@ class ActionNetworkScraper:
                     "predicted_score": None,
                     "confidence": None,
                     "scraped_at": datetime.now(timezone.utc).isoformat(),
-                    "published_at": published_at,
                     "status": "pending",
                 },
                 on_conflict="platform,post_id",
@@ -211,7 +210,10 @@ class ActionNetworkScraper:
     def _team_slug(team_name: str) -> str:
         """Convert a canonical team name to an ActionNetwork URL slug."""
         overrides = {
-            "USA": "united-states",
+            # ActionNetwork-specific spellings (verified from actual URLs)
+            "USA": "usa",
+            "Türkiye": "turkiye",
+            "Turkey": "turkiye",
             "Bosnia-Herzegovina": "bosnia-herzegovina",
             "Bosnia & Herzegovina": "bosnia-herzegovina",
             "Ivory Coast": "ivory-coast",
@@ -219,13 +221,17 @@ class ActionNetworkScraper:
             "South Korea": "south-korea",
             "Saudi Arabia": "saudi-arabia",
             "New Zealand": "new-zealand",
-            "Czech Republic": "czech-republic",
+            "Czech Republic": "czechia",
             "Costa Rica": "costa-rica",
             "Trinidad & Tobago": "trinidad-tobago",
+            "Curaçao": "curacao",
         }
         if team_name in overrides:
             return overrides[team_name]
-        return re.sub(r"[^a-z0-9]+", "-", team_name.lower()).strip("-")
+        # Normalise unicode (ç → c, ü → u, etc.) before slugifying
+        import unicodedata
+        normalised = unicodedata.normalize("NFKD", team_name).encode("ascii", "ignore").decode()
+        return re.sub(r"[^a-z0-9]+", "-", normalised.lower()).strip("-")
 
     def _build_article_urls(self, home: str, away: str, match_date: datetime) -> list[str]:
         """
@@ -435,7 +441,6 @@ class ActionNetworkScraper:
                         p["post_id"],
                         p["raw_text"],
                         p["predicted_winner"],
-                        p["published_at"],
                     )
                     if saved:
                         total += 1
