@@ -1,25 +1,29 @@
 "use client";
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { fetchLeaderboard, Influencer } from "@/lib/api";
+import { fetchLeaderboard } from "@/lib/api";
 import PlatformBadge from "@/components/PlatformBadge";
 import { TrendingUp, TrendingDown } from "lucide-react";
+import { PLATFORM_FILTER_OPTIONS, fmtFollowers } from "@/lib/platforms";
 
 const SORT_OPTIONS = [
-  { value: "elo_score", label: "Elo Score" },
+  { value: "elo_score",     label: "Elo Score" },
   { value: "accuracy_rate", label: "Accuracy" },
-  { value: "total_picks", label: "Most Picks" },
-  { value: "follower_count", label: "Followers" },
+  { value: "avg_clv",       label: "CLV" },
+  { value: "total_picks",   label: "Most Picks" },
+  { value: "follower_count",label: "Followers" },
 ];
-
-const PLATFORMS = ["all", "covers", "youtube"];
 
 function pct(n: number) { return `${(n * 100).toFixed(1)}%`; }
 
 export default function Leaderboard() {
+  const searchParams = useSearchParams();
+  const platformFromUrl = searchParams.get("platform");
+  const [platformOverride, setPlatformOverride] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState("total_picks");
-  const [platform, setPlatform] = useState("all");
+  const platform = platformOverride ?? platformFromUrl ?? "all";
 
   const { data, isLoading } = useQuery({
     queryKey: ["leaderboard", sortBy, platform],
@@ -35,12 +39,14 @@ export default function Leaderboard() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Influencer Leaderboard</h1>
-        <p className="text-gray-400 text-sm mt-1">Ranked by pick accuracy and Elo score</p>
+        <p className="text-gray-400 text-sm mt-1">
+          Ranked across 𝕏, TikTok, Covers, YouTube, ActionNetwork &amp; more
+        </p>
       </div>
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
-        <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1">
+        <div className="flex flex-wrap gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1">
           {SORT_OPTIONS.map((o) => (
             <button
               key={o.value}
@@ -53,16 +59,16 @@ export default function Leaderboard() {
             </button>
           ))}
         </div>
-        <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1">
-          {PLATFORMS.map((p) => (
+        <div className="flex flex-wrap gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1">
+          {PLATFORM_FILTER_OPTIONS.map((p) => (
             <button
-              key={p}
-              onClick={() => setPlatform(p)}
-              className={`px-3 py-1.5 rounded text-sm font-medium capitalize transition-colors ${
-                platform === p ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"
+              key={p.value}
+              onClick={() => setPlatformOverride(p.value === "all" ? null : p.value)}
+              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                platform === p.value ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"
               }`}
             >
-              {p === "all" ? "All Platforms" : p}
+              {p.label}
             </button>
           ))}
         </div>
@@ -70,70 +76,82 @@ export default function Leaderboard() {
 
       {/* Table */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-gray-500 bg-gray-900 border-b border-gray-800">
-              <th className="px-4 py-3 font-medium">#</th>
-              <th className="px-4 py-3 font-medium">Influencer</th>
-              <th className="px-4 py-3 font-medium">Platform</th>
-              <th className="px-4 py-3 font-medium text-right">Elo</th>
-              <th className="px-4 py-3 font-medium text-right">Accuracy</th>
-              <th className="px-4 py-3 font-medium text-right">Picks</th>
-              <th className="px-4 py-3 font-medium text-right">Streak</th>
-              <th className="px-4 py-3 font-medium text-right">Consensus</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-800">
-            {isLoading &&
-              [...Array(10)].map((_, i) => (
-                <tr key={i}>
-                  {[...Array(8)].map((_, j) => (
-                    <td key={j} className="px-4 py-3">
-                      <div className="h-4 bg-gray-800 rounded animate-pulse" />
-                    </td>
-                  ))}
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-gray-500 bg-gray-900 border-b border-gray-800">
+                <th className="px-4 py-3 font-medium">#</th>
+                <th className="px-4 py-3 font-medium">Influencer</th>
+                <th className="px-4 py-3 font-medium">Platform</th>
+                <th className="px-4 py-3 font-medium text-right">Followers</th>
+                <th className="px-4 py-3 font-medium text-right">Elo</th>
+                <th className="px-4 py-3 font-medium text-right">Accuracy</th>
+                <th className="px-4 py-3 font-medium text-right">Picks</th>
+                <th className="px-4 py-3 font-medium text-right">Streak</th>
+                <th className="px-4 py-3 font-medium text-right">Avg CLV</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800">
+              {isLoading &&
+                [...Array(10)].map((_, i) => (
+                  <tr key={i}>
+                    {[...Array(9)].map((_, j) => (
+                      <td key={j} className="px-4 py-3">
+                        <div className="h-4 bg-gray-800 rounded animate-pulse" />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              {data?.influencers.map((inf, i) => (
+                <tr
+                  key={inf.id}
+                  className="hover:bg-gray-800/50 transition-colors cursor-pointer"
+                >
+                  <td className="px-4 py-3 text-gray-500 font-mono text-xs">{i + 1}</td>
+                  <td className="px-4 py-3">
+                    <Link
+                      href={`/leaderboard/${inf.id}`}
+                      className="font-medium hover:text-indigo-300 transition-colors"
+                    >
+                      @{inf.handle}
+                      {inf.display_name && (
+                        <span className="text-gray-400 font-normal ml-1.5">{inf.display_name}</span>
+                      )}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-3">
+                    <PlatformBadge platform={inf.platform} />
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-xs text-gray-400">
+                    {inf.follower_count > 0 ? fmtFollowers(inf.follower_count) : "—"}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-indigo-300">
+                    {Math.round(inf.elo_score)}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-emerald-400">
+                    {pct(inf.accuracy_rate)}
+                  </td>
+                  <td className="px-4 py-3 text-right text-gray-300">{inf.total_picks}</td>
+                  <td className="px-4 py-3 text-right">
+                    <span className={`flex items-center justify-end gap-1 font-medium ${inf.pick_streak >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      {inf.pick_streak >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                      {Math.abs(inf.pick_streak)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-xs">
+                    {inf.avg_clv != null ? (
+                      <span className={inf.avg_clv >= 0 ? "text-emerald-400" : "text-red-400"}>
+                        {inf.avg_clv >= 0 ? "+" : ""}{(inf.avg_clv * 100).toFixed(1)}%
+                      </span>
+                    ) : (
+                      <span className="text-gray-600">—</span>
+                    )}
+                  </td>
                 </tr>
               ))}
-            {data?.influencers.map((inf, i) => (
-              <tr
-                key={inf.id}
-                className="hover:bg-gray-800/50 transition-colors cursor-pointer"
-              >
-                <td className="px-4 py-3 text-gray-500 font-mono text-xs">{i + 1}</td>
-                <td className="px-4 py-3">
-                  <Link
-                    href={`/leaderboard/${inf.id}`}
-                    className="font-medium hover:text-indigo-300 transition-colors"
-                  >
-                    @{inf.handle}
-                    {inf.display_name && (
-                      <span className="text-gray-400 font-normal ml-1.5">{inf.display_name}</span>
-                    )}
-                  </Link>
-                </td>
-                <td className="px-4 py-3">
-                  <PlatformBadge platform={inf.platform} />
-                </td>
-                <td className="px-4 py-3 text-right font-mono text-indigo-300">
-                  {Math.round(inf.elo_score)}
-                </td>
-                <td className="px-4 py-3 text-right font-mono text-emerald-400">
-                  {pct(inf.accuracy_rate)}
-                </td>
-                <td className="px-4 py-3 text-right text-gray-300">{inf.total_picks}</td>
-                <td className="px-4 py-3 text-right">
-                  <span className={`flex items-center justify-end gap-1 font-medium ${inf.pick_streak >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                    {inf.pick_streak >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                    {Math.abs(inf.pick_streak)}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-right text-gray-400 font-mono text-xs">
-                  {pct(inf.consensus_score)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+        </div>
         {!isLoading && !data?.influencers.length && (
           <div className="py-12 text-center text-gray-500">
             No influencers with picks yet. Run <code className="bg-gray-800 px-1 rounded">/seed</code> and wait for the first scrape.

@@ -7,8 +7,8 @@ import Sidebar from "@/components/Sidebar";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "SportsPick Tracker | World Cup 2026",
-  description: "Track the top sports pick influencers across social media — powered by AI consensus.",
+  title: "SportsPick Tracker | World Cup 2026 + MLB",
+  description: "Track top sports pick influencers across 𝕏, TikTok, Covers, YouTube & ActionNetwork — powered by AI consensus.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -127,7 +127,7 @@ Everything runs for free: GitHub Actions for cron jobs, Hugging Face Spaces for 
 | Secret name | Value |
 |---|---|
 | `SUPABASE_URL` | Your Supabase project URL |
-| `SUPABASE_KEY` | Supabase **anon** key |
+| `SUPABASE_KEY` | Supabase **anon** key (alias: `SUPABASE_ANON_KEY`) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase **service_role** key |
 | `TWITTER_AUTH_TOKEN` | Twitter `auth_token` cookie |
 | `TWITTER_CT0` | Twitter `ct0` cookie |
@@ -140,7 +140,7 @@ Everything runs for free: GitHub Actions for cron jobs, Hugging Face Spaces for 
 | `WC_API_BASE` | `https://api.wc2026api.com/v1` |
 
 4. GitHub Actions workflows will start running automatically on their cron schedules:
-   - `.github/workflows/scrape.yml` — every **30 minutes** (scrapes all platforms)
+   - `.github/workflows/sync.yml` — every **30 minutes** (full scrape + ML pipeline)
    - `.github/workflows/worldcup_sync.yml` — every **15 minutes** (WC results + resolve picks)
    - `.github/workflows/ml_sync.yml` — every **hour** (Elo + consensus + scoring)
 

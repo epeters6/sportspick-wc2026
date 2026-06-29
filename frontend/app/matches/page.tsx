@@ -2,8 +2,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { fetchMatches, Match } from "@/lib/api";
+import { fetchMatches, type Sport } from "@/lib/api";
 import ConfidenceBar from "@/components/ConfidenceBar";
+import BetTypeBadge from "@/components/BetTypeBadge";
 import { CheckCircle, Clock } from "lucide-react";
 
 function fmtDate(s: string) {
@@ -15,33 +16,54 @@ function fmtDate(s: string) {
 
 export default function MatchesPage() {
   const [upcoming, setUpcoming] = useState(false);
+  const [sport, setSport] = useState<Sport>("football");
 
   const { data, isLoading } = useQuery({
-    queryKey: ["matches", upcoming],
-    queryFn: () => fetchMatches({ upcoming_only: upcoming }),
+    queryKey: ["matches", sport, upcoming],
+    queryFn: () => fetchMatches({ sport, upcoming_only: upcoming }),
     refetchInterval: 60_000,
   });
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">World Cup 2026 Matches</h1>
+          <h1 className="text-2xl font-bold">
+            {sport === "mlb" ? "MLB Games" : "World Cup 2026 Matches"}
+          </h1>
           <p className="text-gray-400 text-sm mt-1">Live scores and consensus pick data</p>
         </div>
-        <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1">
-          <button
-            onClick={() => setUpcoming(false)}
-            className={`px-3 py-1.5 text-sm rounded font-medium transition-colors ${!upcoming ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"}`}
-          >
-            All
-          </button>
-          <button
-            onClick={() => setUpcoming(true)}
-            className={`px-3 py-1.5 text-sm rounded font-medium transition-colors ${upcoming ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"}`}
-          >
-            Upcoming
-          </button>
+        <div className="flex flex-wrap gap-2">
+          {/* Sport filter */}
+          <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1">
+            <button
+              onClick={() => setSport("football")}
+              className={`px-3 py-1.5 text-sm rounded font-medium transition-colors ${sport === "football" ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"}`}
+            >
+              ⚽ World Cup
+            </button>
+            <button
+              onClick={() => setSport("mlb")}
+              className={`px-3 py-1.5 text-sm rounded font-medium transition-colors ${sport === "mlb" ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"}`}
+            >
+              ⚾ MLB
+            </button>
+          </div>
+          {/* Upcoming filter */}
+          <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1">
+            <button
+              onClick={() => setUpcoming(false)}
+              className={`px-3 py-1.5 text-sm rounded font-medium transition-colors ${!upcoming ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"}`}
+            >
+              All
+            </button>
+            <button
+              onClick={() => setUpcoming(true)}
+              className={`px-3 py-1.5 text-sm rounded font-medium transition-colors ${upcoming ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"}`}
+            >
+              Upcoming
+            </button>
+          </div>
         </div>
       </div>
 
@@ -50,6 +72,7 @@ export default function MatchesPage() {
           [...Array(8)].map((_, i) => (
             <div key={i} className="bg-gray-900 border border-gray-800 rounded-xl h-20 animate-pulse" />
           ))}
+
         {data?.matches.map((m) => {
           const cp = m.consensus_picks?.[0];
           return (
@@ -81,8 +104,7 @@ export default function MatchesPage() {
                   <span className="font-semibold">{m.away_team}</span>
                 </div>
                 <div className="flex items-center gap-3 text-xs text-gray-400 mt-0.5">
-                  <span>{m.stage}</span>
-                  <span>·</span>
+                  {m.stage && <><span>{m.stage}</span><span>·</span></>}
                   <span>{fmtDate(m.scheduled_at)}</span>
                   {m.venue && <><span>·</span><span>{m.venue}</span></>}
                 </div>
@@ -90,8 +112,12 @@ export default function MatchesPage() {
 
               {/* Consensus */}
               {cp && (
-                <div className="text-right flex-shrink-0 w-40">
-                  <p className="text-xs text-gray-400 mb-1">Consensus</p>
+                <div className="text-right flex-shrink-0 w-48">
+                  <div className="flex items-center justify-end gap-1.5 mb-1">
+                    <span className="text-xs text-gray-400">
+                      {cp.pick_count ?? cp.total_votes} picks
+                    </span>
+                  </div>
                   <p className="font-semibold text-indigo-300 text-sm">{cp.predicted_winner}</p>
                   <div className="mt-1">
                     <ConfidenceBar value={cp.confidence} />
@@ -101,9 +127,10 @@ export default function MatchesPage() {
             </Link>
           );
         })}
+
         {!isLoading && !data?.matches.length && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl py-12 text-center text-gray-500">
-            No matches found. Sync World Cup data via POST /sync.
+            No {sport === "mlb" ? "MLB games" : "World Cup matches"} found yet. Run the sync workflow.
           </div>
         )}
       </div>

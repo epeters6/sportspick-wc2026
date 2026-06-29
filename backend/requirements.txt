@@ -12,7 +12,7 @@ supabase
 apscheduler
 
 # Scrapers
-twifork[impersonate]
+twikit>=2.3.3
 TikTok-Api
 instaloader
 playwright
@@ -32,8 +32,15 @@ joblib
 # NLP
 spacy>=3.8.3
 
+# Transcripts
+youtube-transcript-api
+
 # Utilities
 tenacity
 loguru
 python-dateutil
 pytz
+
+# Polymarket autobet (live execution only — paper mode needs no extra deps)
+# Uncomment to enable real order placement on the Polygon CLOB:
+# py-clob-client

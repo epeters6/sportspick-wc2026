@@ -26,7 +26,7 @@ except ImportError:
 
 from backend.config import get_settings
 from backend.db import get_db
-from backend.scrapers.pick_extractor import extract_pick
+from backend.scrapers.pick_extractor import extract_all_picks
 
 settings = get_settings()
 
@@ -129,25 +129,36 @@ class InstagramScraper:
         posts = await self.fetch_user_posts(handle)
         saved = 0
         for post in posts:
-            pick_data = extract_pick(post["raw_text"])
-            record = {
-                "influencer_id": influencer_id,
-                "platform": "instagram",
-                "post_id": post["post_id"],
-                "post_url": post["post_url"],
-                "raw_text": post["raw_text"],
-                "predicted_winner": pick_data.get("predicted_winner"),
-                "predicted_score": pick_data.get("predicted_score"),
-                "confidence": pick_data.get("confidence"),
-                "posted_at": post["posted_at"],
-            }
-            try:
-                db.table("picks").upsert(
-                    record, on_conflict="platform,post_id"
-                ).execute()
-                saved += 1
-            except Exception as exc:
-                logger.warning(f"Failed to save IG pick from @{handle}: {exc}")
+            all_picks = extract_all_picks(post["raw_text"])
+            if not all_picks:
+                continue
+            for i, pick_data in enumerate(all_picks):
+                post_id = (
+                    f"{post['post_id']}-pick-{i}"
+                    if len(all_picks) > 1
+                    else post["post_id"]
+                )
+                record = {
+                    "influencer_id": influencer_id,
+                    "platform": "instagram",
+                    "post_id": post_id,
+                    "post_url": post["post_url"],
+                    "raw_text": post["raw_text"],
+                    "predicted_winner": pick_data.get("predicted_winner"),
+                    "predicted_score": pick_data.get("predicted_score"),
+                    "confidence": pick_data.get("confidence"),
+                    "bet_type": pick_data.get("bet_type"),
+                    "bet_line": pick_data.get("bet_line"),
+                    "bet_subject": pick_data.get("bet_subject"),
+                    "posted_at": post["posted_at"],
+                }
+                try:
+                    db.table("picks").upsert(
+                        record, on_conflict="platform,post_id"
+                    ).execute()
+                    saved += 1
+                except Exception as exc:
+                    logger.warning(f"Failed to save IG pick from @{handle}: {exc}")
 
         db.table("influencers").update(
             {"last_scraped_at": datetime.now(timezone.utc).isoformat()}

@@ -14,7 +14,7 @@ jobs:
 
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       WC_API_KEY: ${{ secrets.WC_API_KEY }}
       WC_API_BASE: ${{ secrets.WC_API_BASE }}
@@ -46,13 +46,41 @@ jobs:
           asyncio.run(main())
           EOF
 
-      - name: Resolve pending picks
+      - name: Sync match stats (ESPN / MLB box scores)
         run: |
           python - <<'EOF'
           import asyncio
-          from backend.sports_data.worldcup_fetcher import resolve_pending_picks
+          from backend.sports_data.stats_sync import sync_match_stats, enrich_openfootball_ht
           async def main():
-              resolved = await resolve_pending_picks()
-              print(f"Picks resolved: {resolved}")
+              n = await sync_match_stats(limit=120)
+              ht = await enrich_openfootball_ht()
+              print(f"Stats synced: {n}, HT enriched: {ht}")
           asyncio.run(main())
+          EOF
+
+      - name: Link picks to matches
+        run: |
+          python - <<'EOF'
+          import asyncio
+          from backend.sports_data.worldcup_fetcher import link_picks_to_matches
+          async def main():
+              linked = await link_picks_to_matches()
+              print(f"Picks linked: {linked}")
+          asyncio.run(main())
+          EOF
+
+      - name: Resolve pending picks
+        run: |
+          python - <<'EOF'
+          from backend.sports_data.pick_resolver import resolve_all_pending_picks
+          resolved = resolve_all_pending_picks()
+          print(f"Picks resolved: {resolved}")
+          EOF
+
+      - name: Settle open autobets
+        run: |
+          python - <<'EOF'
+          from backend.trading.autobet import resolve_autobets
+          resolved = resolve_autobets()
+          print(f"Autobets resolved: {resolved}")
           EOF

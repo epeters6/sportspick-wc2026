@@ -5,13 +5,17 @@ Each influencer starts at Elo 1000. When a pick resolves:
 - Correct pick   → Elo increases (more if they were the underdog opinion)
 - Incorrect pick → Elo decreases
 
-We also apply a recency weight so recent picks matter more.
+Improvements over vanilla Elo:
+- Recency half-life weighting (recent picks matter more)
+- Confidence-scaled K-factor (high-confidence wrong pick hurts more)
+- Wilson lower-bound score: a sample-size-aware "true accuracy" estimate
+  that penalises small-sample flukes, used as a trust multiplier in consensus.
 """
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone, timedelta
-from typing import Any
+from collections import defaultdict
+from datetime import datetime, timezone
 
 from loguru import logger
 
@@ -20,6 +24,7 @@ from backend.db import get_db
 ELO_K = 32          # standard K-factor
 ELO_DEFAULT = 1000  # starting Elo
 RECENCY_HALFLIFE_DAYS = 30  # picks older than this decay in weight
+WILSON_Z = 1.645    # 95% confidence interval (one-sided)
 
 
 def expected_score(elo_a: float, elo_b: float) -> float:
@@ -29,6 +34,26 @@ def expected_score(elo_a: float, elo_b: float) -> float:
 
 def update_elo(current_elo: float, actual_score: float, expected: float, k: float = ELO_K) -> float:
     return current_elo + k * (actual_score - expected)
+
+
+def wilson_lower_bound(correct: int, total: int, z: float = WILSON_Z) -> float:
+    """
+    Wilson score interval lower bound — a sample-size-aware accuracy estimate.
+
+    For n=0  → 0.0 (no data, no trust)
+    For n=3, 3/3 → ~0.49 (good but small sample)
+    For n=20, 15/20 → ~0.57 (solid)
+    For n=50, 40/50 → ~0.68 (strong)
+
+    This prevents a 2-for-2 picker from outranking a 40-for-50 picker.
+    """
+    if total == 0:
+        return 0.0
+    p_hat = correct / total
+    denominator = 1 + z * z / total
+    centre = p_hat + z * z / (2 * total)
+    spread = z * math.sqrt(p_hat * (1 - p_hat) / total + z * z / (4 * total * total))
+    return (centre - spread) / denominator
 
 
 def recency_weight(posted_at: str | None) -> float:
@@ -43,6 +68,18 @@ def recency_weight(posted_at: str | None) -> float:
         return 1.0
 
 
+def confidence_k_scale(confidence: float | None) -> float:
+    """
+    Scale the K-factor by pick confidence.
+    High-confidence picks move the needle more (both up and down).
+    Range: 0.7 × K (low conf) to 1.3 × K (high conf).
+    """
+    if confidence is None:
+        return 1.0
+    # Map [0, 1] → [0.7, 1.3]
+    return 0.7 + 0.6 * confidence
+
+
 # ─── Main update function ────────────────────────────────────────────────────
 
 def update_all_elo_scores() -> int:
@@ -53,10 +90,9 @@ def update_all_elo_scores() -> int:
     """
     db = get_db()
 
-    # Fetch all resolved picks
     picks = (
         db.table("picks")
-        .select("influencer_id, outcome, posted_at, confidence")
+        .select("influencer_id, outcome, posted_at, confidence, market_prob_at_pick")
         .in_("outcome", ["correct", "incorrect"])
         .order("posted_at")
         .execute()
@@ -66,45 +102,52 @@ def update_all_elo_scores() -> int:
     if not picks:
         return 0
 
-    # Group by influencer
-    from collections import defaultdict
     influencer_picks: dict[str, list[dict]] = defaultdict(list)
     for p in picks:
         influencer_picks[p["influencer_id"]].append(p)
 
-    # Current Elo scores (initialise all to default)
-    elo_scores: dict[str, float] = {iid: float(ELO_DEFAULT) for iid in influencer_picks}
-
-    # Process picks chronologically — each correct pick fights against the
-    # "average" consensus (treated as Elo 1000 opponent)
     for iid, ipicks in influencer_picks.items():
         elo = float(ELO_DEFAULT)
         total = 0
         correct = 0
         for pick in sorted(ipicks, key=lambda p: p.get("posted_at") or ""):
-            w = recency_weight(pick.get("posted_at"))
+            recency_w = recency_weight(pick.get("posted_at"))
+            conf_scale = confidence_k_scale(pick.get("confidence"))
             actual = 1.0 if pick["outcome"] == "correct" else 0.0
-            expected = expected_score(elo, ELO_DEFAULT)  # vs. crowd average
-            k_adj = ELO_K * w
+
+            # CLV-aware expectation: if we know the market's implied probability
+            # that this pick was correct, score against THAT (i.e. against the
+            # closing line) instead of a generic 1000-Elo crowd opponent. Beating
+            # a long-shot the market priced cheap earns far more Elo than nailing
+            # a heavy favourite everyone agreed on.
+            market_prob = pick.get("market_prob_at_pick")
+            if market_prob is not None and 0.0 < market_prob < 1.0:
+                expected = market_prob
+            else:
+                expected = expected_score(elo, ELO_DEFAULT)
+
+            k_adj = ELO_K * recency_w * conf_scale
             elo = update_elo(elo, actual, expected, k_adj)
             total += 1
             if pick["outcome"] == "correct":
                 correct += 1
-        elo_scores[iid] = elo
-        accuracy = correct / total if total else 0.0
 
-        # Persist to influencers table
+        accuracy = correct / total if total else 0.0
+        wlb = wilson_lower_bound(correct, total)
+
         db.table("influencers").update(
             {
                 "elo_score": round(elo, 2),
                 "accuracy_rate": round(accuracy, 4),
                 "total_picks": total,
                 "correct_picks": correct,
+                # Store Wilson lower-bound in consensus_score as a trust signal
+                "consensus_score": round(wlb, 4),
             }
         ).eq("id", iid).execute()
 
-    logger.info(f"Elo updated for {len(elo_scores)} influencers")
-    return len(elo_scores)
+    logger.info(f"Elo updated for {len(influencer_picks)} influencers")
+    return len(influencer_picks)
 
 
 def sync_influencer_pick_counts() -> int:

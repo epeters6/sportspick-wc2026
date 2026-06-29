@@ -28,7 +28,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from backend.db import get_db
+from backend.db import get_db, db_execute
 from backend.scheduler import create_scheduler
 
 
@@ -73,8 +73,8 @@ def health():
 def list_influencers(
     limit: int = Query(50, ge=1, le=200),
     min_picks: int = Query(0, ge=0),
-    sort_by: str = Query("elo_score", pattern="^(elo_score|accuracy_rate|total_picks|follower_count)$"),
-    platform: str | None = Query(None, pattern="^(twitter|tiktok|instagram|covers|youtube)$"),
+    sort_by: str = Query("elo_score", pattern="^(elo_score|accuracy_rate|total_picks|follower_count|avg_clv)$"),
+    platform: str | None = None,
 ):
     db = get_db()
     query = (
@@ -82,7 +82,7 @@ def list_influencers(
         .select(
             "id, platform, handle, display_name, profile_url, avatar_url, "
             "follower_count, elo_score, accuracy_rate, total_picks, correct_picks, "
-            "pick_streak, consensus_score, last_scraped_at"
+            "pick_streak, consensus_score, avg_clv, last_scraped_at"
         )
         .eq("is_active", True)
         .gte("total_picks", min_picks)
@@ -113,7 +113,10 @@ def get_influencer(influencer_id: str):
 
     picks = (
         db.table("picks")
-        .select("id, raw_text, predicted_winner, predicted_score, outcome, posted_at, post_url, match_id")
+        .select(
+            "id, raw_text, predicted_winner, predicted_score, outcome, "
+            "posted_at, post_url, match_id, bet_type, bet_line, market_prob_at_pick"
+        )
         .eq("influencer_id", influencer_id)
         .order("posted_at", desc=True)
         .limit(20)
@@ -140,12 +143,18 @@ def get_influencer(influencer_id: str):
 def list_matches(
     stage: str | None = None,
     upcoming_only: bool = False,
+    sport: str | None = None,
     limit: int = Query(50, ge=1, le=200),
 ):
     db = get_db()
     query = (
         db.table("matches")
-        .select("*, consensus_picks(predicted_winner, confidence, total_votes)")
+        .select(
+            "*, consensus_picks("
+            "  id, predicted_winner, confidence, total_votes, pick_count,"
+            "  home_probability, draw_probability, away_probability"
+            ")"
+        )
         .order("scheduled_at")
         .limit(limit)
     )
@@ -153,6 +162,8 @@ def list_matches(
         query = query.eq("stage", stage)
     if upcoming_only:
         query = query.eq("is_final", False)
+    if sport:
+        query = query.eq("sport", sport)
     rows = query.execute().data or []
     return {"matches": rows, "total": len(rows)}
 
@@ -175,7 +186,7 @@ def get_match_picks(match_id: str):
         db.table("picks")
         .select(
             "id, predicted_winner, predicted_score, confidence, outcome, "
-            "posted_at, post_url, raw_text, "
+            "posted_at, post_url, raw_text, bet_type, bet_line, market_prob_at_pick, "
             "influencers(handle, display_name, platform, elo_score, accuracy_rate)"
         )
         .eq("match_id", match_id)
@@ -199,10 +210,161 @@ def get_match_picks(match_id: str):
 # ─── Recommendations ─────────────────────────────────────────────────────────
 
 @app.get("/recommendations")
-def get_recommendations(limit: int = Query(10, ge=1, le=50)):
+def get_recommendations(
+    limit: int = Query(10, ge=1, le=50),
+    sport: str | None = None,
+):
     from backend.ml.consensus_engine import get_top_recommendations
-    recs = get_top_recommendations(limit=limit)
+    recs = get_top_recommendations(limit=limit, sport=sport)
     return {"recommendations": recs, "total": len(recs)}
+
+
+@app.get("/picks/recent")
+def list_recent_picks(
+    limit: int = Query(50, ge=1, le=200),
+    sport: str | None = None,
+    platform: str | None = None,
+):
+    """Recent picks across all bet types, optionally filtered by sport or platform."""
+    db = get_db()
+    query = (
+        db.table("picks")
+        .select(
+            "id, platform, predicted_winner, bet_type, bet_line, bet_subject, confidence, outcome, "
+            "posted_at, post_url, raw_text, "
+            "influencers(handle, platform, follower_count), "
+            "matches(home_team, away_team, scheduled_at, sport, stage)"
+        )
+        .order("posted_at", desc=True)
+    )
+    if platform:
+        query = query.eq("platform", platform)
+    fetch_limit = limit * 4 if sport else limit
+    query = query.limit(fetch_limit)
+    rows = query.execute().data or []
+    from backend.api.pick_utils import filter_picks_by_sport
+    rows = filter_picks_by_sport(rows, sport, limit=limit)
+    return {"picks": rows, "total": len(rows)}
+
+
+@app.get("/picks/props")
+def list_prop_picks(
+    limit: int = Query(50, ge=1, le=200),
+    bet_type: str | None = None,
+    sport: str | None = None,
+):
+    """Recent non-moneyline picks (draw, O/U, BTTS, props)."""
+    from backend.api.pick_utils import PROP_BET_TYPES, filter_picks_by_sport
+
+    db = get_db()
+    fetch_limit = limit * 4 if sport else limit
+    query = (
+        db.table("picks")
+        .select(
+            "id, predicted_winner, bet_type, bet_line, bet_subject, confidence, outcome, "
+            "posted_at, post_url, raw_text, platform, "
+            "influencers(handle, platform), "
+            "matches(home_team, away_team, scheduled_at, sport, stage)"
+        )
+        .in_("bet_type", [bet_type] if bet_type else list(PROP_BET_TYPES))
+        .order("posted_at", desc=True)
+        .limit(fetch_limit)
+    )
+    rows = query.execute().data or []
+    rows = filter_picks_by_sport(rows, sport, limit=limit)
+    return {"picks": rows, "total": len(rows)}
+
+
+# ─── Trading: calibration, paper, Polymarket autobet ─────────────────────────
+
+@app.get("/trading/calibration")
+def trading_calibration():
+    """Model calibration summary: Brier score, hit rate by bucket, ROI."""
+    from backend.ml.calibration import get_calibration_summary
+    return get_calibration_summary()
+
+
+@app.get("/trading/paper")
+def trading_paper():
+    """Virtual paper-trading bankroll summary (consensus-vs-self)."""
+    from backend.ml.paper_trading import get_paper_trading_summary
+    return get_paper_trading_summary()
+
+
+@app.get("/trading/autobet")
+def trading_autobet(limit: int = Query(50, ge=1, le=200)):
+    """Polymarket autobet performance + recent bets (consensus-vs-market)."""
+    from backend.trading.autobet import get_autobet_summary
+    db = get_db()
+    bets = (
+        db.table("autobets")
+        .select(
+            "question, outcome_name, mode, model_prob, market_price, edge, "
+            "stake, status, pnl, created_at, resolved_at, reject_reason, "
+            "bet_type, bet_line, bet_subject, sport"
+        )
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data or []
+    )
+    return {"summary": get_autobet_summary(), "bets": bets}
+
+
+@app.get("/trading/simulated")
+def trading_simulated(limit: int = Query(50, ge=1, le=200)):
+    """Recent consensus paper bets (simulated_bets table)."""
+    db = get_db()
+    bets = (
+        db.table("simulated_bets")
+        .select(
+            "id, predicted_outcome, bet_type, bet_line, bet_subject, confidence, "
+            "edge, bet_size, outcome, pnl, created_at, resolved_at, "
+            "matches(home_team, away_team, sport, scheduled_at)"
+        )
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data or []
+    )
+    return {"bets": bets, "total": len(bets)}
+
+
+@app.get("/trading/tracked-picks")
+def trading_tracked_picks(
+    limit: int = Query(50, ge=1, le=200),
+    sport: str | None = None,
+):
+    """Recent alt/prop picks with settlement outcomes (scraped, not Polymarket)."""
+    from backend.api.pick_utils import PROP_BET_TYPES, filter_picks_by_sport
+
+    db = get_db()
+    fetch_limit = limit * 4 if sport else limit
+    rows = (
+        db.table("picks")
+        .select(
+            "id, predicted_winner, bet_type, bet_line, bet_subject, outcome, "
+            "posted_at, platform, "
+            "influencers(handle, platform), "
+            "matches(home_team, away_team, sport, scheduled_at, stage)"
+        )
+        .in_("bet_type", list(PROP_BET_TYPES))
+        .order("posted_at", desc=True)
+        .limit(fetch_limit)
+        .execute()
+        .data or []
+    )
+    rows = filter_picks_by_sport(rows, sport, limit=limit)
+    return {"picks": rows, "total": len(rows)}
+
+
+@app.post("/trading/autobet/run")
+async def trading_autobet_run():
+    """Manually trigger one autobet scan (respects paper/live mode + risk gates)."""
+    from backend.trading.autobet import run_autobet, resolve_autobets
+    summary = await run_autobet()
+    resolved = resolve_autobets()
+    return {"summary": summary, "resolved": resolved}
 
 
 # ─── Stats ───────────────────────────────────────────────────────────────────
@@ -210,32 +372,22 @@ def get_recommendations(limit: int = Query(10, ge=1, le=50)):
 @app.get("/stats/overview")
 def stats_overview():
     db = get_db()
-    total_influencers = (
-        db.table("influencers").select("id", count="exact").eq("is_active", True).execute().count or 0
-    )
-    total_picks = (
-        db.table("picks").select("id", count="exact").execute().count or 0
-    )
-    resolved_picks = (
-        db.table("picks")
-        .select("id", count="exact")
-        .in_("outcome", ["correct", "incorrect"])
-        .execute()
-        .count or 0
-    )
-    correct_picks = (
-        db.table("picks")
-        .select("id", count="exact")
-        .eq("outcome", "correct")
-        .execute()
-        .count or 0
-    )
-    total_matches = (
-        db.table("matches").select("id", count="exact").execute().count or 0
-    )
-    finished_matches = (
-        db.table("matches").select("id", count="exact").eq("is_final", True).execute().count or 0
-    )
+
+    def _count(table: str, **filters) -> int:
+        q = db.table(table).select("id", count="exact")
+        for col, val in filters.items():
+            if isinstance(val, tuple) and val[0] == "in":
+                q = q.in_(col, val[1])
+            else:
+                q = q.eq(col, val)
+        return db_execute(lambda: q.execute()).count or 0
+
+    total_influencers = _count("influencers", is_active=True)
+    total_picks = _count("picks")
+    resolved_picks = _count("picks", outcome=("in", ["correct", "incorrect"]))
+    correct_picks = _count("picks", outcome="correct")
+    total_matches = _count("matches")
+    finished_matches = _count("matches", is_final=True)
     overall_accuracy = round(correct_picks / resolved_picks, 4) if resolved_picks else 0.0
 
     return {
@@ -246,6 +398,80 @@ def stats_overview():
         "overall_accuracy": overall_accuracy,
         "total_matches": total_matches,
         "finished_matches": finished_matches,
+    }
+
+
+PLATFORMS = ("twitter", "tiktok", "covers", "youtube", "actionnetwork", "instagram", "reddit")
+SPORTS = ("football", "mlb")
+
+
+@app.get("/stats/platforms")
+def stats_platforms():
+    """Influencer and pick counts broken down by platform and sport."""
+    db = get_db()
+
+    influencers = db_execute(
+        lambda: db.table("influencers")
+        .select("platform")
+        .eq("is_active", True)
+        .execute()
+        .data or []
+    )
+    picks = db_execute(
+        lambda: db.table("picks").select("platform").execute().data or []
+    )
+    matches = db_execute(
+        lambda: db.table("matches").select("sport").execute().data or []
+    )
+
+    influencers_by_platform = {p: 0 for p in PLATFORMS}
+    picks_by_platform = {p: 0 for p in PLATFORMS}
+    matches_by_sport = {s: 0 for s in SPORTS}
+
+    for row in influencers:
+        plat = row.get("platform")
+        if plat in influencers_by_platform:
+            influencers_by_platform[plat] += 1
+
+    for row in picks:
+        plat = row.get("platform")
+        if plat in picks_by_platform:
+            picks_by_platform[plat] += 1
+
+    for row in matches:
+        sport = row.get("sport")
+        if sport in matches_by_sport:
+            matches_by_sport[sport] += 1
+
+    from backend.api.pick_utils import PROP_BET_TYPES
+    prop_picks = db_execute(
+        lambda: db.table("picks")
+        .select("bet_type", count="exact")
+        .in_("bet_type", list(PROP_BET_TYPES))
+        .execute()
+        .count or 0
+    )
+    mlb_prop_picks = db_execute(
+        lambda: db.table("picks")
+        .select("bet_type", count="exact")
+        .in_("bet_type", ["player_hits", "player_strikeouts", "player_rbis", "total_runs", "team_total_runs", "first_five_runs"])
+        .execute()
+        .count or 0
+    )
+
+    return {
+        "influencers_by_platform": influencers_by_platform,
+        "picks_by_platform": picks_by_platform,
+        "matches_by_sport": matches_by_sport,
+        "prop_picks_total": prop_picks,
+        "mlb_prop_picks_total": mlb_prop_picks,
+        "active_sources": [
+            {"id": "covers", "label": "Covers.com", "always_on": True},
+            {"id": "youtube", "label": "YouTube", "always_on": True},
+            {"id": "actionnetwork", "label": "ActionNetwork", "always_on": True},
+            {"id": "twitter", "label": "X / Twitter", "always_on": False, "note": "Requires cookie auth"},
+            {"id": "tiktok", "label": "TikTok", "always_on": False, "note": "Requires session cookie"},
+        ],
     }
 
 
@@ -268,8 +494,10 @@ async def seed_influencers():
 async def manual_sync():
     """Trigger a full scrape + WC data sync cycle immediately."""
     from backend.sports_data.worldcup_fetcher import (
-        sync_matches, resolve_pending_picks, link_picks_to_matches,
+        sync_matches, link_picks_to_matches,
     )
+    from backend.sports_data.stats_sync import sync_match_stats, enrich_openfootball_ht
+    from backend.sports_data.pick_resolver import resolve_all_pending_picks
     from backend.scrapers.covers_scraper import CoversScraper
     from backend.scrapers.youtube_scraper import YouTubeScraper
     from backend.ml.elo_ranker import update_all_elo_scores
@@ -296,8 +524,10 @@ async def manual_sync():
         logger.warning(f"YouTube scraper error: {exc}")
 
     # Bridge picks → matches, then grade finished ones
+    stats_synced = await sync_match_stats()
+    await enrich_openfootball_ht()
     linked = await link_picks_to_matches()
-    resolved = await resolve_pending_picks()
+    resolved = resolve_all_pending_picks()
 
     from backend.ml.elo_ranker import sync_influencer_pick_counts, deactivate_poor_performers
     pick_counts_synced = sync_influencer_pick_counts()
@@ -314,6 +544,7 @@ async def manual_sync():
         "youtube_error": yt_error,
         "picks_linked_to_matches": linked,
         "picks_resolved": resolved,
+        "match_stats_synced": stats_synced,
         "influencer_pick_counts_synced": pick_counts_synced,
         "influencers_deactivated": deactivated,
         "elo_updated": elo_updated,

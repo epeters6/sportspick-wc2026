@@ -9,3 +9,6 @@ loguru
 python-dateutil
 pytz
 tenacity
+youtube-transcript-api
+beautifulsoup4
+lxml

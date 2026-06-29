@@ -25,7 +25,8 @@ from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.db import get_db
-from backend.scrapers.pick_extractor import TEAM_ALIASES, extract_pick
+from backend.scrapers.pick_extractor import TEAM_ALIASES, extract_pick, extract_all_picks
+from backend.sports_data.mlb_fetcher import canonicalise_mlb_team
 
 HEADERS = {
     "User-Agent": (
@@ -69,22 +70,26 @@ ACTION_NETWORK_EXPERTS = [
 ]
 
 
-def _canonicalise_team(raw: str) -> str | None:
-    """Map a raw team string to canonical DB name via TEAM_ALIASES."""
+def _canonicalise_team(raw: str, *, sport: str = "soccer") -> str | None:
+    """Map a raw team string to canonical DB name."""
+    if sport == "mlb":
+        mlb = canonicalise_mlb_team(raw)
+        if mlb:
+            return mlb
     cleaned = raw.strip().lower()
-    # Direct alias lookup
     if cleaned in TEAM_ALIASES:
         return TEAM_ALIASES[cleaned]
-    # Try multi-word partial: strip trailing words one at a time
     parts = cleaned.split()
     for length in range(len(parts), 0, -1):
         phrase = " ".join(parts[:length])
         if phrase in TEAM_ALIASES:
             return TEAM_ALIASES[phrase]
+    if sport == "mlb":
+        return canonicalise_mlb_team(raw)
     return None
 
 
-def _extract_team_from_pick_line(line: str) -> str | None:
+def _extract_team_from_pick_line(line: str, *, sport: str = "soccer") -> str | None:
     """
     Given a '#### Pick: ...' line, extract the backing team if it's a
     moneyline/winner pick (not spread/total/BTTS).
@@ -114,7 +119,7 @@ def _extract_team_from_pick_line(line: str) -> str | None:
     cleaned = re.sub(r"moneyline|ml|to win|asian handicap|\-\d+\.?\d*|\+\d+\.?\d*", "", cleaned, flags=re.IGNORECASE)
     cleaned = cleaned.strip(" ,.-")
 
-    return _canonicalise_team(cleaned)
+    return _canonicalise_team(cleaned, sport=sport)
 
 
 class ActionNetworkScraper:
@@ -167,7 +172,18 @@ class ActionNetworkScraper:
             self._influencer_cache[expert_name] = iid
         return iid
 
-    def _save_pick(self, influencer_id: str, post_id: str, raw_text: str, predicted_winner: str) -> bool:
+    def _save_pick(
+        self,
+        influencer_id: str,
+        post_id: str,
+        raw_text: str,
+        predicted_winner: str,
+        *,
+        bet_type: str = "moneyline",
+        bet_line: str | None = None,
+        bet_subject: str | None = None,
+        confidence: float | None = None,
+    ) -> bool:
         """Insert a pick, skip on duplicate (influencer+post or influencer+match)."""
         db = get_db()
         try:
@@ -179,7 +195,10 @@ class ActionNetworkScraper:
                     "raw_text": raw_text[:2000],
                     "predicted_winner": predicted_winner,
                     "predicted_score": None,
-                    "confidence": None,
+                    "confidence": confidence,
+                    "bet_type": bet_type,
+                    "bet_line": bet_line,
+                    "bet_subject": bet_subject,
                     "scraped_at": datetime.now(timezone.utc).isoformat(),
                     "status": "pending",
                 },
@@ -233,16 +252,26 @@ class ActionNetworkScraper:
         normalised = unicodedata.normalize("NFKD", team_name).encode("ascii", "ignore").decode()
         return re.sub(r"[^a-z0-9]+", "-", normalised.lower()).strip("-")
 
-    def _build_article_urls(self, home: str, away: str, match_date: datetime) -> list[str]:
+    def _build_article_urls(
+        self, home: str, away: str, match_date: datetime, *, sport: str = "soccer",
+    ) -> list[str]:
         """
         Generate candidate ActionNetwork article URLs for a given match.
         AN uses several slightly different patterns — we try all of them.
         """
         h = self._team_slug(home)
         a = self._team_slug(away)
-        weekday = match_date.strftime("%A").lower()     # e.g. "friday"
-        month = match_date.strftime("%B").lower()       # e.g. "june"
-        day = str(match_date.day)                       # e.g. "19"
+        weekday = match_date.strftime("%A").lower()
+        month = match_date.strftime("%B").lower()
+        day = str(match_date.day)
+
+        if sport == "mlb":
+            return [
+                f"{BASE}/mlb/{h}-vs-{a}-prediction-pick-odds-{weekday}-{month}-{day}",
+                f"{BASE}/mlb/{h}-vs-{a}-prediction-pick-odds-{weekday}-{month}-{day}-{match_date.year}",
+                f"{BASE}/mlb/{h}-vs-{a}-predictions-lineups-odds-{weekday}-{month}-{day}",
+                f"{BASE}/mlb/{h}-vs-{a}-prediction-lineups-odds-{weekday}-{month}-{day}",
+            ]
 
         templates = [
             f"{BASE}/soccer/{h}-vs-{a}-prediction-pick-odds-world-cup-{weekday}-{month}-{day}",
@@ -254,13 +283,13 @@ class ActionNetworkScraper:
         return templates
 
     def _get_recent_matches(self, days_back: int = 4) -> list[dict]:
-        """Fetch WC matches from the last N days + the next day."""
+        """Fetch upcoming/recent matches (WC + MLB) from the last N days + next day."""
         db = get_db()
         cutoff_past = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
         cutoff_future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
         rows = (
             db.table("matches")
-            .select("id, home_team, away_team, scheduled_at")
+            .select("id, home_team, away_team, scheduled_at, sport")
             .gte("scheduled_at", cutoff_past)
             .lte("scheduled_at", cutoff_future)
             .execute()
@@ -330,7 +359,7 @@ class ActionNetworkScraper:
                 # If very close (both <40 / draw game), skip — don't force a pick
         return None
 
-    def _parse_article(self, html: str, url: str) -> list[dict]:
+    def _parse_article(self, html: str, url: str, *, sport: str = "soccer") -> list[dict]:
         """
         Parse an ActionNetwork article and return a list of pick dicts:
         {expert, predicted_winner, raw_text, post_id, published_at}
@@ -349,23 +378,51 @@ class ActionNetworkScraper:
 
         results = []
 
-        # Phase 1: explicit "Pick:" lines in article text
+        # Phase 1: explicit "Pick:" lines — moneyline, draw, O/U, BTTS, etc.
         for idx, groups in enumerate(PICK_LINE_RE.finditer(full_text)):
             raw_pick_line = groups.group(1) or groups.group(2) or ""
-            winner = _extract_team_from_pick_line(raw_pick_line)
+            parsed_list = extract_all_picks(raw_pick_line)
+            if not parsed_list:
+                parsed_list = []
+                parsed = extract_pick(raw_pick_line)
+                if parsed.get("predicted_winner"):
+                    parsed_list = [parsed]
+            for pick_i, parsed in enumerate(parsed_list):
+                if not parsed.get("predicted_winner"):
+                    continue
+                bt = parsed.get("bet_type") or "moneyline"
+                suffix = f"_{pick_i}" if len(parsed_list) > 1 else ""
+                post_id = f"an_{slug}_{idx}_{bt}{suffix}"
+                results.append({
+                    "expert": expert,
+                    "predicted_winner": parsed["predicted_winner"],
+                    "bet_type": bt,
+                    "bet_line": parsed.get("bet_line"),
+                    "bet_subject": parsed.get("bet_subject"),
+                    "confidence": parsed.get("confidence"),
+                    "raw_text": f"{url}\n{raw_pick_line}",
+                    "post_id": post_id,
+                    "published_at": published_at,
+                })
+            if parsed_list:
+                continue
+            winner = _extract_team_from_pick_line(raw_pick_line, sport=sport)
             if not winner:
                 continue
             post_id = f"an_{slug}_{idx}"
             results.append({
                 "expert": expert,
                 "predicted_winner": winner,
+                "bet_type": "moneyline",
+                "bet_line": None,
+                "confidence": None,
                 "raw_text": f"{url}\n{raw_pick_line}",
                 "post_id": post_id,
                 "published_at": published_at,
             })
 
-        # Phase 2: if no winner pick found, use win-probability projection table
-        if not results:
+        # Phase 2: soccer win-probability table (not used for MLB)
+        if not results and sport != "mlb":
             winner = self._extract_projected_winner(soup)
             if winner:
                 post_id = f"an_{slug}_proj"
@@ -411,7 +468,8 @@ class ActionNetworkScraper:
 
                 home = match.get("home_team", "")
                 away = match.get("away_team", "")
-                candidate_urls = self._build_article_urls(home, away, match_date)
+                sport = match.get("sport") or "soccer"
+                candidate_urls = self._build_article_urls(home, away, match_date, sport=sport)
 
                 article_html = None
                 used_url = None
@@ -427,7 +485,7 @@ class ActionNetworkScraper:
                     logger.debug(f"ActionNetwork: no article found for {home} vs {away}")
                     continue
 
-                picks = self._parse_article(article_html, used_url)
+                picks = self._parse_article(article_html, used_url, sport=sport)
                 if not picks:
                     logger.debug(f"ActionNetwork: no picks parsed from {used_url}")
                     continue
@@ -441,6 +499,10 @@ class ActionNetworkScraper:
                         p["post_id"],
                         p["raw_text"],
                         p["predicted_winner"],
+                        bet_type=p.get("bet_type") or "moneyline",
+                        bet_line=p.get("bet_line"),
+                        bet_subject=p.get("bet_subject"),
+                        confidence=p.get("confidence"),
                     )
                     if saved:
                         total += 1

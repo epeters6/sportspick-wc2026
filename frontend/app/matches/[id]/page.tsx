@@ -6,6 +6,8 @@ import PlatformBadge from "@/components/PlatformBadge";
 import ConfidenceBar from "@/components/ConfidenceBar";
 import { ArrowLeft, CheckCircle, XCircle, Clock } from "lucide-react";
 import Link from "next/link";
+import BetTypeBadge from "@/components/BetTypeBadge";
+import ProbBar from "@/components/ProbBar";
 
 const outcomeIcon = {
   correct: <CheckCircle className="w-4 h-4 text-emerald-400" />,
@@ -70,14 +72,24 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
       {consensus?.length ? (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
           <h2 className="font-semibold mb-4">Consensus Breakdown</h2>
-          <div className="space-y-3">
+          <div className="space-y-4">
             {consensus.map((c) => (
-              <div key={c.id}>
+              <div key={c.id} className="space-y-2">
                 <div className="flex justify-between text-sm mb-1">
-                  <span className="font-medium">{c.predicted_winner}</span>
-                  <span className="text-gray-400">{c.total_votes} votes</span>
+                  <span className="font-medium text-indigo-300">{c.predicted_winner}</span>
+                  <span className="text-gray-400">{c.pick_count ?? c.total_votes} picks</span>
                 </div>
-                <ConfidenceBar value={c.confidence} />
+                {(c.home_probability || c.draw_probability || c.away_probability) ? (
+                  <ProbBar
+                    homeProb={c.home_probability}
+                    drawProb={c.draw_probability}
+                    awayProb={c.away_probability}
+                    homeLabel={match.home_team}
+                    awayLabel={match.away_team}
+                  />
+                ) : (
+                  <ConfidenceBar value={c.confidence} />
+                )}
               </div>
             ))}
           </div>
@@ -95,6 +107,7 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-medium text-sm">@{p.influencers?.handle}</span>
                   {p.influencers?.platform && <PlatformBadge platform={p.influencers.platform} />}
+                  <BetTypeBadge betType={p.bet_type} betLine={p.bet_line} />
                   {p.predicted_winner && (
                     <span className="text-indigo-300 text-sm font-medium">→ {p.predicted_winner}</span>
                   )}
@@ -103,6 +116,11 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
                   )}
                   {p.confidence && (
                     <span className="text-gray-500 text-xs">{Math.round(p.confidence * 100)}% conf.</span>
+                  )}
+                  {p.market_prob_at_pick != null && (
+                    <span className="text-xs text-amber-400 font-mono">
+                      mkt {Math.round(p.market_prob_at_pick * 100)}%
+                    </span>
                   )}
                 </div>
                 <p className="text-xs text-gray-400 mt-1 line-clamp-2">{p.raw_text}</p>

@@ -108,16 +108,23 @@ def _normalise_fallback(raw: dict) -> dict:
         else:
             winner = "draw"
     date_str = raw.get("date", "")
-    # Stable external ID from date + teams
-    external_id = f"of_{date_str}_{team1}_{team2}".replace(" ", "_")
+    match_num = raw.get("num")
+    external_id = f"of_{match_num}" if match_num is not None else f"of_{date_str}_{team1}_{team2}".replace(" ", "_")
     stage = raw.get("group") or raw.get("round", "")
+    scheduled_at = date_str or None
+    time_str = raw.get("time")
+    if date_str and time_str:
+        try:
+            scheduled_at = f"{date_str}T{time_str.split()[0] if time_str else '12:00:00'}"
+        except Exception:
+            scheduled_at = date_str
     return {
         "external_id": external_id,
         "tournament": "FIFA World Cup 2026",
         "sport": "football",
         "home_team": team1,
         "away_team": team2,
-        "scheduled_at": date_str or None,
+        "scheduled_at": scheduled_at,
         "home_score": score1,
         "away_score": score2,
         "winner": winner,
@@ -128,40 +135,128 @@ def _normalise_fallback(raw: dict) -> dict:
     }
 
 
+def _is_bracket_placeholder(name: str) -> bool:
+    return bool(name) and name.startswith("W") and name[1:].isdigit()
+
+
+def _match_identity_key(rec: dict) -> str:
+    """Stable key for deduping the same fixture across data sources."""
+    from backend.trading.market_matcher import _canonical
+
+    home = _canonical(rec.get("home_team") or "") or (rec.get("home_team") or "").strip().lower()
+    away = _canonical(rec.get("away_team") or "") or (rec.get("away_team") or "").strip().lower()
+    if _is_bracket_placeholder(rec.get("home_team") or "") or _is_bracket_placeholder(rec.get("away_team") or ""):
+        return rec.get("external_id") or f"{home}|{away}"
+    date = (rec.get("scheduled_at") or "")[:10]
+    teams = tuple(sorted([home, away]))
+    return f"{date}|{teams[0]}|{teams[1]}"
+
+
+def _merge_match_records(a: dict, b: dict) -> dict:
+    """Merge two records for the same fixture; prefer finalized scores."""
+    out = dict(a)
+    if b.get("is_final") and not a.get("is_final"):
+        out = {**a, **b}
+    elif b.get("is_final") and a.get("is_final"):
+        out["home_score"] = b.get("home_score") if b.get("home_score") is not None else a.get("home_score")
+        out["away_score"] = b.get("away_score") if b.get("away_score") is not None else a.get("away_score")
+        out["winner"] = b.get("winner") or a.get("winner")
+        out["is_final"] = True
+    elif not b.get("is_final") and not a.get("is_final"):
+        # Prefer record with more complete schedule/stage info
+        if len(b.get("stage") or "") > len(a.get("stage") or ""):
+            out["stage"] = b["stage"]
+        if b.get("scheduled_at") and not a.get("scheduled_at"):
+            out["scheduled_at"] = b["scheduled_at"]
+    return out
+
+
+async def _propagate_finished_state(db) -> int:
+    """If any duplicate fixture row is final, mark siblings final too (settlement fix)."""
+    rows = (
+        db.table("matches")
+        .select("id, home_team, away_team, scheduled_at, is_final, winner, home_score, away_score, external_id")
+        .eq("sport", "football")
+        .execute()
+        .data or []
+    )
+    by_key: dict[str, list[dict]] = {}
+    for r in rows:
+        by_key.setdefault(_match_identity_key(r), []).append(r)
+
+    updated = 0
+    for group in by_key.values():
+        if len(group) < 2:
+            continue
+        final = next((g for g in group if g.get("is_final")), None)
+        if not final:
+            continue
+        for r in group:
+            if r.get("is_final"):
+                continue
+            try:
+                db.table("matches").update({
+                    "is_final": True,
+                    "winner": final.get("winner"),
+                    "home_score": final.get("home_score"),
+                    "away_score": final.get("away_score"),
+                    "finished_at": final.get("finished_at"),
+                }).eq("id", r["id"]).execute()
+                updated += 1
+            except Exception as exc:
+                logger.debug(f"Propagate final state failed for {r['id']}: {exc}")
+    if updated:
+        logger.info(f"Propagated is_final to {updated} duplicate match rows")
+    return updated
+
+
 # ─── Sync to DB ─────────────────────────────────────────────────────────────
 
 async def sync_matches() -> int:
-    """Fetch matches from best available source and upsert into Supabase."""
+    """Fetch matches from all sources, merge duplicates, upsert into Supabase."""
     db = get_db()
-    raw_matches: list[dict] = []
-    normalise = _normalise_primary
+    merged: dict[str, dict] = {}
+
+    def _add(rec: dict, *, prefer_external: str | None = None) -> None:
+        key = _match_identity_key(rec)
+        if key not in merged:
+            merged[key] = rec
+            return
+        existing = merged[key]
+        if prefer_external == "primary" and not str(existing.get("external_id", "")).isdigit():
+            rec = {**rec, "external_id": existing.get("external_id")}
+        merged[key] = _merge_match_records(existing, rec)
 
     if settings.wc_api_key:
         try:
             fetcher = WorldCupApiFetcher()
-            raw_matches = await fetcher.get_matches()
-            logger.info(f"Fetched {len(raw_matches)} matches from wc2026api.com")
+            primary_raw = await fetcher.get_matches()
+            for raw in primary_raw:
+                if raw:
+                    _add(_normalise_primary(raw), prefer_external="primary")
+            logger.info(f"Fetched {len(primary_raw)} matches from wc2026api.com")
         except Exception as exc:
-            logger.warning(f"Primary WC API failed ({exc}), falling back to openfootball")
+            logger.warning(f"Primary WC API failed ({exc})")
 
-    if not raw_matches:
-        try:
-            fallback = OpenfootballFetcher()
-            raw_matches = await fallback.get_matches()
-            normalise = _normalise_fallback
-            logger.info(f"Fetched {len(raw_matches)} matches from openfootball")
-        except Exception as exc:
-            logger.error(f"Both WC data sources failed: {exc}")
-            return 0
+    try:
+        fallback = OpenfootballFetcher()
+        fallback_raw = await fallback.get_matches()
+        for raw in fallback_raw:
+            if raw:
+                _add(_normalise_fallback(raw))
+        logger.info(f"Merged {len(fallback_raw)} openfootball fixtures")
+    except Exception as exc:
+        logger.warning(f"Openfootball fallback failed: {exc}")
 
-    records = [normalise(m) for m in raw_matches if m]
+    records = list(merged.values())
     if not records:
+        logger.error("No WC match data from any source")
         return 0
 
-    # Upsert — conflict on external_id
     result = db.table("matches").upsert(records, on_conflict="external_id").execute()
     count = len(result.data or [])
-    logger.info(f"Upserted {count} match records")
+    await _propagate_finished_state(db)
+    logger.info(f"Upserted {count} match records ({len(records)} unique fixtures)")
     return count
 
 
@@ -177,7 +272,7 @@ async def link_picks_to_matches() -> int:
 
     unlinked = (
         db.table("picks")
-        .select("id, predicted_winner, posted_at")
+        .select("id, predicted_winner, posted_at, bet_type, bet_line, bet_subject, raw_text")
         .is_("match_id", "null")
         .not_.is_("predicted_winner", "null")
         .execute()
@@ -195,77 +290,30 @@ async def link_picks_to_matches() -> int:
     if not matches:
         return 0
 
-    # Build alias → canonical match name mapping from TEAM_ALIASES
-    from backend.scrapers.pick_extractor import TEAM_ALIASES
-    # Reverse map: canonical → list of aliases (including itself)
-    alias_to_canonical: dict[str, str] = {}
-    for alias, canonical in TEAM_ALIASES.items():
-        alias_to_canonical[alias] = canonical
-    # Also map match team names to themselves
-    for m in matches:
-        for team in (m.get("home_team"), m.get("away_team")):
-            if team:
-                alias_to_canonical[team.lower()] = team
+    from backend.sports_data.pick_linking import (
+        build_match_index,
+        infer_match_candidates,
+        pick_best_match,
+    )
 
-    # Index matches by team name (and all known aliases)
-    by_team: dict[str, list[dict]] = {}
-    for m in matches:
-        for team in (m.get("home_team"), m.get("away_team")):
-            if not team:
-                continue
-            by_team.setdefault(team, []).append(m)
-            # Also index by canonical from aliases
-            for alias, canonical in TEAM_ALIASES.items():
-                if canonical == team:
-                    by_team.setdefault(alias.title(), []).append(m)
-
-    def _parse(dt: str | None) -> datetime | None:
-        if not dt:
-            return None
-        try:
-            return datetime.fromisoformat(dt.replace("Z", "+00:00"))
-        except Exception:
-            return None
+    by_team, alias_to_canonical = build_match_index(matches)
 
     linked = 0
     for pick in unlinked:
-        team = pick["predicted_winner"]
-        candidates = by_team.get(team)
-        # Alias fallback: try lowercase alias lookup
-        if not candidates and team:
-            canonical = alias_to_canonical.get(team.lower())
-            if canonical:
-                candidates = by_team.get(canonical)
+        candidates = infer_match_candidates(pick, matches, by_team, alias_to_canonical)
         if not candidates:
             continue
 
-        posted = _parse(pick.get("posted_at"))
-
-        def _sort_key(m: dict):
-            sched = _parse(m.get("scheduled_at"))
-            if sched is None:
-                return (2, 0)
-            if posted is not None:
-                # Prefer matches at/after the post, soonest first
-                delta = (sched - posted).total_seconds()
-                if delta >= 0:
-                    return (0, delta)
-                return (1, -delta)
-            return (0, abs(sched.timestamp()))
-
-        best = sorted(candidates, key=_sort_key)[0]
+        best = pick_best_match(candidates, pick.get("posted_at"), pick.get("raw_text"))
+        if not best:
+            continue
         try:
             db.table("picks").update({"match_id": best["id"]}).eq("id", pick["id"]).execute()
             linked += 1
         except Exception as exc:
             msg = str(exc)
-            if "picks_influencer_match_unique" in msg:
-                # Another pick from the same influencer is already linked to this
-                # match — this is a duplicate video pick; delete the orphan.
-                try:
-                    db.table("picks").delete().eq("id", pick["id"]).execute()
-                except Exception:
-                    pass
+            if "picks_influencer_match_unique" in msg or "duplicate key" in msg.lower():
+                logger.debug(f"Pick {pick['id']} already linked (duplicate influencer/match)")
             else:
                 logger.warning(f"Failed to link pick {pick['id']}: {exc}")
 
@@ -274,46 +322,9 @@ async def link_picks_to_matches() -> int:
 
 
 async def resolve_pending_picks() -> int:
-    """
-    For every pick with outcome='pending' whose match is now finished,
-    compare predicted_winner to match.winner and set correct/incorrect.
-    """
-    db = get_db()
-    finished = (
-        db.table("matches")
-        .select("id, winner")
-        .eq("is_final", True)
-        .execute()
-        .data or []
-    )
-    if not finished:
-        return 0
-
-    resolved = 0
-    for match in finished:
-        mid = match["id"]
-        actual_winner = match["winner"]
-        pending_picks = (
-            db.table("picks")
-            .select("id, predicted_winner")
-            .eq("match_id", mid)
-            .eq("outcome", "pending")
-            .execute()
-            .data or []
-        )
-        for pick in pending_picks:
-            outcome = (
-                "correct"
-                if pick["predicted_winner"] == actual_winner
-                else "incorrect"
-            )
-            db.table("picks").update(
-                {"outcome": outcome, "resolved_at": datetime.utcnow().isoformat()}
-            ).eq("id", pick["id"]).execute()
-            resolved += 1
-
-    logger.info(f"Resolved {resolved} pending picks")
-    return resolved
+    """Resolve all pending picks (football + MLB + props) via shared grader."""
+    from backend.sports_data.pick_resolver import resolve_all_pending_picks
+    return resolve_all_pending_picks()
 
 
 if __name__ == "__main__":

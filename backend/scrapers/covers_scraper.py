@@ -26,6 +26,7 @@ from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.db import get_db
+from backend.sports_data.mlb_fetcher import canonicalise_mlb_team
 
 HEADERS = {
     "User-Agent": (
@@ -69,6 +70,7 @@ COVERS_EXPERTS = [
     "Warren Sharp",
     "Dave Cokin",
     "Bruce Marshall",
+    "Phil Naessens",   # Covers MLB moneyline picks author
 ]
 
 # Maps Covers.com team names → canonical DB names (openfootball names)
@@ -243,41 +245,171 @@ class CoversScraper:
 
             section_text = " ".join(section_parts)
 
-            # Extract the predicted winner from the recommendation text
-            predicted_winner = _extract_winner_from_section(
-                section_text, team1_raw, team2_raw
-            )
-            if not predicted_winner or predicted_winner == "draw":
+            from backend.scrapers.pick_extractor import TEAM_ALIASES, extract_all_picks
+
+            canonical1 = _canonicalize_covers_team(team1_raw) or TEAM_ALIASES.get(team1_raw.lower())
+            canonical2 = _canonicalize_covers_team(team2_raw) or TEAM_ALIASES.get(team2_raw.lower())
+            allowed = {t for t in (canonical1, canonical2) if t}
+
+            extracted = extract_all_picks(section_text, allowed_teams=allowed or None)
+            if not extracted:
+                predicted_winner = _extract_winner_from_section(
+                    section_text, team1_raw, team2_raw
+                )
+                if predicted_winner:
+                    canonical = _canonicalize_covers_team(predicted_winner) or TEAM_ALIASES.get(
+                        predicted_winner.lower()
+                    )
+                    if canonical:
+                        extracted = [{
+                            "predicted_winner": canonical,
+                            "bet_type": "draw" if canonical == "draw" else "moneyline",
+                            "bet_line": None,
+                            "confidence": 0.72,
+                            "predicted_score": None,
+                        }]
+
+            for j, pick_data in enumerate(extracted):
+                canonical = pick_data.get("predicted_winner")
+                if not canonical:
+                    continue
+                bet_type = pick_data.get("bet_type") or "moneyline"
+                post_id = (
+                    f"covers_{group}_{_slugify(team1_raw)}_{_slugify(team2_raw)}"
+                    f"_{_slugify(expert_name)}_{bet_type}_{j}"
+                )
+                raw_text = (
+                    f"Group {group}: {team1_raw} vs {team2_raw} "
+                    f"({expert_name}): {section_text[:400]}"
+                )
+                picks.append({
+                    "expert": expert_name,
+                    "raw_text": raw_text,
+                    "predicted_winner": canonical,
+                    "bet_type": bet_type,
+                    "bet_line": pick_data.get("bet_line"),
+                    "bet_subject": pick_data.get("bet_subject"),
+                    "confidence": pick_data.get("confidence") or 0.72,
+                    "posted_at": now_iso,
+                    "post_id": post_id,
+                })
+
+        return picks
+
+    def _mlb_daily_urls(self) -> list[str]:
+        """Today's Covers MLB moneyline article + hub fallback."""
+        now = datetime.now(timezone.utc)
+        weekday = now.strftime("%A").lower()
+        month = now.month
+        day = now.day
+        year = now.year
+        return [
+            f"{BASE}/mlb/moneyline-picks-{weekday}-{month}-{day}-{year}",
+            f"{BASE}/picks/mlb",
+        ]
+
+    def _parse_mlb_picks_from_html(self, html: str, source_url: str) -> list[dict]:
+        """
+        Parse Covers daily MLB moneyline article.
+
+        Structure:
+          ### White Sox vs Tigers: White Sox (+113)
+          ...analysis...
+        """
+        if not html:
+            return []
+        soup = BeautifulSoup(html, "lxml")
+        text = soup.get_text("\n", strip=True)
+        expert = "Phil Naessens"
+        for name in COVERS_EXPERTS:
+            if name in text:
+                expert = name
+                break
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        picks: list[dict] = []
+
+        # h3 headings: "White Sox vs Tigers: White Sox (+113)"
+        heading_re = re.compile(
+            r"(?:^|\n)\s*(?:#{1,3}\s*)?"
+            r"(.+?)\s+vs\.?\s+(.+?):\s*(.+?)\s*\([+\-]?\d+\)",
+            re.IGNORECASE | re.MULTILINE,
+        )
+        for m in heading_re.finditer(text):
+            team1_raw = m.group(1).strip()
+            team2_raw = m.group(2).strip()
+            pick_raw = m.group(3).strip()
+            winner = canonicalise_mlb_team(pick_raw) or canonicalise_mlb_team(team1_raw)
+            if not winner:
+                if pick_raw.lower() in team1_raw.lower():
+                    winner = canonicalise_mlb_team(team1_raw)
+                elif pick_raw.lower() in team2_raw.lower():
+                    winner = canonicalise_mlb_team(team2_raw)
+            if not winner:
                 continue
-
-            # Canonicalize team name
-            canonical = _canonicalize_covers_team(predicted_winner)
-            if not canonical:
-                # Try TEAM_ALIASES directly for teams not in COVERS_TEAM_MAP
-                from backend.scrapers.pick_extractor import TEAM_ALIASES
-                canonical = TEAM_ALIASES.get(predicted_winner.lower())
-            if not canonical:
-                continue
-
-            post_id = (
-                f"covers_{group}_{_slugify(team1_raw)}_{_slugify(team2_raw)}"
-                f"_{_slugify(expert_name)}"
-            )
-            raw_text = (
-                f"Group {group}: {team1_raw} vs {team2_raw} "
-                f"({expert_name}): {section_text[:400]}"
-            )
-
+            slug = f"{_slugify(team1_raw)}_{_slugify(team2_raw)}_{_slugify(winner)}"
             picks.append({
-                "expert": expert_name,
-                "raw_text": raw_text,
-                "predicted_winner": canonical,
-                "confidence": 0.72,
+                "expert": expert,
+                "raw_text": f"MLB: {team1_raw} vs {team2_raw} — pick {pick_raw} ({expert})",
+                "predicted_winner": winner,
+                "bet_type": "moneyline",
+                "bet_line": None,
+                "confidence": 0.70,
                 "posted_at": now_iso,
-                "post_id": post_id,
+                "post_id": f"covers_mlb_{slug}_{now_iso[:10]}",
+                "post_url": source_url,
             })
 
         return picks
+
+    async def _scrape_mlb_picks(self, client: httpx.AsyncClient) -> int:
+        """Fetch today's Covers MLB moneyline picks."""
+        saved = 0
+        db = get_db()
+        for expert in COVERS_EXPERTS:
+            await self._get_or_create_expert(expert)
+
+        for url in self._mlb_daily_urls():
+            try:
+                r = await client.get(url, headers=HEADERS, timeout=20, follow_redirects=True)
+                if r.status_code == 404:
+                    continue
+                r.raise_for_status()
+                picks = self._parse_mlb_picks_from_html(r.text, url)
+                if not picks:
+                    continue
+                logger.info(f"Covers MLB ({url}): {len(picks)} picks parsed")
+                for pick in picks:
+                    influencer_id = await self._get_or_create_expert(pick["expert"])
+                    if not influencer_id:
+                        continue
+                    record = {
+                        "influencer_id": influencer_id,
+                        "platform": "covers",
+                        "post_id": pick["post_id"],
+                        "post_url": pick.get("post_url", url),
+                        "raw_text": pick["raw_text"],
+                        "predicted_winner": pick["predicted_winner"],
+                        "predicted_score": None,
+                        "confidence": pick["confidence"],
+                        "bet_type": pick.get("bet_type") or "moneyline",
+                        "bet_line": pick.get("bet_line"),
+                        "bet_subject": pick.get("bet_subject"),
+                        "posted_at": pick["posted_at"],
+                    }
+                    try:
+                        db.table("picks").upsert(
+                            record, on_conflict="platform,post_id"
+                        ).execute()
+                        saved += 1
+                    except Exception as exc:
+                        logger.warning(f"Failed to save Covers MLB pick: {exc}")
+                if saved:
+                    break
+                await asyncio.sleep(1.5)
+            except Exception as exc:
+                logger.warning(f"Covers MLB fetch failed ({url}): {exc}")
+        return saved
 
     async def scrape_all(self) -> int:
         db = get_db()
@@ -308,6 +440,9 @@ class CoversScraper:
                             "predicted_winner": pick["predicted_winner"],
                             "predicted_score": None,
                             "confidence": pick["confidence"],
+                            "bet_type": pick.get("bet_type") or "moneyline",
+                            "bet_line": pick.get("bet_line"),
+                        "bet_subject": pick.get("bet_subject"),
                             "posted_at": pick["posted_at"],
                         }
                         try:
@@ -321,6 +456,11 @@ class CoversScraper:
                     await asyncio.sleep(1.5)
                 except Exception as exc:
                     logger.warning(f"Covers Group {group} failed: {exc}")
+
+            mlb_saved = await self._scrape_mlb_picks(client)
+            total += mlb_saved
+            if mlb_saved:
+                logger.info(f"Covers MLB: saved {mlb_saved} picks")
 
         logger.info(f"Covers.com: saved {total} expert picks")
         return total

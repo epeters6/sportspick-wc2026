@@ -25,6 +25,13 @@ from backend.config import get_settings
 from backend.db import get_db
 from backend.scrapers.pick_extractor import extract_all_picks, TEAM_ALIASES
 
+# youtube-transcript-api is optional — gracefully skipped if not installed
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+    _TRANSCRIPT_AVAILABLE = True
+except ImportError:
+    _TRANSCRIPT_AVAILABLE = False
+
 YT_BASE = "https://www.googleapis.com/youtube/v3"
 
 # Minimum subscriber count for a NEW channel to be added as an influencer.
@@ -40,8 +47,10 @@ KNOWN_CHANNEL_HANDLES = [
     "@Dimers",                 # Dimers Sports Betting Analytics
     "@DocsSports",             # Doc's Sports — in business since 1971, 74k subs
     "@BettingPros",            # BettingPros
-    "@GameDayWagers",          # Chris Vasile (Covers.com expert's own channel)
+    "@GameDayWagers",          # Chris Vasile — Game Day Wagers (primary channel)
+    "@GameDayWager",           # alternate handle if user searches without 's'
     "@WagerTalkTV",            # WagerTalk TV
+    "@MLB",                    # Official MLB channel — game previews / picks
     "@PickDawgz",              # PickDawgz
     "@Pickswise",              # Pickswise — daily expert picks
     "@VSiN",                   # Vegas Stats & Information Network
@@ -64,11 +73,12 @@ KNOWN_CHANNEL_HANDLES = [
     "@UtdPassion",             # Man Utd / general soccer predictions
 ]
 
-# Search queries — each costs 100 quota units. Keep to ≤6.
+# Search queries — each costs 100 quota units. Keep to ≤6 (WC + MLB balance).
 SEARCH_QUERIES = [
+    "MLB picks today betting expert",
+    "MLB moneyline prediction analysis",
     "World Cup 2026 match prediction picks today",
     "World Cup 2026 betting preview expert analysis",
-    "FIFA World Cup 2026 group stage picks best bets",
 ]
 
 MAX_RESULTS_PER_QUERY = 20
@@ -238,10 +248,26 @@ class YouTubeScraper:
             title = snippet.get("title", "")
             description = snippet.get("description", "")
             published_at = snippet.get("publishedAt")
-            raw_text = f"{title}\n{description}".strip()
 
+            # Skip obviously unrelated videos early
+            wc_keywords = ["world cup", "wc2026", "wc 2026", "mundial", "fifa", "prediction", "preview", "pick"]
+            title_lower = title.lower()
+            if not any(kw in title_lower for kw in wc_keywords):
+                continue
+
+            raw_text = f"{title}\n{description}".strip()
             allowed = self._teams_from_title(title)
             all_picks = extract_all_picks(raw_text, allowed_teams=allowed)
+
+            # If title+description yields nothing, try the transcript
+            if not all_picks and _TRANSCRIPT_AVAILABLE:
+                transcript = self._fetch_transcript(vid_id)
+                if transcript:
+                    combined = f"{raw_text}\n{transcript}"
+                    all_picks = extract_all_picks(combined, allowed_teams=allowed)
+                    if all_picks:
+                        raw_text = combined  # use enriched text for storage
+
             if not all_picks:
                 continue
 
@@ -282,6 +308,24 @@ class YouTubeScraper:
                 logger.warning(f"Subscriber count batch failed: {exc}")
         return result
 
+    # ── Transcript extraction ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _fetch_transcript(vid_id: str) -> str:
+        """
+        Fetch the auto-generated or manual English transcript for a video.
+        Returns plain text (first 3000 chars), or empty string on failure.
+        Falls back gracefully if youtube-transcript-api is not installed.
+        """
+        if not _TRANSCRIPT_AVAILABLE:
+            return ""
+        try:
+            transcript_list = YouTubeTranscriptApi.get_transcript(vid_id, languages=["en", "en-US", "en-GB"])
+            text = " ".join(seg["text"] for seg in transcript_list)
+            return text[:3000]
+        except Exception:
+            return ""
+
     # ── Save pick to DB ───────────────────────────────────────────────────────
 
     def _save_picks(self, db, influencer_id: str, vid_id: str, raw_text: str,
@@ -289,8 +333,11 @@ class YouTubeScraper:
         """Save all picks from a video. Returns count saved."""
         saved = 0
         for i, pick_data in enumerate(picks):
-            # Give each pick a unique post_id so multi-pick videos all get stored
-            post_id = f"{vid_id}_{i}" if len(picks) > 1 else vid_id
+            # Include bet_type in the post_id so different bet types from the
+            # same video each get their own row
+            bet_type = pick_data.get("bet_type") or "moneyline"
+            suffix = f"_{bet_type}_{i}" if (len(picks) > 1 or bet_type != "moneyline") else ""
+            post_id = f"{vid_id}{suffix}"
             record = {
                 "influencer_id": influencer_id,
                 "platform": "youtube",
@@ -301,6 +348,9 @@ class YouTubeScraper:
                 "predicted_score": pick_data.get("predicted_score"),
                 "confidence": pick_data.get("confidence"),
                 "posted_at": published_at,
+                "bet_type": bet_type,
+                "bet_line": pick_data.get("bet_line"),
+                "bet_subject": pick_data.get("bet_subject"),
             }
             try:
                 db.table("picks").upsert(record, on_conflict="platform,post_id").execute()
