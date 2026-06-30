@@ -540,25 +540,57 @@ export default function TradingPage() {
           ) : calData && (calData.total_resolved ?? 0) > 0 ? (
             <>
               {/* Top metrics */}
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                  <p className="text-xs text-gray-400">Brier Score</p>
-                  <p className="text-2xl font-bold mt-1">{calData.brier_score.toFixed(4)}</p>
-                  <p className="text-xs text-gray-500 mt-1">Lower is better · random = 0.25</p>
+                  <p className="text-xs text-gray-400">Brier Score (calibrated)</p>
+                  <p className="text-2xl font-bold mt-1 text-emerald-400">{calData.brier_score.toFixed(4)}</p>
+                  <p className="text-xs text-gray-500 mt-1">Moneyline · lower is better · random = 0.25</p>
+                </div>
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                  <p className="text-xs text-gray-400">Raw Brier (legacy)</p>
+                  <p className="text-2xl font-bold mt-1 text-gray-400">
+                    {(calData.raw_brier_score ?? calData.brier_score).toFixed(4)}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">Unadjusted scraper confidence</p>
                 </div>
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                   <p className="text-xs text-gray-400">Simulated ROI</p>
                   <p className={`text-2xl font-bold mt-1 ${calData.simulated_roi_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                     {calData.simulated_roi_pct >= 0 ? "+" : ""}{calData.simulated_roi_pct.toFixed(2)}%
                   </p>
-                  <p className="text-xs text-gray-500 mt-1">Flat-stake vs market implied odds</p>
+                  <p className="text-xs text-gray-500 mt-1">At calibrated implied odds</p>
                 </div>
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                  <p className="text-xs text-gray-400">Resolved picks</p>
-                  <p className="text-2xl font-bold mt-1">{calData.total_resolved.toLocaleString()}</p>
-                  <p className="text-xs text-gray-500 mt-1">Used in calibration</p>
+                  <p className="text-xs text-gray-400">Moneyline hit rate</p>
+                  <p className="text-2xl font-bold mt-1">
+                    {calData.moneyline?.hit_rate != null
+                      ? `${(calData.moneyline.hit_rate * 100).toFixed(1)}%`
+                      : "—"}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {calData.moneyline?.total_resolved ?? calData.total_resolved} resolved ML picks
+                  </p>
                 </div>
               </div>
+
+              {/* Calibration curve */}
+              {calData.calibration_curve && Object.keys(calData.calibration_curve).length > 0 && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                  <h3 className="font-semibold mb-1">Empirical Hit Rate by Raw Confidence</h3>
+                  <p className="text-xs text-gray-500 mb-4">
+                    What actually happens when pickers claim each confidence band ({calData.ml_history_size ?? 0} moneyline picks in curve)
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {Object.entries(calData.calibration_curve).map(([bucket, rate]) => (
+                      <div key={bucket} className="bg-gray-800 rounded-lg p-3">
+                        <p className="text-xs text-gray-400 capitalize">{bucket.replace("-", " ")}</p>
+                        <p className="text-lg font-bold mt-1">{(rate * 100).toFixed(0)}%</p>
+                        <p className="text-xs text-gray-500">actual win rate</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* 2D calibration matrix */}
               {calData.hit_rates_2d && Object.keys(calData.hit_rates_2d).length > 0 && (
@@ -625,7 +657,7 @@ export default function TradingPage() {
 
               {/* Hit rates by confidence bucket */}
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                <h3 className="font-semibold mb-4">Hit Rate by Confidence Bucket</h3>
+                <h3 className="font-semibold mb-4">Hit Rate by Calibrated Confidence</h3>
                 <div className="space-y-3">
                   {Object.entries(calData.hit_rates_by_bucket).map(([bucket, stats]) => (
                     <div key={bucket} className="space-y-1">

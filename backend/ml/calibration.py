@@ -2,14 +2,12 @@
 Calibration harness — tracks prediction accuracy over time.
 
 Metrics computed:
-  Brier score     — mean squared error between confidence and binary outcome.
-  Hit rate        — accuracy bucketed by confidence level (1D) and by confidence
-                    × market price (2D) when market_prob_at_pick is available.
-  Upset trap      — high consensus confidence + low market price hit rate.
-  ROI (simulated) — average return on a flat-bet strategy at implied odds.
+  Brier score (calibrated) — primary metric using empirical hit rates, not raw scraper defaults.
+  Brier score (raw)        — legacy metric on stored confidence (usually overconfident).
+  Hit rate                 — bucketed by confidence level and bet type.
+  ROI (simulated)          — flat-stake return at calibrated implied odds.
 
-Results are written to the calibration_logs table for trend tracking, and
-also returned as a dict for the sync log.
+Results are written to the calibration_logs table for trend tracking.
 """
 from __future__ import annotations
 
@@ -19,6 +17,11 @@ from typing import Any
 from loguru import logger
 
 from backend.db import get_db
+from backend.trading.edge_model import (
+    MONEYLINE_BET_TYPES,
+    _load_calibration_curve,
+    calibrate_confidence,
+)
 
 CONFIDENCE_BUCKETS = [
     (0.0, 0.50, "low"),
@@ -59,15 +62,58 @@ def _implied_decimal_odds(confidence: float) -> float:
     return 1.0 / confidence
 
 
-def compute_brier_score(picks: list[dict]) -> float:
+def compute_brier_score(picks: list[dict], *, confidence_key: str = "confidence") -> float:
     """Brier score = mean((confidence - outcome_binary)^2)."""
     if not picks:
         return 0.0
     total = sum(
-        ((p.get("confidence") or 0.5) - (1.0 if p["outcome"] == "correct" else 0.0)) ** 2
+        ((p.get(confidence_key) or 0.5) - (1.0 if p["outcome"] == "correct" else 0.0)) ** 2
         for p in picks
     )
     return round(total / len(picks), 4)
+
+
+def _attach_calibrated_confidence(
+    picks: list[dict],
+    curve_1d: dict,
+    curve_2d: dict,
+) -> list[dict]:
+    """Return copies with calibrated_confidence filled in."""
+    out = []
+    for p in picks:
+        raw = p.get("confidence") or 0.5
+        calibrated = calibrate_confidence(
+            raw,
+            p.get("market_prob_at_pick"),
+            curve_1d=curve_1d,
+            curve_2d=curve_2d,
+        )
+        out.append({**p, "calibrated_confidence": round(calibrated, 4)})
+    return out
+
+
+def _segment_metrics(
+    picks: list[dict],
+    curve_1d: dict,
+    curve_2d: dict,
+) -> dict[str, Any]:
+    if not picks:
+        return {
+            "total_resolved": 0,
+            "hit_rate": 0.0,
+            "brier_score": 0.0,
+            "raw_brier_score": 0.0,
+            "calibrated_brier_score": 0.0,
+        }
+    calibrated = _attach_calibrated_confidence(picks, curve_1d, curve_2d)
+    wins = sum(1 for p in picks if p["outcome"] == "correct")
+    return {
+        "total_resolved": len(picks),
+        "hit_rate": round(wins / len(picks), 4),
+        "brier_score": compute_brier_score(calibrated, confidence_key="calibrated_confidence"),
+        "raw_brier_score": compute_brier_score(picks),
+        "calibrated_brier_score": compute_brier_score(calibrated, confidence_key="calibrated_confidence"),
+    }
 
 
 def _hit_rate_stats(rows: list[dict]) -> dict[str, Any]:
@@ -79,6 +125,17 @@ def _hit_rate_stats(rows: list[dict]) -> dict[str, Any]:
         "correct": wins,
         "total": len(rows),
     }
+
+
+def _curve_for_display(curve_1d: dict) -> dict[str, float]:
+    """Human-readable bucket label → empirical hit rate."""
+    labels = {label: (lo, hi) for lo, hi, label in CONFIDENCE_BUCKETS}
+    out: dict[str, float] = {}
+    for label, (lo, hi) in labels.items():
+        rate = curve_1d.get((lo, hi))
+        if rate is not None:
+            out[label] = round(rate, 4)
+    return out
 
 
 def run_calibration(*, persist: bool = True) -> dict[str, Any]:
@@ -93,6 +150,8 @@ def get_calibration_summary() -> dict[str, Any]:
 
 def _compute_calibration(*, persist: bool) -> dict[str, Any]:
     db = get_db()
+    curve_1d, curve_2d, ml_history = _load_calibration_curve()
+
     resolved = (
         db.table("picks")
         .select(
@@ -109,19 +168,35 @@ def _compute_calibration(*, persist: bool) -> dict[str, Any]:
         return {
             "total_resolved": 0,
             "brier_score": 0.0,
+            "raw_brier_score": 0.0,
+            "calibrated_brier_score": 0.0,
             "simulated_roi_pct": 0.0,
             "hit_rates_by_bucket": {},
             "hit_rates_by_bet_type": {},
             "hit_rates_2d": {},
             "upset_trap": {},
+            "moneyline": {},
+            "props": {},
+            "calibration_curve": {},
+            "ml_history_size": ml_history,
         }
 
-    overall_brier = compute_brier_score(resolved)
+    ml_picks = [p for p in resolved if (p.get("bet_type") or "moneyline") in MONEYLINE_BET_TYPES]
+    prop_picks = [p for p in resolved if (p.get("bet_type") or "moneyline") not in MONEYLINE_BET_TYPES]
+    calibrated_all = _attach_calibrated_confidence(resolved, curve_1d, curve_2d)
 
-    # ── 1D hit rate by confidence bucket ─────────────────────────────────────
+    # Primary headline metrics use moneyline picks (what we bet on).
+    ml_metrics = _segment_metrics(ml_picks, curve_1d, curve_2d)
+    prop_metrics = _segment_metrics(prop_picks, curve_1d, curve_2d) if prop_picks else {}
+
+    overall_brier = ml_metrics["calibrated_brier_score"]
+    raw_brier = ml_metrics["raw_brier_score"]
+
+    # ── 1D hit rate by *calibrated* confidence bucket (moneyline) ────────────
     bucket_stats: dict[str, dict[str, int]] = defaultdict(lambda: {"correct": 0, "total": 0})
-    for p in resolved:
-        label = _bucket(p.get("confidence") or 0.5)
+    ml_calibrated = _attach_calibrated_confidence(ml_picks, curve_1d, curve_2d)
+    for p in ml_calibrated:
+        label = _bucket(p.get("calibrated_confidence") or 0.5)
         bucket_stats[label]["total"] += 1
         if p["outcome"] == "correct":
             bucket_stats[label]["correct"] += 1
@@ -135,11 +210,11 @@ def _compute_calibration(*, persist: bool) -> dict[str, Any]:
         for label, v in bucket_stats.items()
     }
 
-    # ── 2D: confidence × market price ────────────────────────────────────────
+    # ── 2D: calibrated confidence × market price ─────────────────────────────
     matrix: dict[str, dict[str, dict[str, Any]]] = {}
-    picks_with_market = [p for p in resolved if p.get("market_prob_at_pick") is not None]
+    picks_with_market = [p for p in ml_calibrated if p.get("market_prob_at_pick") is not None]
     for p in picks_with_market:
-        conf_label = _bucket(p.get("confidence") or 0.5)
+        conf_label = _bucket(p.get("calibrated_confidence") or 0.5)
         mkt_label = _market_bucket(p["market_prob_at_pick"])
         matrix.setdefault(conf_label, {}).setdefault(mkt_label, []).append(p)
 
@@ -149,16 +224,16 @@ def _compute_calibration(*, persist: bool) -> dict[str, Any]:
         for mkt_label, cell_rows in mkt_map.items():
             hit_rates_2d[conf_label][mkt_label] = _hit_rate_stats(cell_rows)
 
-    # ── Upset trap on picks (high confidence, low market) ────────────────────
+    # ── Upset trap (calibrated conf + low market) ────────────────────────────
     trap_rows = [
         p for p in picks_with_market
-        if (p.get("confidence") or 0) >= UPSET_CONF_MIN
+        if (p.get("calibrated_confidence") or 0) >= UPSET_CONF_MIN
         and (p.get("market_prob_at_pick") or 1) < UPSET_MARKET_MAX
     ]
     normal_rows = [
         p for p in picks_with_market
         if not (
-            (p.get("confidence") or 0) >= UPSET_CONF_MIN
+            (p.get("calibrated_confidence") or 0) >= UPSET_CONF_MIN
             and (p.get("market_prob_at_pick") or 1) < UPSET_MARKET_MAX
         )
     ]
@@ -167,11 +242,11 @@ def _compute_calibration(*, persist: bool) -> dict[str, Any]:
         "normal": {**_hit_rate_stats(normal_rows), "label": "All other picks"},
     }
 
-    # ── Simulated ROI ────────────────────────────────────────────────────────
-    total_bet = len(resolved)
+    # ── Simulated ROI at calibrated odds (moneyline) ─────────────────────────
+    total_bet = len(ml_calibrated)
     total_return = 0.0
-    for p in resolved:
-        conf = p.get("confidence") or 0.5
+    for p in ml_calibrated:
+        conf = p.get("calibrated_confidence") or 0.5
         odds = _implied_decimal_odds(conf)
         if p["outcome"] == "correct":
             total_return += odds
@@ -192,10 +267,10 @@ def _compute_calibration(*, persist: bool) -> dict[str, Any]:
         for bt, v in type_stats.items()
     }
 
-    # ── Persist calibration logs ─────────────────────────────────────────────
+    # ── Persist calibration logs (calibrated confidence) ─────────────────────
     logs = []
-    for p in resolved:
-        conf = p.get("confidence") or 0.5
+    for p in calibrated_all:
+        conf = p.get("calibrated_confidence") or 0.5
         is_correct = p["outcome"] == "correct"
         brier_contrib = (conf - (1.0 if is_correct else 0.0)) ** 2
         logs.append({
@@ -209,7 +284,6 @@ def _compute_calibration(*, persist: bool) -> dict[str, Any]:
         })
 
     if logs and persist:
-        # One row per match+outcome (multiple pickers may share the same key)
         deduped: dict[tuple, dict] = {}
         for row in logs:
             key = (row.get("match_id"), row.get("predicted_outcome"))
@@ -225,22 +299,23 @@ def _compute_calibration(*, persist: bool) -> dict[str, Any]:
     summary = {
         "total_resolved": len(resolved),
         "brier_score": overall_brier,
+        "raw_brier_score": raw_brier,
+        "calibrated_brier_score": overall_brier,
         "simulated_roi_pct": simulated_roi,
         "hit_rates_by_bucket": hit_rates,
         "hit_rates_by_bet_type": bet_type_rates,
         "hit_rates_2d": hit_rates_2d,
         "upset_trap": upset_trap,
         "picks_with_market_line": len(picks_with_market),
+        "moneyline": ml_metrics,
+        "props": prop_metrics,
+        "calibration_curve": _curve_for_display(curve_1d),
+        "ml_history_size": ml_history,
     }
 
     logger.info(
-        f"Calibration: {len(resolved)} resolved picks | "
-        f"Brier={overall_brier:.4f} | ROI={simulated_roi:.1f}% | "
-        f"2D cells={sum(len(v) for v in hit_rates_2d.values())}"
+        f"Calibration: {len(resolved)} resolved | "
+        f"Brier raw={raw_brier:.4f} calibrated={overall_brier:.4f} | "
+        f"ROI={simulated_roi:.1f}% | ml_history={ml_history}"
     )
     return summary
-
-
-def get_calibration_summary() -> dict[str, Any]:
-    """Public API — returns latest calibration stats (used by the dashboard API)."""
-    return run_calibration()

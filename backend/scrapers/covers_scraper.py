@@ -265,7 +265,7 @@ class CoversScraper:
                             "predicted_winner": canonical,
                             "bet_type": "draw" if canonical == "draw" else "moneyline",
                             "bet_line": None,
-                            "confidence": 0.72,
+                            "confidence": 0.55,
                             "predicted_score": None,
                         }]
 
@@ -289,7 +289,7 @@ class CoversScraper:
                     "bet_type": bet_type,
                     "bet_line": pick_data.get("bet_line"),
                     "bet_subject": pick_data.get("bet_subject"),
-                    "confidence": pick_data.get("confidence") or 0.72,
+                    "confidence": pick_data.get("confidence") or 0.55,
                     "posted_at": now_iso,
                     "post_id": post_id,
                 })
@@ -354,7 +354,7 @@ class CoversScraper:
                 "predicted_winner": winner,
                 "bet_type": "moneyline",
                 "bet_line": None,
-                "confidence": 0.70,
+                "confidence": 0.55,
                 "posted_at": now_iso,
                 "post_id": f"covers_mlb_{slug}_{now_iso[:10]}",
                 "post_url": source_url,

@@ -744,12 +744,12 @@ def _extract_score(text_lower: str) -> str | None:
 
 def _extract_confidence(text_lower: str) -> float | None:
     if any(kw in text_lower for kw in HIGH_CONFIDENCE):
-        return 0.90
+        return 0.72
     if any(kw in text_lower for kw in MEDIUM_CONFIDENCE):
-        return 0.65
+        return 0.58
     if any(kw in text_lower for kw in LOW_CONFIDENCE):
-        return 0.40
-    return 0.55  # default neutral
+        return 0.42
+    return 0.52  # default — slightly above coin flip, not a strong lean
 
 
 def _extract_corners(text_lower: str, confidence: float | None) -> list[dict]:

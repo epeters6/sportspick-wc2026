@@ -169,7 +169,11 @@ export default function Dashboard() {
             <StatCard
               label="Brier score"
               value={(calData.brier_score ?? 0).toFixed(4)}
-              sub={`${calData.total_resolved} resolved picks`}
+              sub={
+                calData.raw_brier_score != null
+                  ? `calibrated · raw ${calData.raw_brier_score.toFixed(3)}`
+                  : `${calData.total_resolved} resolved picks`
+              }
               accent="blue"
             />
             <StatCard

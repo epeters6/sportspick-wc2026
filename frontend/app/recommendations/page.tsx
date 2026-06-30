@@ -76,7 +76,8 @@ function Recommendations() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {data?.recommendations.map((rec) => {
           const match = rec.matches;
-          const pct = Math.round(rec.confidence * 100);
+          const displayConf = rec.calibrated_confidence ?? rec.confidence;
+          const pct = Math.round(displayConf * 100);
           const tier =
             pct >= 75 ? { label: "Strong Pick", cls: "text-emerald-400 bg-emerald-950 border-emerald-800" }
             : pct >= 55 ? { label: "Lean",       cls: "text-yellow-400 bg-yellow-950 border-yellow-800" }
@@ -129,10 +130,10 @@ function Recommendations() {
               {!hasProbs && (
                 <div>
                   <div className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>Confidence</span>
+                    <span>Win probability (calibrated)</span>
                     <span className="font-mono">{pct}%</span>
                   </div>
-                  <ConfidenceBar value={rec.confidence} />
+                  <ConfidenceBar value={displayConf} />
                 </div>
               )}
             </div>

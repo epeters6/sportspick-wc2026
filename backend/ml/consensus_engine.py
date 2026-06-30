@@ -224,8 +224,10 @@ def compute_all_consensus() -> int:
 def get_top_recommendations(limit: int = 10, sport: str | None = None) -> list[dict]:
     """
     Return the top N recommended picks across all upcoming matches,
-    sorted by consensus confidence.
+    sorted by calibrated confidence (empirical win rate, not raw vote share).
     """
+    from backend.trading.edge_model import calibrate_confidence
+
     db = get_db()
     fetch_limit = limit * 5 if sport else limit
     rows = (
@@ -238,4 +240,15 @@ def get_top_recommendations(limit: int = 10, sport: str | None = None) -> list[d
     )
     if sport:
         rows = [r for r in rows if (r.get("matches") or {}).get("sport") == sport]
-    return rows[:limit]
+
+    enriched: list[dict] = []
+    for r in rows:
+        raw = r.get("confidence") or 0.5
+        calibrated = round(calibrate_confidence(raw), 4)
+        enriched.append({
+            **r,
+            "raw_confidence": round(raw, 4),
+            "calibrated_confidence": calibrated,
+        })
+    enriched.sort(key=lambda x: x.get("calibrated_confidence") or 0, reverse=True)
+    return enriched[:limit]

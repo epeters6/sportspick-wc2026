@@ -81,6 +81,8 @@ export interface ConsensusPick {
   total_votes: number;
   weighted_score: number;
   confidence: number;
+  raw_confidence?: number;
+  calibrated_confidence?: number;
   pick_count?: number;
   home_probability?: number;
   draw_probability?: number;
@@ -113,15 +115,29 @@ export interface PlatformStats {
   }[];
 }
 
+export interface CalibrationSegment {
+  total_resolved: number;
+  hit_rate: number;
+  brier_score: number;
+  raw_brier_score: number;
+  calibrated_brier_score: number;
+}
+
 export interface CalibrationSummary {
   total_resolved: number;
   brier_score: number;
+  raw_brier_score?: number;
+  calibrated_brier_score?: number;
   simulated_roi_pct: number;
   hit_rates_by_bucket: Record<string, { hit_rate: number; correct: number; total: number }>;
   hit_rates_by_bet_type: Record<string, { hit_rate: number; correct: number; total: number }>;
   hit_rates_2d?: Record<string, Record<string, { hit_rate: number; correct: number; total: number }>>;
   upset_trap?: Record<string, { hit_rate: number; correct: number; total: number; label?: string }>;
   picks_with_market_line?: number;
+  moneyline?: CalibrationSegment;
+  props?: CalibrationSegment;
+  calibration_curve?: Record<string, number>;
+  ml_history_size?: number;
 }
 
 export interface AutobetTierStat {

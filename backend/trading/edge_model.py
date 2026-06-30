@@ -32,6 +32,9 @@ FULL_TRUST_HISTORY = 300
 MAX_MODEL_WEIGHT = 0.50
 FULL_TRUST_PICKERS = 12
 MIN_2D_CELL_SAMPLES = 3
+SHRINKAGE_PRIOR = 8  # pseudo-observations toward 50% for thin buckets
+
+MONEYLINE_BET_TYPES = frozenset({"moneyline", "draw"})
 
 _CONF_BUCKETS = [(0.0, 0.50), (0.50, 0.65), (0.65, 0.80), (0.80, 1.01)]
 _MKT_BUCKETS = [(0.0, 0.15), (0.15, 0.35), (0.35, 0.55), (0.55, 1.01)]
@@ -62,6 +65,13 @@ def _bucket_key(value: float, buckets: list[tuple[float, float]]) -> tuple[float
     return buckets[-1]
 
 
+def _shrunk_hit_rate(wins: int, total: int, *, prior: float = 0.5) -> float:
+    """Bayesian shrinkage — thin buckets regress toward coin-flip."""
+    if total <= 0:
+        return prior
+    return (wins + SHRINKAGE_PRIOR * prior) / (total + SHRINKAGE_PRIOR)
+
+
 def _load_calibration_curve() -> tuple[
     dict[tuple[float, float], float],
     dict[tuple[float, float, float, float], float],
@@ -74,34 +84,39 @@ def _load_calibration_curve() -> tuple[
     db = get_db()
     rows = (
         db.table("picks")
-        .select("confidence, outcome, market_prob_at_pick")
+        .select("confidence, outcome, market_prob_at_pick, bet_type")
         .in_("outcome", ["correct", "incorrect"])
         .execute()
         .data or []
     )
-    total = len(rows)
+    # Moneyline/draw only — props have different base rates and poison the curve.
+    ml_rows = [
+        r for r in rows
+        if (r.get("bet_type") or "moneyline") in MONEYLINE_BET_TYPES
+    ]
+    total = len(ml_rows)
 
     curve_1d: dict[tuple[float, float], float] = {}
     for lo, hi in _CONF_BUCKETS:
-        bucket_rows = [r for r in rows if lo <= (r.get("confidence") or 0.5) < hi]
+        bucket_rows = [r for r in ml_rows if lo <= (r.get("confidence") or 0.5) < hi]
         if bucket_rows:
             wins = sum(1 for r in bucket_rows if r["outcome"] == "correct")
-            curve_1d[(lo, hi)] = wins / len(bucket_rows)
+            curve_1d[(lo, hi)] = _shrunk_hit_rate(wins, len(bucket_rows))
         else:
-            curve_1d[(lo, hi)] = (lo + min(hi, 1.0)) / 2
+            curve_1d[(lo, hi)] = 0.5
 
     curve_2d: dict[tuple[float, float, float, float], float] = {}
     for clo, chi in _CONF_BUCKETS:
         for mlo, mhi in _MKT_BUCKETS:
             cell = [
-                r for r in rows
+                r for r in ml_rows
                 if clo <= (r.get("confidence") or 0.5) < chi
                 and r.get("market_prob_at_pick") is not None
                 and mlo <= r["market_prob_at_pick"] < mhi
             ]
             if len(cell) >= MIN_2D_CELL_SAMPLES:
                 wins = sum(1 for r in cell if r["outcome"] == "correct")
-                curve_2d[(clo, chi, mlo, mhi)] = wins / len(cell)
+                curve_2d[(clo, chi, mlo, mhi)] = _shrunk_hit_rate(wins, len(cell))
 
     return curve_1d, curve_2d, total
 
