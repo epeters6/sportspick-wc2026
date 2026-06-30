@@ -62,28 +62,56 @@ class OpenfootballFetcher:
 
 # ─── Normaliser ─────────────────────────────────────────────────────────────
 
+def _winner_from_scores(
+    team1: str,
+    team2: str,
+    ft: list | None,
+    pen: list | None = None,
+) -> tuple[int | None, int | None, str | None]:
+    """
+    Derive (home_score, away_score, winner) from full-time and optional penalty scores.
+
+    Knockout ties are decided on penalties — Polymarket "Will X win?" resolves on
+    the advancing team, not a 90-min draw.
+    """
+    if not ft or len(ft) < 2:
+        return None, None, None
+    score1, score2 = ft[0], ft[1]
+    if score1 > score2:
+        return score1, score2, team1
+    if score2 > score1:
+        return score1, score2, team2
+    # FT draw — check penalty shootout
+    if pen and len(pen) >= 2:
+        p1, p2 = pen[0], pen[1]
+        if p1 > p2:
+            return score1, score2, team1
+        if p2 > p1:
+            return score1, score2, team2
+    return score1, score2, "draw"
+
+
 def _normalise_primary(raw: dict) -> dict:
     """Map wc2026api.com fields → our DB schema."""
-    score = raw.get("score", {})
+    score = raw.get("score", {}) or {}
     home = score.get("home")
     away = score.get("away")
-    winner = None
-    if home is not None and away is not None:
-        if home > away:
-            winner = raw.get("homeTeam", {}).get("name")
-        elif away > home:
-            winner = raw.get("awayTeam", {}).get("name")
-        else:
-            winner = "draw"
+    ft = [home, away] if home is not None and away is not None else None
+    pen = score.get("penalties") or score.get("penalty") or score.get("p")
+    if isinstance(pen, dict):
+        pen = [pen.get("home"), pen.get("away")]
+    home_team = raw.get("homeTeam", {}).get("name", "")
+    away_team = raw.get("awayTeam", {}).get("name", "")
+    score1, score2, winner = _winner_from_scores(home_team, away_team, ft, pen)
     return {
         "external_id": str(raw.get("id", "")),
         "tournament": "FIFA World Cup 2026",
         "sport": "football",
-        "home_team": raw.get("homeTeam", {}).get("name", ""),
-        "away_team": raw.get("awayTeam", {}).get("name", ""),
+        "home_team": home_team,
+        "away_team": away_team,
         "scheduled_at": raw.get("utcDate"),
-        "home_score": home,
-        "away_score": away,
+        "home_score": score1,
+        "away_score": score2,
         "winner": winner,
         "stage": raw.get("stage", ""),
         "venue": raw.get("venue", {}).get("name", ""),
@@ -94,19 +122,12 @@ def _normalise_primary(raw: dict) -> dict:
 
 def _normalise_fallback(raw: dict) -> dict:
     """Map openfootball 2026 flat format → our DB schema."""
-    score_ft = raw.get("score", {}).get("ft")  # [home, away] or None
-    score1 = score_ft[0] if score_ft else None
-    score2 = score_ft[1] if score_ft else None
+    score = raw.get("score", {}) or {}
+    score_ft = score.get("ft")
+    score_p = score.get("p")
     team1 = raw.get("team1", "")
     team2 = raw.get("team2", "")
-    winner = None
-    if score1 is not None and score2 is not None:
-        if score1 > score2:
-            winner = team1
-        elif score2 > score1:
-            winner = team2
-        else:
-            winner = "draw"
+    score1, score2, winner = _winner_from_scores(team1, team2, score_ft, score_p)
     date_str = raw.get("date", "")
     match_num = raw.get("num")
     external_id = f"of_{match_num}" if match_num is not None else f"of_{date_str}_{team1}_{team2}".replace(" ", "_")
@@ -160,7 +181,13 @@ def _merge_match_records(a: dict, b: dict) -> dict:
     elif b.get("is_final") and a.get("is_final"):
         out["home_score"] = b.get("home_score") if b.get("home_score") is not None else a.get("home_score")
         out["away_score"] = b.get("away_score") if b.get("away_score") is not None else a.get("away_score")
-        out["winner"] = b.get("winner") or a.get("winner")
+        aw, bw = a.get("winner"), b.get("winner")
+        if bw and bw != "draw":
+            out["winner"] = bw
+        elif aw and aw != "draw":
+            out["winner"] = aw
+        else:
+            out["winner"] = bw or aw
         out["is_final"] = True
     elif not b.get("is_final") and not a.get("is_final"):
         # Prefer record with more complete schedule/stage info
@@ -169,6 +196,17 @@ def _merge_match_records(a: dict, b: dict) -> dict:
         if b.get("scheduled_at") and not a.get("scheduled_at"):
             out["scheduled_at"] = b["scheduled_at"]
     return out
+
+
+def _best_final_row(group: list[dict]) -> dict | None:
+    """Pick the most authoritative final row (PK winner beats FT draw)."""
+    finals = [g for g in group if g.get("is_final")]
+    if not finals:
+        return None
+    for g in finals:
+        if g.get("winner") and g.get("winner") != "draw":
+            return g
+    return finals[0]
 
 
 async def _propagate_finished_state(db) -> int:
@@ -188,25 +226,31 @@ async def _propagate_finished_state(db) -> int:
     for group in by_key.values():
         if len(group) < 2:
             continue
-        final = next((g for g in group if g.get("is_final")), None)
-        if not final:
+        best = _best_final_row(group)
+        if not best:
             continue
+        payload = {
+            "is_final": True,
+            "winner": best.get("winner"),
+            "home_score": best.get("home_score"),
+            "away_score": best.get("away_score"),
+            "finished_at": best.get("finished_at"),
+        }
         for r in group:
-            if r.get("is_final"):
+            if (
+                r.get("is_final") == payload["is_final"]
+                and r.get("winner") == payload["winner"]
+                and r.get("home_score") == payload["home_score"]
+                and r.get("away_score") == payload["away_score"]
+            ):
                 continue
             try:
-                db.table("matches").update({
-                    "is_final": True,
-                    "winner": final.get("winner"),
-                    "home_score": final.get("home_score"),
-                    "away_score": final.get("away_score"),
-                    "finished_at": final.get("finished_at"),
-                }).eq("id", r["id"]).execute()
+                db.table("matches").update(payload).eq("id", r["id"]).execute()
                 updated += 1
             except Exception as exc:
                 logger.debug(f"Propagate final state failed for {r['id']}: {exc}")
     if updated:
-        logger.info(f"Propagated is_final to {updated} duplicate match rows")
+        logger.info(f"Propagated final state to {updated} duplicate match rows")
     return updated
 
 

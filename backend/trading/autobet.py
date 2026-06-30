@@ -689,24 +689,29 @@ def resolve_autobets() -> int:
         return {ah, aw} == {bh, bw}
 
     def _find_finished(meta: dict) -> dict | None:
+        candidates: list[dict] = []
         direct = finished_map.get(meta["id"])
         if direct:
-            return direct
+            candidates.append(direct)
         for fm in all_finished:
-            if _teams_match(meta, fm):
-                return fm
-        return None
+            if fm["id"] != meta["id"] and _teams_match(meta, fm):
+                candidates.append(fm)
+        if not candidates:
+            return None
+        for c in candidates:
+            if c.get("winner") and c.get("winner") != "draw":
+                return c
+        return direct or candidates[0]
 
     from backend.sports_data.bet_settlement import pick_won_for_autobet
 
-    resolved = 0
-    for bet in open_bets:
+    def _settle_bet(bet: dict, *, allow_regrade: bool) -> bool:
         meta = match_meta.get(bet["match_id"])
         if not meta:
-            continue
+            return False
         match = _find_finished(meta)
         if not match:
-            continue
+            return False
 
         bet_type = bet.get("bet_type") or "moneyline"
         backed = bet["outcome_name"]
@@ -721,25 +726,65 @@ def resolve_autobets() -> int:
             match_stats=full_match.get("match_stats"),
         )
         if won is None:
-            continue
+            return False
 
         stake = bet.get("stake") or 0.0
         shares = bet.get("shares") or 0.0
         price = bet.get("market_price") or 0.0
+        new_status = "won" if won else "lost"
+        new_pnl = round(shares * (1 - price), 2) if won else round(-stake, 2)
 
-        if won:
-            pnl = round(shares * (1 - price), 2)
-            status = "won"
-        else:
-            pnl = round(-stake, 2)
-            status = "lost"
+        if bet.get("status") in ("won", "lost"):
+            if not allow_regrade:
+                return False
+            if bet.get("status") == new_status and bet.get("pnl") == new_pnl:
+                return False
+            logger.info(
+                f"Autobet regrade {bet['id'][:8]}… "
+                f"{bet.get('status')} → {new_status} ({backed})"
+            )
 
         db.table("autobets").update({
-            "status": status,
-            "pnl": pnl,
+            "status": new_status,
+            "pnl": new_pnl,
             "resolved_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", bet["id"]).execute()
-        resolved += 1
+        return True
+
+    resolved = 0
+    for bet in open_bets:
+        if _settle_bet(bet, allow_regrade=False):
+            resolved += 1
+
+    settled_bets = (
+        db.table("autobets")
+        .select(
+            "id, match_id, outcome_name, stake, shares, market_price, "
+            "bet_type, bet_line, bet_subject, status, pnl"
+        )
+        .in_("status", ["won", "lost"])
+        .not_.is_("match_id", "null")
+        .execute()
+        .data or []
+    )
+    # Extend match_meta for any settled bet not already loaded
+    extra_ids = {b["match_id"] for b in settled_bets if b.get("match_id")} - set(match_meta)
+    if extra_ids:
+        extra_rows = (
+            db.table("matches")
+            .select(
+                "id, home_team, away_team, scheduled_at, winner, is_final, "
+                "home_score, away_score, match_stats"
+            )
+            .in_("id", list(extra_ids))
+            .execute()
+            .data or []
+        )
+        for m in extra_rows:
+            match_meta[m["id"]] = m
+    for bet in settled_bets:
+        if _settle_bet(bet, allow_regrade=True):
+            resolved += 1
 
     if resolved:
         logger.info(f"Autobet: resolved {resolved} bets")
