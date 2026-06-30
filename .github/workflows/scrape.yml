@@ -48,6 +48,9 @@ jobs:
       - name: Download spaCy model
         run: python -m spacy download en_core_web_sm
 
+      - name: Validate Supabase secrets
+        run: python scripts/ci_check_env.py
+
       - name: Run Twitter scraper
         continue-on-error: true
         run: |

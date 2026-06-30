@@ -34,6 +34,9 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r backend/requirements.txt
 
+      - name: Validate Supabase secrets
+        run: python scripts/ci_check_env.py
+
       - name: Recompute Elo scores
         run: |
           python - <<'EOF'

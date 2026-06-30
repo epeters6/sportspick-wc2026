@@ -80,6 +80,19 @@ class Settings(BaseSettings):
     scrape_interval_minutes: int = 30
     top_influencers_seed: int = 100
 
+    @field_validator(
+        "supabase_url",
+        "supabase_anon_key",
+        "supabase_service_role_key",
+        mode="before",
+    )
+    @classmethod
+    def _strip_secret(cls, v: object) -> object:
+        # GitHub secrets are often pasted with trailing newlines → illegal HTTP headers
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
     @field_validator("polymarket_live_enabled", mode="before")
     @classmethod
     def _empty_env_bool(cls, v: object) -> object:

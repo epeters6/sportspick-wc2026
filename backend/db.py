@@ -1,6 +1,7 @@
 """Supabase client singleton with Windows-safe HTTP settings."""
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -23,15 +24,23 @@ _TRANSIENT_ERRORS = (ReadError, ConnectError, TimeoutException, OSError)
 
 def _make_client() -> Client:
     s = get_settings()
-    # HTTP/2 on a shared sync client causes WinError 10035 under concurrent
-    # FastAPI thread-pool requests on Windows.
-    httpx_client = httpx.Client(
-        http2=False,
-        timeout=httpx.Timeout(30.0, connect=10.0),
-        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-    )
-    options = SyncClientOptions(httpx_client=httpx_client)
-    return create_client(s.supabase_url, s.supabase_service_role_key, options=options)
+    url = s.supabase_url
+    key = s.supabase_service_role_key
+    if not url or not key:
+        raise RuntimeError(
+            "Supabase credentials missing — set SUPABASE_URL and "
+            "SUPABASE_SERVICE_ROLE_KEY in GitHub Actions secrets"
+        )
+    # Custom httpx client is only needed on Windows (HTTP/2 WinError 10035).
+    if sys.platform == "win32":
+        httpx_client = httpx.Client(
+            http2=False,
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+        options = SyncClientOptions(httpx_client=httpx_client)
+        return create_client(url, key, options=options)
+    return create_client(url, key)
 
 
 def get_db() -> Client:
