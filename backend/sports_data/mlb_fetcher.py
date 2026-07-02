@@ -119,7 +119,7 @@ class MLBFetcher:
                 params={
                     "sportId": SPORT_ID,
                     "date": date_str,
-                    "hydrate": "linescore,decisions,team",
+                    "hydrate": "linescore,decisions,team,probablePitcher",
                 },
             )
             r.raise_for_status()
@@ -156,7 +156,17 @@ def _normalise_mlb_game(raw: dict) -> dict:
     game_date = raw.get("gameDate", "")  # ISO 8601
     external_id = f"mlb_{raw.get('gamePk', '')}"
 
-    return {
+    probable: dict[str, dict] = {}
+    for side, team_name in (("home", home_name), ("away", away_name)):
+        pp = (teams.get(side, {}) or {}).get("probablePitcher") or {}
+        if pp.get("fullName"):
+            probable[side] = {
+                "id": pp.get("id"),
+                "name": pp.get("fullName"),
+                "team": team_name,
+            }
+
+    record: dict = {
         "external_id": external_id,
         "tournament": MLB_TOURNAMENT,
         "sport": "mlb",
@@ -171,6 +181,9 @@ def _normalise_mlb_game(raw: dict) -> dict:
         "is_final": is_final,
         "finished_at": game_date if is_final else None,
     }
+    if probable and not is_final:
+        record["match_stats"] = {"probable_pitchers": probable, "source": "mlb_schedule"}
+    return record
 
 
 # ─── Sync to DB ─────────────────────────────────────────────────────────────

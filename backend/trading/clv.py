@@ -107,17 +107,14 @@ async def snapshot_pick_market_probs() -> int:
 
 def compute_average_clv() -> int:
     """
-    For each influencer, compute average CLV across resolved picks that have a
-    market_prob_at_pick snapshot, and store it in influencers.avg_clv.
-
-    CLV per pick = (1 if correct else 0) - market_prob_at_pick
-      > 0 means the picker beat the market line on average (good).
-    Returns the number of influencers updated.
+    For each influencer, compute average CLV per sport across resolved picks
+    with a market_prob_at_pick snapshot. Stores headline avg_clv plus
+    avg_clv_by_sport so MLB and football CLV do not cross-contaminate.
     """
     db = get_db()
     rows = (
         db.table("picks")
-        .select("influencer_id, outcome, market_prob_at_pick")
+        .select("influencer_id, outcome, market_prob_at_pick, matches(sport)")
         .in_("outcome", ["correct", "incorrect"])
         .not_.is_("market_prob_at_pick", "null")
         .execute()
@@ -127,25 +124,35 @@ def compute_average_clv() -> int:
         return 0
 
     from collections import defaultdict
-    by_inf: dict[str, list[float]] = defaultdict(list)
+    by_inf_sport: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for r in rows:
         mp = r.get("market_prob_at_pick")
         if mp is None:
             continue
+        sport = ((r.get("matches") or {}).get("sport")) or "football"
         actual = 1.0 if r["outcome"] == "correct" else 0.0
-        by_inf[r["influencer_id"]].append(actual - mp)
+        by_inf_sport[r["influencer_id"]][str(sport).lower()].append(actual - mp)
 
     updated = 0
-    for iid, clvs in by_inf.items():
-        if not clvs:
+    for iid, sport_map in by_inf_sport.items():
+        avg_by_sport: dict[str, float] = {}
+        all_clvs: list[float] = []
+        for sport, clvs in sport_map.items():
+            if not clvs:
+                continue
+            avg_by_sport[sport] = round(sum(clvs) / len(clvs), 4)
+            all_clvs.extend(clvs)
+        if not all_clvs:
             continue
-        avg_clv = round(sum(clvs) / len(clvs), 4)
+        payload: dict = {
+            "avg_clv": round(sum(all_clvs) / len(all_clvs), 4),
+            "avg_clv_by_sport": avg_by_sport,
+        }
         try:
-            db.table("influencers").update({"avg_clv": avg_clv}).eq("id", iid).execute()
+            db.table("influencers").update(payload).eq("id", iid).execute()
             updated += 1
         except Exception:
-            # Column may not exist yet — non-fatal
             pass
 
-    logger.info(f"CLV: updated avg_clv for {updated} influencers")
+    logger.info(f"CLV: updated avg_clv for {updated} influencers (per-sport)")
     return updated

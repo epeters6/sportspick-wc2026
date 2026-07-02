@@ -85,14 +85,17 @@ def confidence_k_scale(confidence: float | None) -> float:
 def update_all_elo_scores() -> int:
     """
     Recalculate Elo for every influencer based on all resolved picks.
-    Runs a full recompute (idempotent).
-    Returns the number of influencer records updated.
+    Stores per-sport Elo in elo_by_sport (football vs mlb) so WC volume
+    does not dominate MLB influencer rankings.
     """
     db = get_db()
 
     picks = (
         db.table("picks")
-        .select("influencer_id, outcome, posted_at, confidence, market_prob_at_pick")
+        .select(
+            "influencer_id, outcome, posted_at, confidence, market_prob_at_pick, "
+            "match_id, matches(sport)"
+        )
         .in_("outcome", ["correct", "incorrect"])
         .order("posted_at")
         .execute()
@@ -102,11 +105,15 @@ def update_all_elo_scores() -> int:
     if not picks:
         return 0
 
+    def _sport_key(pick: dict) -> str:
+        sport = (pick.get("matches") or {}).get("sport") or "football"
+        return str(sport).lower()
+
     influencer_picks: dict[str, list[dict]] = defaultdict(list)
     for p in picks:
         influencer_picks[p["influencer_id"]].append(p)
 
-    for iid, ipicks in influencer_picks.items():
+    def _compute_elo(ipicks: list[dict]) -> tuple[float, int, int, float]:
         elo = float(ELO_DEFAULT)
         total = 0
         correct = 0
@@ -114,39 +121,52 @@ def update_all_elo_scores() -> int:
             recency_w = recency_weight(pick.get("posted_at"))
             conf_scale = confidence_k_scale(pick.get("confidence"))
             actual = 1.0 if pick["outcome"] == "correct" else 0.0
-
-            # CLV-aware expectation: if we know the market's implied probability
-            # that this pick was correct, score against THAT (i.e. against the
-            # closing line) instead of a generic 1000-Elo crowd opponent. Beating
-            # a long-shot the market priced cheap earns far more Elo than nailing
-            # a heavy favourite everyone agreed on.
             market_prob = pick.get("market_prob_at_pick")
             if market_prob is not None and 0.0 < market_prob < 1.0:
                 expected = market_prob
             else:
                 expected = expected_score(elo, ELO_DEFAULT)
-
             k_adj = ELO_K * recency_w * conf_scale
             elo = update_elo(elo, actual, expected, k_adj)
             total += 1
             if pick["outcome"] == "correct":
                 correct += 1
-
         accuracy = correct / total if total else 0.0
         wlb = wilson_lower_bound(correct, total)
+        return round(elo, 2), total, correct, round(wlb, 4)
+
+    for iid, ipicks in influencer_picks.items():
+        by_sport: dict[str, list[dict]] = defaultdict(list)
+        for pick in ipicks:
+            by_sport[_sport_key(pick)].append(pick)
+
+        elo_by_sport: dict[str, float] = {}
+
+        for sport, spicks in by_sport.items():
+            if not spicks:
+                continue
+            elo, _, _, _ = _compute_elo(spicks)
+            elo_by_sport[sport] = elo
+
+        primary = max(by_sport.keys(), key=lambda s: len(by_sport[s]))
+        headline_elo, headline_total, headline_correct, headline_wlb = _compute_elo(
+            by_sport[primary]
+        )
 
         db.table("influencers").update(
             {
-                "elo_score": round(elo, 2),
-                "accuracy_rate": round(accuracy, 4),
-                "total_picks": total,
-                "correct_picks": correct,
-                # Store Wilson lower-bound in consensus_score as a trust signal
-                "consensus_score": round(wlb, 4),
+                "elo_score": headline_elo,
+                "elo_by_sport": elo_by_sport,
+                "accuracy_rate": round(
+                    headline_correct / headline_total if headline_total else 0.0, 4
+                ),
+                "total_picks": headline_total,
+                "correct_picks": headline_correct,
+                "consensus_score": headline_wlb,
             }
         ).eq("id", iid).execute()
 
-    logger.info(f"Elo updated for {len(influencer_picks)} influencers")
+    logger.info(f"Elo updated for {len(influencer_picks)} influencers (per-sport)")
     return len(influencer_picks)
 
 

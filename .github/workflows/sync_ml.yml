@@ -1,11 +1,13 @@
-name: Sync Picks (legacy — use sync_scrape.yml + sync_ml.yml)
+name: Sync ML
 
 on:
+  schedule:
+    # ML / calibration / autobet on slower cadence (hourly, staggered)
+    - cron: '15 * * * *'
   workflow_dispatch:
-  # Scheduled runs moved to sync_scrape.yml (30m) and sync_ml.yml (hourly)
 
 jobs:
-  sync:
+  ml:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -13,12 +15,9 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       APP_ENV: production
       LOG_LEVEL: INFO
-      SYNC_FAST: "true"
-      SYNC_SKIP_YT_SEARCH: "true"
 
     steps:
       - name: Checkout
@@ -37,5 +36,5 @@ jobs:
       - name: Validate Supabase secrets
         run: python scripts/ci_check_env.py
 
-      - name: Run full sync (manual only)
-        run: python scripts/run_sync.py
+      - name: Run ML-only sync
+        run: python scripts/run_sync.py --ml-only

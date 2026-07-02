@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from functools import lru_cache
+
 from loguru import logger
 
 from backend.db import get_db
@@ -33,6 +35,7 @@ MAX_MODEL_WEIGHT = 0.50
 FULL_TRUST_PICKERS = 12
 MIN_2D_CELL_SAMPLES = 3
 SHRINKAGE_PRIOR = 8  # pseudo-observations toward 50% for thin buckets
+MLB_MIN_CALIBRATION_SAMPLES = 15
 
 MONEYLINE_BET_TYPES = frozenset({"moneyline", "draw"})
 
@@ -72,28 +75,9 @@ def _shrunk_hit_rate(wins: int, total: int, *, prior: float = 0.5) -> float:
     return (wins + SHRINKAGE_PRIOR * prior) / (total + SHRINKAGE_PRIOR)
 
 
-def _load_calibration_curve() -> tuple[
-    dict[tuple[float, float], float],
-    dict[tuple[float, float, float, float], float],
-    int,
-]:
-    """
-    Build 1D and 2D calibration curves from resolved picks.
-    2D keys: (conf_lo, conf_hi, mkt_lo, mkt_hi) → empirical hit rate.
-    """
-    db = get_db()
-    rows = (
-        db.table("picks")
-        .select("confidence, outcome, market_prob_at_pick, bet_type")
-        .in_("outcome", ["correct", "incorrect"])
-        .execute()
-        .data or []
-    )
-    # Moneyline/draw only — props have different base rates and poison the curve.
-    ml_rows = [
-        r for r in rows
-        if (r.get("bet_type") or "moneyline") in MONEYLINE_BET_TYPES
-    ]
+def _build_curves_from_rows(
+    ml_rows: list[dict],
+) -> tuple[dict[tuple[float, float], float], dict[tuple[float, float, float, float], float], int]:
     total = len(ml_rows)
 
     curve_1d: dict[tuple[float, float], float] = {}
@@ -119,6 +103,56 @@ def _load_calibration_curve() -> tuple[
                 curve_2d[(clo, chi, mlo, mhi)] = _shrunk_hit_rate(wins, len(cell))
 
     return curve_1d, curve_2d, total
+
+
+def _mlb_match_ids() -> set[str]:
+    db = get_db()
+    rows = (
+        db.table("matches")
+        .select("id")
+        .eq("sport", "mlb")
+        .limit(5000)
+        .execute()
+        .data or []
+    )
+    return {r["id"] for r in rows}
+
+
+@lru_cache(maxsize=4)
+def _load_calibration_curve(sport: str = "") -> tuple[
+    dict[tuple[float, float], float],
+    dict[tuple[float, float, float, float], float],
+    int,
+]:
+    """
+    Build 1D and 2D calibration curves from resolved picks.
+    sport='mlb' uses MLB-linked picks when enough samples exist; else global.
+    """
+    db = get_db()
+    rows = (
+        db.table("picks")
+        .select("confidence, outcome, market_prob_at_pick, bet_type, match_id")
+        .in_("outcome", ["correct", "incorrect"])
+        .execute()
+        .data or []
+    )
+    ml_rows = [
+        r for r in rows
+        if (r.get("bet_type") or "moneyline") in MONEYLINE_BET_TYPES
+    ]
+
+    if sport == "mlb":
+        mlb_ids = _mlb_match_ids()
+        mlb_rows = [r for r in ml_rows if r.get("match_id") in mlb_ids]
+        if len(mlb_rows) >= MLB_MIN_CALIBRATION_SAMPLES:
+            ml_rows = mlb_rows
+        else:
+            logger.debug(
+                f"MLB calibration: {len(mlb_rows)} samples "
+                f"(need {MLB_MIN_CALIBRATION_SAMPLES}), using global curve"
+            )
+
+    return _build_curves_from_rows(ml_rows)
 
 
 def calibrate_confidence(
@@ -161,6 +195,7 @@ def compute_edge(
     *,
     picker_count: int,
     fee_bps: float = 0.0,
+    sport: str | None = None,
     calibration_curve: dict | None = None,
     calibration_curve_2d: dict | None = None,
     history_size: int | None = None,
@@ -168,8 +203,18 @@ def compute_edge(
     min_history_override: int | None = None,
     max_model_weight_override: float | None = None,
 ) -> EdgeResult:
+    sport_key = (sport or "").lower()
+    if sport_key == "mlb":
+        min_hist_default = 15
+        max_w_default = 0.55
+    else:
+        min_hist_default = MIN_HISTORY_FOR_TRUST
+        max_w_default = MAX_MODEL_WEIGHT
+
     if calibration_curve is None or calibration_curve_2d is None or history_size is None:
-        calibration_curve, calibration_curve_2d, history_size = _load_calibration_curve()
+        calibration_curve, calibration_curve_2d, history_size = _load_calibration_curve(
+            sport_key if sport_key == "mlb" else "",
+        )
 
     calibrated = calibrate_confidence(
         raw_confidence,
@@ -177,8 +222,8 @@ def compute_edge(
         curve_1d=calibration_curve,
         curve_2d=calibration_curve_2d,
     )
-    min_hist = min_history_override if min_history_override is not None else MIN_HISTORY_FOR_TRUST
-    max_w = max_model_weight_override if max_model_weight_override is not None else MAX_MODEL_WEIGHT
+    min_hist = min_history_override if min_history_override is not None else min_hist_default
+    max_w = max_model_weight_override if max_model_weight_override is not None else max_w_default
 
     if paper_mode and history_size >= min_hist:
         hist_gate = min(

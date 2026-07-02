@@ -136,6 +136,11 @@ export interface CalibrationSummary {
   picks_with_market_line?: number;
   moneyline?: CalibrationSegment;
   props?: CalibrationSegment;
+  mlb?: CalibrationSegment & {
+    calibration_curve?: Record<string, number>;
+    ml_history_size?: number;
+    using_sport_curve?: boolean;
+  };
   calibration_curve?: Record<string, number>;
   ml_history_size?: number;
 }

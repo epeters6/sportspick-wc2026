@@ -1,38 +1,41 @@
 """
 Standalone sync script — runs the full data pipeline without needing uvicorn.
 Used by GitHub Actions to keep data fresh every 30 minutes.
+
+Modes:
+  default      — full pipeline (scrape + ML)
+  --scrape-only — match sync + scrapers only (fast CI cadence)
+  --ml-only     — linking, Elo, consensus, calibration, autobet (slower cadence)
 """
+from __future__ import annotations
+
+import argparse
 import asyncio
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-async def main():
-    from backend.sports_data.worldcup_fetcher import (
-        sync_matches, link_picks_to_matches,
-    )
-    from backend.sports_data.mlb_fetcher import (
-        sync_mlb_matches, link_mlb_picks_to_matches,
-    )
+async def run_scrape_phase() -> dict[str, int]:
     from backend.config import get_settings
     from backend.scrapers.covers_scraper import CoversScraper
     from backend.scrapers.youtube_scraper import YouTubeScraper
     from backend.scrapers.actionnetwork_scraper import ActionNetworkScraper
-    from backend.ml.elo_ranker import (
-        sync_influencer_pick_counts, update_all_elo_scores, deactivate_poor_performers,
+    from backend.scrapers.pickswise_scraper import PickswiseScraper
+    from backend.sports_data.mlb_fetcher import sync_mlb_matches
+    from backend.sports_data.worldcup_fetcher import sync_matches
+
+    settings = get_settings()
+    fast = settings.sync_fast_mode or os.getenv("SYNC_FAST", "").lower() in (
+        "1", "true", "yes",
     )
-    from backend.ml.consensus_engine import compute_all_consensus
-    from backend.ml.calibration import run_calibration
-    from backend.ml.paper_trading import place_paper_bets, resolve_paper_bets
-    from backend.trading.clv import snapshot_pick_market_probs, compute_average_clv
-    from backend.trading.autobet import run_autobet, resolve_autobets
-    from backend.notifications.discord_alerts import send_consensus_alerts, send_autobet_signals
+    skip_yt_search = settings.sync_skip_youtube_search or os.getenv(
+        "SYNC_SKIP_YT_SEARCH", "",
+    ).lower() in ("1", "true", "yes")
 
-    print("=== SportsPick Sync ===")
+    print("=== Scrape phase ===" + (" [fast]" if fast else ""))
 
-    # ── Match data ────────────────────────────────────────────────────────────
     print("Syncing WC matches...")
     wc = await sync_matches()
     print(f"  {wc} matches upserted")
@@ -41,33 +44,31 @@ async def main():
     mlb = await sync_mlb_matches()
     print(f"  {mlb} games upserted")
 
-    # ── Scrapers ──────────────────────────────────────────────────────────────
     print("Scraping Covers.com...")
-    covers = CoversScraper()
-    covers_picks = await covers.scrape_all()
+    covers_picks = await CoversScraper().scrape_all()
     print(f"  {covers_picks} picks saved")
 
     print("Scraping YouTube...")
-    yt = YouTubeScraper()
-    yt_picks = await yt.scrape_all()
+    yt_picks = await YouTubeScraper().scrape_all(skip_search=skip_yt_search or fast)
     print(f"  {yt_picks} picks saved")
 
     print("Scraping ActionNetwork...")
-    an = ActionNetworkScraper()
-    an_picks = await an.scrape_all()
+    an_picks = await ActionNetworkScraper().scrape_all(fast=fast)
     print(f"  {an_picks} picks saved")
 
-    settings = get_settings()
+    print("Scraping Pickswise MLB...")
+    pw_picks = await PickswiseScraper().scrape_all()
+    print(f"  {pw_picks} picks saved")
+
     tw_picks = 0
     if settings.twitter_auth_token and settings.twitter_ct0:
         print("Scraping Twitter/X...")
         from backend.scrapers.twitter_scraper import TwitterScraper, seed_twitter_influencers
         await seed_twitter_influencers()
-        tw = TwitterScraper()
-        tw_picks = await tw.scrape_all()
+        tw_picks = await TwitterScraper().scrape_all()
         print(f"  {tw_picks} picks saved")
     else:
-        print("Twitter/X skipped — add TWITTER_AUTH_TOKEN + TWITTER_CT0 to .env (free, cookie-based)")
+        print("Twitter/X skipped — add TWITTER_AUTH_TOKEN + TWITTER_CT0 to .env")
 
     tt_picks = 0
     if settings.tiktok_session_id or settings.tiktok_ms_token:
@@ -75,33 +76,64 @@ async def main():
         try:
             from backend.scrapers.tiktok_scraper import TikTokScraper, seed_tiktok_influencers
             await seed_tiktok_influencers()
-            tt = TikTokScraper()
-            tt_picks = await tt.scrape_all()
+            tt_picks = await TikTokScraper().scrape_all()
             print(f"  {tt_picks} picks saved")
         except RuntimeError as exc:
             print(f"  TikTok skipped — {exc}")
     else:
         print("TikTok skipped — add TIKTOK_SESSION_ID or TIKTOK_MS_TOKEN to .env")
 
-    # ── Stats + linking & resolution ──────────────────────────────────────────
+    return {
+        "wc": wc,
+        "mlb": mlb,
+        "covers": covers_picks,
+        "yt": yt_picks,
+        "an": an_picks,
+        "pw": pw_picks,
+        "tw": tw_picks,
+        "tt": tt_picks,
+    }
+
+
+async def run_ml_phase() -> dict[str, int]:
+    from backend.ml.calibration import run_calibration
+    from backend.ml.consensus_engine import compute_all_consensus
+    from backend.ml.elo_ranker import (
+        deactivate_poor_performers,
+        sync_influencer_pick_counts,
+        update_all_elo_scores,
+    )
+    from backend.ml.paper_trading import place_paper_bets, resolve_paper_bets
+    from backend.notifications.discord_alerts import send_autobet_signals, send_consensus_alerts
+    from backend.sports_data.mlb_fetcher import link_mlb_picks_to_matches
+    from backend.sports_data.mlb_stats_fetcher import enrich_upcoming_mlb_pitcher_stats
+    from backend.sports_data.pick_resolver import resolve_all_pending_picks
+    from backend.sports_data.stats_sync import enrich_openfootball_ht, sync_match_stats
+    from backend.sports_data.worldcup_fetcher import link_picks_to_matches
+    from backend.trading.autobet import resolve_autobets, run_autobet
+    from backend.trading.clv import compute_average_clv, snapshot_pick_market_probs
+
+    print("=== ML phase ===")
+
     print("Fetching match stats for settlement...")
-    from backend.sports_data.stats_sync import sync_match_stats, enrich_openfootball_ht
     stats_synced = await sync_match_stats()
     ht_enriched = await enrich_openfootball_ht()
     print(f"  stats synced={stats_synced} ht enriched={ht_enriched}")
+
+    print("Enriching MLB probable pitcher stats...")
+    sp_enriched = await enrich_upcoming_mlb_pitcher_stats()
+    print(f"  pitcher stats enriched={sp_enriched}")
 
     print("Linking picks to matches...")
     linked_wc = await link_picks_to_matches()
     linked_mlb = await link_mlb_picks_to_matches()
     print(f"  linked WC={linked_wc} MLB={linked_mlb}")
 
-    from backend.sports_data.pick_resolver import resolve_all_pending_picks
     resolved_picks = resolve_all_pending_picks()
     print(f"  picks resolved={resolved_picks}")
 
-    # ── CLV snapshot (market line at observation time) ─────────────────────────
-    # Runs before Elo so resolved picks carry a market_prob_at_pick for CLV scoring.
     print("Snapshotting market lines (CLV)...")
+    snapped = 0
     try:
         snapped = await snapshot_pick_market_probs()
         compute_average_clv()
@@ -109,47 +141,44 @@ async def main():
     except Exception as exc:
         print(f"  CLV snapshot skipped: {exc}")
 
-    # ── ML scoring ────────────────────────────────────────────────────────────
     print("Updating ML scores...")
     sync_influencer_pick_counts()
     deactivate_poor_performers()
     update_all_elo_scores()
     compute_all_consensus()
 
-    # ── Calibration ───────────────────────────────────────────────────────────
     print("Running calibration...")
     cal = run_calibration()
     if cal:
-        brier = cal.get("brier_score", 0)
-        roi = cal.get("simulated_roi_pct", 0)
-        total = cal.get("total_resolved", 0)
-        print(f"  {total} resolved | Brier={brier:.4f} | ROI={roi:.1f}%")
+        print(
+            f"  {cal.get('total_resolved', 0)} resolved | "
+            f"Brier={cal.get('brier_score', 0):.4f} | "
+            f"ROI={cal.get('simulated_roi_pct', 0):.1f}%"
+        )
 
-    # ── Paper trading (consensus-vs-self, virtual bankroll) ────────────────────
     print("Paper trading...")
     bets_placed = place_paper_bets()
     bets_resolved = resolve_paper_bets()
     print(f"  {bets_placed} new bets, {bets_resolved} resolved")
 
-    # ── Polymarket autobet (consensus-vs-market, paper unless live enabled) ─────
     print("Running Polymarket autobet...")
-    autobet_summary = {}
+    autobet_summary: dict = {}
     try:
         autobet_summary = await run_autobet()
-        print(f"  [{autobet_summary.get('mode')}] "
-              f"placed={autobet_summary.get('placed', 0)} "
-              f"rejected={autobet_summary.get('rejected', 0)}")
+        print(
+            f"  [{autobet_summary.get('mode')}] "
+            f"placed={autobet_summary.get('placed', 0)} "
+            f"rejected={autobet_summary.get('rejected', 0)}"
+        )
     except Exception as exc:
         print(f"  Autobet placement skipped: {exc}")
 
-    # Always settle open bets — even if placement failed
     try:
         ab_resolved = resolve_autobets()
         print(f"  autobets resolved={ab_resolved}")
     except Exception as exc:
         print(f"  Autobet resolution failed: {exc}")
 
-    # ── Discord alerts ────────────────────────────────────────────────────────
     print("Sending Discord alerts...")
     alerts = await send_consensus_alerts()
     signal_sent = 0
@@ -157,12 +186,62 @@ async def main():
         signal_sent = await send_autobet_signals(autobet_summary["signals"])
     print(f"  {alerts} consensus alerts, {signal_sent} autobet signals sent")
 
-    print(
-        f"=== Done: WC={wc} MLB={mlb} "
-        f"Covers={covers_picks} YT={yt_picks} AN={an_picks} X={tw_picks} TT={tt_picks} "
-        f"linked={linked_wc+linked_mlb} resolved={resolved_picks} "
-        f"autobet={autobet_summary.get('placed', 0)} ==="
+    return {
+        "linked": linked_wc + linked_mlb,
+        "resolved": resolved_picks,
+        "autobet": autobet_summary.get("placed", 0),
+        "stats": stats_synced,
+    }
+
+
+async def main() -> None:
+    parser = argparse.ArgumentParser(description="SportsPick data sync")
+    parser.add_argument(
+        "--scrape-only",
+        action="store_true",
+        help="Match sync + scrapers only (no ML/calibration/autobet)",
     )
+    parser.add_argument(
+        "--ml-only",
+        action="store_true",
+        help="ML pipeline only (linking, Elo, consensus, calibration, autobet)",
+    )
+    args = parser.parse_args()
+
+    if args.scrape_only and args.ml_only:
+        print("Cannot use --scrape-only and --ml-only together")
+        sys.exit(1)
+
+    print("=== SportsPick Sync ===")
+    scrape_stats: dict[str, int] = {}
+    ml_stats: dict[str, int] = {}
+
+    if not args.ml_only:
+        scrape_stats = await run_scrape_phase()
+    if not args.scrape_only:
+        ml_stats = await run_ml_phase()
+
+    if args.scrape_only:
+        print(
+            f"=== Scrape done: WC={scrape_stats.get('wc', 0)} "
+            f"MLB={scrape_stats.get('mlb', 0)} "
+            f"Covers={scrape_stats.get('covers', 0)} YT={scrape_stats.get('yt', 0)} "
+            f"AN={scrape_stats.get('an', 0)} PW={scrape_stats.get('pw', 0)} ==="
+        )
+    elif args.ml_only:
+        print(
+            f"=== ML done: linked={ml_stats.get('linked', 0)} "
+            f"resolved={ml_stats.get('resolved', 0)} "
+            f"autobet={ml_stats.get('autobet', 0)} ==="
+        )
+    else:
+        print(
+            f"=== Done: WC={scrape_stats.get('wc', 0)} MLB={scrape_stats.get('mlb', 0)} "
+            f"Covers={scrape_stats.get('covers', 0)} YT={scrape_stats.get('yt', 0)} "
+            f"AN={scrape_stats.get('an', 0)} PW={scrape_stats.get('pw', 0)} "
+            f"linked={ml_stats.get('linked', 0)} resolved={ml_stats.get('resolved', 0)} "
+            f"autobet={ml_stats.get('autobet', 0)} ==="
+        )
 
 
 if __name__ == "__main__":

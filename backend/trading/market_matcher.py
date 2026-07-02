@@ -27,10 +27,25 @@ from backend.scrapers.pick_extractor import TEAM_ALIASES
 from backend.sports_data.mlb_fetcher import MLB_TEAM_ALIASES
 from backend.trading.polymarket_client import PolyMarket, Outcome
 
-# Combined alias map: lowercased alias → canonical name (soccer + MLB)
+# MLB city/short-name aliases for Polymarket questions
+_MLB_SHORT_ALIASES: dict[str, str] = {
+    "chisox": "Chicago White Sox", "whitesox": "Chicago White Sox",
+    "chicubs": "Chicago Cubs",
+    "yanks": "New York Yankees",
+    "bosox": "Boston Red Sox", "redsox": "Boston Red Sox",
+    "o's": "Baltimore Orioles",
+    "nats": "Washington Nationals", "dbacks": "Arizona Diamondbacks",
+    "stros": "Houston Astros", "phils": "Philadelphia Phillies",
+}
 _ALL_ALIASES: dict[str, str] = {}
 _ALL_ALIASES.update(TEAM_ALIASES)
 _ALL_ALIASES.update(MLB_TEAM_ALIASES)
+_ALL_ALIASES.update(_MLB_SHORT_ALIASES)
+
+# MLB game markets often use "Team A @ Team B" or abbreviated names
+_MLB_AT_RE = re.compile(
+    r"\b([A-Za-z][A-Za-z\s.'-]{2,28}?)\s+@\s+([A-Za-z][A-Za-z\s.'-]{2,28}?)\b",
+)
 
 # Futures / outright phrasing that means "tournament winner", not a single match
 _FUTURES_RE = re.compile(
@@ -63,6 +78,12 @@ def _teams_in_text(text: str) -> set[str]:
                 found.add(canonical)
         elif alias in text_lower:
             found.add(canonical)
+    # MLB: "Yankees @ Red Sox" style
+    for m in _MLB_AT_RE.finditer(text or ""):
+        for raw in (m.group(1), m.group(2)):
+            canon = _canonical(raw.strip())
+            if canon:
+                found.add(canon)
     return found
 
 
@@ -150,6 +171,23 @@ def match_market_to_db_match(
         days_limit = max_days_apart
         if sport == "mlb":
             days_limit = max(days_limit, 14)
+            # MLB markets often title games as "Away @ Home" without a date in question
+            at_m = _MLB_AT_RE.search(market.question or "")
+            if at_m:
+                away_c = _canonical(at_m.group(1).strip())
+                home_c = _canonical(at_m.group(2).strip())
+                if away_c and home_c:
+                    db_home = _canonical(m.get("home_team", "")) or m.get("home_team")
+                    db_away = _canonical(m.get("away_team", "")) or m.get("away_team")
+                    if {away_c, home_c} == {db_home, db_away}:
+                        if best is None:
+                            best = m
+                        elif anchor and sched:
+                            gap = abs(anchor - sched)
+                            if gap < best_gap:
+                                best_gap = gap
+                                best = m
+                        continue
         # "Team A vs. Team B" game markets often lack an in-question date; end_date
         # can be days after first pitch — match on teams and closest schedule.
         skip_date_check = (

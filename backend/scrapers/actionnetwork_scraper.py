@@ -22,9 +22,9 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from bs4 import BeautifulSoup
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.db import get_db
+from backend.scraper_cache import cache_get, cache_is_negative, cache_set
 from backend.scrapers.pick_extractor import TEAM_ALIASES, extract_pick, extract_all_picks
 from backend.sports_data.mlb_fetcher import canonicalise_mlb_team
 
@@ -54,7 +54,25 @@ PICK_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Known ActionNetwork soccer experts — pre-seeded as influencers
+# Bracket / TBD placeholders — ActionNetwork never publishes articles for these
+_PLACEHOLDER_TEAM_RE = re.compile(
+    r"^(?:[12][A-Z]|[12][A-Z]/[12][A-Z]|W\d+)$",
+    re.IGNORECASE,
+)
+
+
+def _is_placeholder_team(name: str) -> bool:
+    """True for knockout placeholders like 1F, 2A, 3A/B/C/D/F."""
+    n = (name or "").strip()
+    if not n:
+        return True
+    if _PLACEHOLDER_TEAM_RE.match(n.replace(" ", "")):
+        return True
+    if re.search(r"\d[A-Z](/\d[A-Z])+", n, re.IGNORECASE):
+        return True
+    if n.upper() in {"TBD", "TBA", "WINNER", "LOSER"}:
+        return True
+    return False
 ACTION_NETWORK_EXPERTS = [
     "William Boor",
     "Sam Farley",
@@ -211,16 +229,26 @@ class ActionNetworkScraper:
 
     # ── HTTP ───────────────────────────────────────────────────────────────────
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def _fetch(self, client: httpx.AsyncClient, url: str) -> str | None:
+    def _article_cache_key(
+        self, home: str, away: str, match_date: datetime, *, sport: str,
+    ) -> str:
+        return f"an_no_article|{sport}|{home}|{away}|{match_date.date().isoformat()}"
+
+    async def _fetch(
+        self, client: httpx.AsyncClient, url: str, *, fast: bool = False,
+    ) -> str | None:
         try:
-            r = await client.get(url, headers=HEADERS, timeout=20)
+            r = await client.get(url, headers=HEADERS, timeout=15 if fast else 20)
             if 200 <= r.status_code < 300:
                 return r.text
-            logger.warning(f"ActionNetwork {url} → {r.status_code}")
+            if r.status_code == 404:
+                return None
+            if not fast:
+                logger.warning(f"ActionNetwork {url} → {r.status_code}")
             return None
         except Exception as exc:
-            logger.warning(f"ActionNetwork fetch error {url}: {exc}")
+            if not fast:
+                logger.warning(f"ActionNetwork fetch error {url}: {exc}")
             return None
 
     # ── Article URL construction from match schedule ───────────────────────────
@@ -254,10 +282,11 @@ class ActionNetworkScraper:
 
     def _build_article_urls(
         self, home: str, away: str, match_date: datetime, *, sport: str = "soccer",
+        fast: bool = False,
     ) -> list[str]:
         """
         Generate candidate ActionNetwork article URLs for a given match.
-        AN uses several slightly different patterns — we try all of them.
+        In fast mode only try the two most common patterns (CI / scheduled sync).
         """
         h = self._team_slug(home)
         a = self._team_slug(away)
@@ -266,36 +295,109 @@ class ActionNetworkScraper:
         day = str(match_date.day)
 
         if sport == "mlb":
+            primary = f"{BASE}/mlb/{h}-vs-{a}-prediction-pick-odds-{weekday}-{month}-{day}"
+            if fast:
+                return [primary]
             return [
-                f"{BASE}/mlb/{h}-vs-{a}-prediction-pick-odds-{weekday}-{month}-{day}",
+                primary,
                 f"{BASE}/mlb/{h}-vs-{a}-prediction-pick-odds-{weekday}-{month}-{day}-{match_date.year}",
-                f"{BASE}/mlb/{h}-vs-{a}-predictions-lineups-odds-{weekday}-{month}-{day}",
-                f"{BASE}/mlb/{h}-vs-{a}-prediction-lineups-odds-{weekday}-{month}-{day}",
             ]
 
-        templates = [
-            f"{BASE}/soccer/{h}-vs-{a}-prediction-pick-odds-world-cup-{weekday}-{month}-{day}",
+        primary = (
+            f"{BASE}/soccer/{h}-vs-{a}-prediction-pick-odds-world-cup-{weekday}-{month}-{day}"
+        )
+        if fast:
+            return [primary]
+        return [
+            primary,
             f"{BASE}/soccer/{h}-vs-{a}-prediction-pick-world-cup-odds-{weekday}-{month}-{day}",
-            f"{BASE}/soccer/{h}-vs-{a}-prediction-pick-world-cup-{weekday}-{month}-{day}",
-            f"{BASE}/soccer/{h}-vs-{a}-predictions-lineups-odds-world-cup-{weekday}-{month}-{day}",
-            f"{BASE}/soccer/{h}-vs-{a}-prediction-lineups-odds-world-cup-{weekday}-{month}-{day}",
         ]
-        return templates
 
-    def _get_recent_matches(self, days_back: int = 4) -> list[dict]:
-        """Fetch upcoming/recent matches (WC + MLB) from the last N days + next day."""
+    def _get_recent_matches(
+        self,
+        *,
+        max_matches: int = 40,
+        fast: bool = False,
+    ) -> list[dict]:
+        """
+        Upcoming + very recent fixtures only.
+
+        MLB: today/tomorrow (ActionNetwork drops old MLB articles → 404 spam).
+        Football: through knockout — yesterday .. +2 days, real team names only.
+        """
         db = get_db()
-        cutoff_past = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
-        cutoff_future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
-        rows = (
+        now = datetime.now(timezone.utc)
+        football_past = 1 if fast else 2
+        football_future = 2
+        mlb_past = 0
+        mlb_future = 1
+
+        football_rows = (
             db.table("matches")
-            .select("id, home_team, away_team, scheduled_at, sport")
-            .gte("scheduled_at", cutoff_past)
-            .lte("scheduled_at", cutoff_future)
+            .select("id, home_team, away_team, scheduled_at, sport, is_final, stage")
+            .eq("sport", "football")
+            .gte("scheduled_at", (now - timedelta(days=football_past)).isoformat())
+            .lte("scheduled_at", (now + timedelta(days=football_future)).isoformat())
             .execute()
             .data or []
         )
-        return rows
+        mlb_rows = (
+            db.table("matches")
+            .select("id, home_team, away_team, scheduled_at, sport, is_final, stage")
+            .eq("sport", "mlb")
+            .gte("scheduled_at", (now - timedelta(days=mlb_past)).isoformat())
+            .lte("scheduled_at", (now + timedelta(days=mlb_future)).isoformat())
+            .execute()
+            .data or []
+        )
+
+        candidates: list[dict] = []
+        for row in football_rows + mlb_rows:
+            home = row.get("home_team") or ""
+            away = row.get("away_team") or ""
+            if _is_placeholder_team(home) or _is_placeholder_team(away):
+                continue
+            sport = row.get("sport") or "football"
+            try:
+                sched = datetime.fromisoformat(
+                    (row.get("scheduled_at") or "").replace("Z", "+00:00")
+                )
+            except Exception:
+                sched = now
+            if sport == "mlb" and sched.date() < now.date():
+                continue
+            if row.get("is_final") and sched < now - timedelta(hours=6):
+                continue
+            candidates.append(row)
+
+        # Prioritize today's games, then MLB (in-season), then nearest kickoff
+        today = now.date()
+
+        def _sort_key(m: dict) -> tuple:
+            try:
+                sched = datetime.fromisoformat(
+                    (m.get("scheduled_at") or "").replace("Z", "+00:00")
+                )
+            except Exception:
+                sched = now
+            is_today = sched.date() == today
+            is_mlb = (m.get("sport") or "") == "mlb"
+            stage = (m.get("stage") or "").lower()
+            is_knockout = any(
+                k in stage for k in ("round of", "quarter", "semi", "final")
+            )
+            is_football = (m.get("sport") or "") == "football"
+            # Real-name knockout WC fixtures before MLB / group-stage noise
+            return (
+                0 if is_today else 1,
+                0 if (is_football and is_knockout) else 1,
+                0 if is_football else 1,
+                1 if is_mlb else 0,
+                sched,
+            )
+
+        candidates.sort(key=_sort_key)
+        return candidates[:max_matches]
 
     # ── Article parsing ────────────────────────────────────────────────────────
 
@@ -445,17 +547,28 @@ class ActionNetworkScraper:
 
     # ── Main entry ─────────────────────────────────────────────────────────────
 
-    async def scrape_all(self) -> int:
+    async def scrape_all(self, *, fast: bool = False, max_matches: int | None = None) -> int:
         """
-        For each recent WC match, construct candidate ActionNetwork article URLs
-        and scrape the first one that returns a valid response.
+        For each recent match with real team names, try ActionNetwork article URLs.
+        fast=True: fewer URL variants, no 404 log spam, tighter match window (CI).
         """
+        from backend.config import get_settings
+
+        settings = get_settings()
+        cap = max_matches or (
+            settings.sync_actionnetwork_max_matches if fast else 60
+        )
         total = 0
+        pause = 0.12 if fast else 0.35
+
         async with httpx.AsyncClient() as client:
             await self._seed_experts()
 
-            matches = self._get_recent_matches(days_back=4)
-            logger.info(f"ActionNetwork: checking {len(matches)} recent matches")
+            matches = self._get_recent_matches(max_matches=cap, fast=fast)
+            logger.info(
+                f"ActionNetwork: checking {len(matches)} matches"
+                f"{' (fast)' if fast else ''}"
+            )
 
             for match in matches:
                 scheduled_raw = match.get("scheduled_at", "")
@@ -468,24 +581,33 @@ class ActionNetworkScraper:
 
                 home = match.get("home_team", "")
                 away = match.get("away_team", "")
-                sport = match.get("sport") or "soccer"
-                candidate_urls = self._build_article_urls(home, away, match_date, sport=sport)
+                sport_key = "mlb" if match.get("sport") == "mlb" else "soccer"
+                cache_key = self._article_cache_key(home, away, match_date, sport=sport_key)
+                if cache_is_negative(cache_key):
+                    continue
+
+                candidate_urls = self._build_article_urls(
+                    home, away, match_date, sport=sport_key, fast=fast,
+                )
 
                 article_html = None
                 used_url = None
                 for url in candidate_urls:
-                    await asyncio.sleep(1.0)
-                    html = await self._fetch(client, url)
+                    html = await self._fetch(client, url, fast=fast)
                     if html:
                         article_html = html
                         used_url = url
                         break
+                    if pause:
+                        await asyncio.sleep(pause)
 
                 if not article_html:
-                    logger.debug(f"ActionNetwork: no article found for {home} vs {away}")
+                    cache_set(cache_key, {"negative": True, "home": home, "away": away})
+                    if not fast:
+                        logger.debug(f"ActionNetwork: no article found for {home} vs {away}")
                     continue
 
-                picks = self._parse_article(article_html, used_url, sport=sport)
+                picks = self._parse_article(article_html, used_url, sport=sport_key)
                 if not picks:
                     logger.debug(f"ActionNetwork: no picks parsed from {used_url}")
                     continue

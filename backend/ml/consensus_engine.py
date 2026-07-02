@@ -25,8 +25,10 @@ ELO_DEFAULT = 1000.0
 MIN_PICKS_FOR_CONSENSUS = 3   # default; overridden by settings at runtime
 
 
-def _consensus_min_picks() -> int:
+def _consensus_min_picks(sport: str | None = None) -> int:
     s = get_settings()
+    if sport == "mlb":
+        return s.consensus_min_picks_mlb
     if not s.polymarket_live_enabled:
         return s.consensus_min_picks_paper
     return s.consensus_min_picks
@@ -44,15 +46,62 @@ def _elo_weight(elo: float) -> float:
     return ratio * ratio
 
 
-def _clv_weight(avg_clv: float | None, clv_samples: int) -> float:
+def _clv_weight(avg_clv: float | None, clv_samples: int, *, sport: str | None = None) -> float:
     """
     Pickers who consistently beat the closing line get more consensus weight.
     avg_clv is stored on influencers (actual - market_prob_at_pick per pick).
     """
     if avg_clv is None or clv_samples < MIN_CLV_SAMPLES:
         return 1.0
-    scale = get_settings().clv_weight_scale
+    settings = get_settings()
+    scale = settings.clv_weight_scale
+    if (sport or "").lower() == "mlb":
+        scale = settings.clv_weight_scale_mlb
     return max(0.5, min(1.5, 1.0 + avg_clv * scale))
+
+
+def _sport_elo(inf_data: dict, sport: str) -> float:
+    """Prefer per-sport Elo when available."""
+    by_sport = inf_data.get("elo_by_sport") or {}
+    if isinstance(by_sport, dict) and sport in by_sport:
+        return float(by_sport[sport] or ELO_DEFAULT)
+    return float(inf_data.get("elo") or ELO_DEFAULT)
+
+
+def _sport_avg_clv(inf_data: dict, sport: str) -> float | None:
+    by_sport = inf_data.get("avg_clv_by_sport") or {}
+    if isinstance(by_sport, dict) and sport in by_sport:
+        val = by_sport.get(sport)
+        return float(val) if val is not None else None
+    return inf_data.get("avg_clv")
+
+
+def _sp_pick_boost(
+    pick: dict,
+    *,
+    sport: str,
+    home_team: str,
+    away_team: str,
+    match_stats: dict | None,
+) -> float:
+    """Boost MLB moneyline picks aligned with probable-SP matchup edge."""
+    if sport != "mlb" or not match_stats:
+        return 1.0
+    from backend.sports_data.mlb_stats_fetcher import sp_matchup_favored_team
+
+    favored = sp_matchup_favored_team(match_stats)
+    if not favored:
+        return 1.0
+    team = (pick.get("predicted_winner") or "").strip()
+    if team == favored:
+        return 1.12
+    raw = (pick.get("raw_text") or "").lower()
+    pitchers = (match_stats.get("probable_pitchers") or {})
+    for pdata in pitchers.values():
+        name = (pdata.get("name") or "").lower()
+        if name and name in raw and pdata.get("team") == team:
+            return 1.08
+    return 1.0
 
 
 def compute_consensus_for_match(match_id: str) -> dict | None:
@@ -63,10 +112,23 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
     """
     db = get_db()
 
+    match_row = (
+        db.table("matches")
+        .select("home_team, away_team, sport, match_stats")
+        .eq("id", match_id)
+        .single()
+        .execute()
+        .data
+    )
+    home_team = match_row.get("home_team", "") if match_row else ""
+    away_team = match_row.get("away_team", "") if match_row else ""
+    sport = (match_row or {}).get("sport", "football")
+    match_stats = (match_row or {}).get("match_stats")
+
     # Fetch pending picks; filter moneyline/draw in Python (legacy rows have null bet_type)
     raw_picks = (
         db.table("picks")
-        .select("predicted_winner, confidence, influencer_id, bet_type")
+        .select("predicted_winner, confidence, influencer_id, bet_type, raw_text")
         .eq("match_id", match_id)
         .eq("outcome", "pending")
         .execute()
@@ -77,28 +139,15 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
         if (p.get("bet_type") or "moneyline") in ("moneyline", "draw")
     ]
 
-    min_picks = _consensus_min_picks()
+    min_picks = _consensus_min_picks(sport)
     if len(picks) < min_picks:
         return None
-
-    # Fetch match teams so we can build the full distribution
-    match_row = (
-        db.table("matches")
-        .select("home_team, away_team, sport")
-        .eq("id", match_id)
-        .single()
-        .execute()
-        .data
-    )
-    home_team = match_row.get("home_team", "") if match_row else ""
-    away_team = match_row.get("away_team", "") if match_row else ""
-    sport = (match_row or {}).get("sport", "football")
 
     # Fetch influencer stats (Elo + resolved pick count for rookie check)
     influencer_ids = list({p["influencer_id"] for p in picks})
     influencers = (
         db.table("influencers")
-        .select("id, elo_score, correct_picks, total_picks, avg_clv")
+        .select("id, elo_score, elo_by_sport, correct_picks, total_picks, avg_clv, avg_clv_by_sport")
         .in_("id", influencer_ids)
         .execute()
         .data or []
@@ -106,10 +155,12 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
     inf_map = {
         inf["id"]: {
             "elo": inf.get("elo_score") or ELO_DEFAULT,
+            "elo_by_sport": inf.get("elo_by_sport") or {},
             "resolved": (inf.get("correct_picks") or 0) + max(
                 0, (inf.get("total_picks") or 0) - (inf.get("correct_picks") or 0)
             ),
             "avg_clv": inf.get("avg_clv"),
+            "avg_clv_by_sport": inf.get("avg_clv_by_sport") or {},
         }
         for inf in influencers
     }
@@ -136,12 +187,23 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
         conf = pick.get("confidence") or 0.55
         inf_data = inf_map.get(
             pick["influencer_id"],
-            {"elo": ELO_DEFAULT, "resolved": 0, "avg_clv": None},
+            {"elo": ELO_DEFAULT, "resolved": 0, "avg_clv": None, "elo_by_sport": {}, "avg_clv_by_sport": {}},
         )
-        elo_w = _elo_weight(inf_data["elo"])
+        elo_w = _elo_weight(_sport_elo(inf_data, sport))
         rookie_w = 1.0 if inf_data["resolved"] >= MIN_RESOLVED_PICKS else ROOKIE_PENALTY
-        clv_w = _clv_weight(inf_data.get("avg_clv"), inf_data["resolved"])
-        weight = elo_w * conf * rookie_w * clv_w
+        clv_w = _clv_weight(
+            _sport_avg_clv(inf_data, sport),
+            inf_data["resolved"],
+            sport=sport,
+        )
+        sp_w = _sp_pick_boost(
+            pick,
+            sport=sport,
+            home_team=home_team,
+            away_team=away_team,
+            match_stats=match_stats,
+        )
+        weight = elo_w * conf * rookie_w * clv_w * sp_w
         vote_weights[team] += weight
         vote_counts[team] += 1
         top_supporters[team].append((weight, pick["influencer_id"]))
@@ -225,8 +287,12 @@ def get_top_recommendations(limit: int = 10, sport: str | None = None) -> list[d
     """
     Return the top N recommended picks across all upcoming matches,
     sorted by calibrated confidence (empirical win rate, not raw vote share).
+    MLB picks use a sport-specific calibration curve when enough history exists.
     """
-    from backend.trading.edge_model import calibrate_confidence
+    from backend.trading.edge_model import _load_calibration_curve, calibrate_confidence
+
+    global_curve = _load_calibration_curve("")
+    mlb_curve = _load_calibration_curve("mlb")
 
     db = get_db()
     fetch_limit = limit * 5 if sport else limit
@@ -244,7 +310,15 @@ def get_top_recommendations(limit: int = 10, sport: str | None = None) -> list[d
     enriched: list[dict] = []
     for r in rows:
         raw = r.get("confidence") or 0.5
-        calibrated = round(calibrate_confidence(raw), 4)
+        match_sport = (r.get("matches") or {}).get("sport") or ""
+        if match_sport == "mlb":
+            curve_1d, curve_2d, _ = mlb_curve
+        else:
+            curve_1d, curve_2d, _ = global_curve
+        calibrated = round(
+            calibrate_confidence(raw, curve_1d=curve_1d, curve_2d=curve_2d),
+            4,
+        )
         enriched.append({
             **r,
             "raw_confidence": round(raw, 4),

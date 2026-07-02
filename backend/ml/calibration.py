@@ -19,7 +19,9 @@ from loguru import logger
 from backend.db import get_db
 from backend.trading.edge_model import (
     MONEYLINE_BET_TYPES,
+    MLB_MIN_CALIBRATION_SAMPLES,
     _load_calibration_curve,
+    _mlb_match_ids,
     calibrate_confidence,
 )
 
@@ -151,6 +153,8 @@ def get_calibration_summary() -> dict[str, Any]:
 def _compute_calibration(*, persist: bool) -> dict[str, Any]:
     db = get_db()
     curve_1d, curve_2d, ml_history = _load_calibration_curve()
+    mlb_curve_1d, mlb_curve_2d, mlb_history = _load_calibration_curve("mlb")
+    mlb_ids = _mlb_match_ids()
 
     resolved = (
         db.table("picks")
@@ -177,16 +181,19 @@ def _compute_calibration(*, persist: bool) -> dict[str, Any]:
             "upset_trap": {},
             "moneyline": {},
             "props": {},
+            "mlb": {},
             "calibration_curve": {},
             "ml_history_size": ml_history,
         }
 
     ml_picks = [p for p in resolved if (p.get("bet_type") or "moneyline") in MONEYLINE_BET_TYPES]
+    mlb_ml_picks = [p for p in ml_picks if p.get("match_id") in mlb_ids]
     prop_picks = [p for p in resolved if (p.get("bet_type") or "moneyline") not in MONEYLINE_BET_TYPES]
     calibrated_all = _attach_calibrated_confidence(resolved, curve_1d, curve_2d)
 
     # Primary headline metrics use moneyline picks (what we bet on).
     ml_metrics = _segment_metrics(ml_picks, curve_1d, curve_2d)
+    mlb_metrics = _segment_metrics(mlb_ml_picks, mlb_curve_1d, mlb_curve_2d) if mlb_ml_picks else {}
     prop_metrics = _segment_metrics(prop_picks, curve_1d, curve_2d) if prop_picks else {}
 
     overall_brier = ml_metrics["calibrated_brier_score"]
@@ -309,6 +316,12 @@ def _compute_calibration(*, persist: bool) -> dict[str, Any]:
         "picks_with_market_line": len(picks_with_market),
         "moneyline": ml_metrics,
         "props": prop_metrics,
+        "mlb": {
+            **mlb_metrics,
+            "calibration_curve": _curve_for_display(mlb_curve_1d),
+            "ml_history_size": mlb_history,
+            "using_sport_curve": len(mlb_ml_picks) >= MLB_MIN_CALIBRATION_SAMPLES,
+        },
         "calibration_curve": _curve_for_display(curve_1d),
         "ml_history_size": ml_history,
     }
@@ -316,6 +329,7 @@ def _compute_calibration(*, persist: bool) -> dict[str, Any]:
     logger.info(
         f"Calibration: {len(resolved)} resolved | "
         f"Brier raw={raw_brier:.4f} calibrated={overall_brier:.4f} | "
+        f"MLB n={len(mlb_ml_picks)} brier={mlb_metrics.get('calibrated_brier_score', 0):.4f} | "
         f"ROI={simulated_roi:.1f}% | ml_history={ml_history}"
     )
     return summary

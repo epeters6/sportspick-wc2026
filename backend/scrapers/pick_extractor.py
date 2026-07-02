@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from backend.sports_data.mlb_fetcher import MLB_TEAM_ALIASES
+from backend.sports_data.mlb_fetcher import MLB_TEAM_ALIASES, canonicalise_mlb_team
 
 # ─── World Cup 2026 team names + common aliases ──────────────────────────────
 
@@ -276,7 +276,12 @@ BTTS_NO_PATTERNS = [
 # Score patterns like "3-1", "2-0", "1 - 0"
 SCORE_PATTERN = re.compile(r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\b")
 
-# Confidence keywords
+# Starting-pitcher-aware MLB moneyline patterns
+MLB_SP_PATTERNS = [
+    r"(?:taking|backing|riding|rolling with)\s+(?:the\s+)?([a-z0-9\s.'-]+?)\s+with\s+([a-z][a-z0-9\s.'-]+?)(?:\s+on the mound|\s+to win|\s+ml\b|\.|,|$)",
+    r"([a-z][a-z0-9\s.'-]+?)\s+on the mound.*?(?:take|back|like|love|pick)\s+(?:the\s+)?([a-z0-9\s.'-]+)",
+    r"(?:starter|ace)\s+([a-z][a-z0-9\s.'-]+?).*?(?:take|back|pick)\s+(?:the\s+)?([a-z0-9\s.'-]+)",
+]
 HIGH_CONFIDENCE = ["lock", "sure thing", "guaranteed", "100%", "easy", "🔒", "💯", "easy money", "best bet", "top pick"]
 MEDIUM_CONFIDENCE = ["think", "believe", "predict", "feeling", "leaning", "probably"]
 LOW_CONFIDENCE = ["maybe", "might", "could", "possibly", "not sure", "50/50"]
@@ -382,6 +387,34 @@ def extract_all_picks(
     return picks
 
 
+def _extract_mlb_sp_pick(text_lower: str, confidence: float | None) -> dict[str, Any] | None:
+    """Moneyline pick inferred from starting-pitcher matchup language."""
+    for pattern in MLB_SP_PATTERNS:
+        m = re.search(pattern, text_lower)
+        if not m:
+            continue
+        groups = [g.strip() for g in m.groups() if g]
+        team = None
+        for g in groups:
+            canon = canonicalise_mlb_team(g) or _canonicalise_team(g)
+            if canon:
+                team = canon
+                break
+        if not team and len(groups) >= 2:
+            team = _canonicalise_team(groups[0]) or _canonicalise_team(groups[1])
+        if team:
+            conf = (confidence or 0.55) + 0.06
+            return {
+                "predicted_winner": team,
+                "predicted_score": None,
+                "confidence": min(conf, 0.78),
+                "bet_type": "moneyline",
+                "bet_line": None,
+                "bet_subject": "sp_matchup",
+            }
+    return None
+
+
 def extract_pick(text: str) -> dict[str, Any]:
     """
     Parse a social media post and return the single most prominent pick.
@@ -399,6 +432,10 @@ def extract_pick(text: str) -> dict[str, Any]:
     text_lower = text.lower()
     confidence = _extract_confidence(text_lower)
     score = _extract_score(text_lower)
+
+    sp_pick = _extract_mlb_sp_pick(text_lower, confidence)
+    if sp_pick:
+        return sp_pick
 
     # Check specialised bet types first — they're more unambiguous
     draw_pick = _extract_draw(text_lower, confidence, score)

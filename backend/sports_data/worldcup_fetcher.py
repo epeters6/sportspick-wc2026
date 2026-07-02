@@ -7,6 +7,8 @@ Fallback source: openfootball/worldcup GitHub JSON (no key needed)
 from __future__ import annotations
 
 import asyncio
+import re
+from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
@@ -157,7 +159,138 @@ def _normalise_fallback(raw: dict) -> dict:
 
 
 def _is_bracket_placeholder(name: str) -> bool:
-    return bool(name) and name.startswith("W") and name[1:].isdigit()
+    n = (name or "").strip()
+    if not n:
+        return True
+    if n.startswith("W") and n[1:].isdigit():
+        return True
+    if re.match(r"^[12][A-Z](/[12][A-Z])*$", n.replace(" ", ""), re.IGNORECASE):
+        return True
+    if n.upper() in {"TBD", "TBA", "WINNER", "LOSER"}:
+        return True
+    return False
+
+
+_WINNER_PLACEHOLDER_RE = re.compile(r"^W(\d+)$", re.IGNORECASE)
+_GROUP_SLOT_RE = re.compile(r"^([12])([A-Z])$", re.IGNORECASE)
+
+
+def _winner_from_openfootball_match(raw: dict) -> str | None:
+    score = raw.get("score", {}) or {}
+    ft = score.get("ft")
+    pen = score.get("p")
+    team1 = raw.get("team1", "")
+    team2 = raw.get("team2", "")
+    _, _, winner = _winner_from_scores(team1, team2, ft, pen)
+    if winner and winner != "draw":
+        return winner
+    return None
+
+
+def _build_winner_map(openfootball_raw: list[dict]) -> dict[str, str]:
+    """Map W{match_num} → winning team from finished openfootball fixtures."""
+    winners: dict[str, str] = {}
+    for raw in openfootball_raw:
+        num = raw.get("num")
+        if num is None:
+            continue
+        w = _winner_from_openfootball_match(raw)
+        if w:
+            winners[f"W{num}"] = w
+    return winners
+
+
+def _build_group_standings(openfootball_raw: list[dict]) -> dict[str, list[str]]:
+    """
+    Rough group table: group letter → [1st, 2nd, 3rd, 4th] by points.
+    Enough to resolve 1F / 2A style placeholders when bracket slots are known.
+    """
+    tables: dict[str, dict[str, dict]] = defaultdict(
+        lambda: defaultdict(lambda: {"pts": 0, "gd": 0, "gf": 0})
+    )
+    for raw in openfootball_raw:
+        grp = raw.get("group")
+        if not grp or not str(grp).startswith("Group "):
+            continue
+        letter = str(grp).replace("Group ", "").strip().upper()
+        score = raw.get("score", {}) or {}
+        ft = score.get("ft")
+        if not ft or len(ft) < 2:
+            continue
+        t1, t2 = raw.get("team1", ""), raw.get("team2", "")
+        if not t1 or not t2:
+            continue
+        s1, s2 = ft[0], ft[1]
+        tables[letter][t1]["gf"] += s1
+        tables[letter][t2]["gf"] += s2
+        tables[letter][t1]["gd"] += s1 - s2
+        tables[letter][t2]["gd"] += s2 - s1
+        if s1 > s2:
+            tables[letter][t1]["pts"] += 3
+        elif s2 > s1:
+            tables[letter][t2]["pts"] += 3
+        else:
+            tables[letter][t1]["pts"] += 1
+            tables[letter][t2]["pts"] += 1
+
+    ordered: dict[str, list[str]] = {}
+    for letter, teams in tables.items():
+        ranked = sorted(
+            teams.items(),
+            key=lambda kv: (-kv[1]["pts"], -kv[1]["gd"], -kv[1]["gf"], kv[0]),
+        )
+        ordered[letter] = [name for name, _ in ranked]
+    return ordered
+
+
+def _resolve_team_name(
+    name: str,
+    *,
+    winner_map: dict[str, str],
+    group_tables: dict[str, list[str]],
+) -> str:
+    n = (name or "").strip()
+    if not n or not _is_bracket_placeholder(n):
+        return n
+    m = _WINNER_PLACEHOLDER_RE.match(n)
+    if m:
+        return winner_map.get(f"W{m.group(1)}", n)
+    gm = _GROUP_SLOT_RE.match(n.replace(" ", ""))
+    if gm:
+        rank = int(gm.group(1))
+        letter = gm.group(2).upper()
+        table = group_tables.get(letter) or []
+        if 1 <= rank <= len(table):
+            return table[rank - 1]
+    return n
+
+
+def _resolve_bracket_placeholders(
+    records: list[dict],
+    openfootball_raw: list[dict],
+) -> list[dict]:
+    """Replace W{n} / 1F / 2A placeholders with real teams when bracket data exists."""
+    if not records or not openfootball_raw:
+        return records
+    winner_map = _build_winner_map(openfootball_raw)
+    group_tables = _build_group_standings(openfootball_raw)
+    if not winner_map and not group_tables:
+        return records
+
+    out: list[dict] = []
+    for rec in records:
+        rec = dict(rec)
+        home = _resolve_team_name(
+            rec.get("home_team") or "", winner_map=winner_map, group_tables=group_tables,
+        )
+        away = _resolve_team_name(
+            rec.get("away_team") or "", winner_map=winner_map, group_tables=group_tables,
+        )
+        if home != rec.get("home_team") or away != rec.get("away_team"):
+            rec["home_team"] = home
+            rec["away_team"] = away
+        out.append(rec)
+    return out
 
 
 def _match_identity_key(rec: dict) -> str:
@@ -291,8 +424,11 @@ async def sync_matches() -> int:
         logger.info(f"Merged {len(fallback_raw)} openfootball fixtures")
     except Exception as exc:
         logger.warning(f"Openfootball fallback failed: {exc}")
+        fallback_raw = []
 
     records = list(merged.values())
+    if fallback_raw:
+        records = _resolve_bracket_placeholders(records, fallback_raw)
     if not records:
         logger.error("No WC match data from any source")
         return 0

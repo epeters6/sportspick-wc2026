@@ -361,7 +361,7 @@ class YouTubeScraper:
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
-    async def scrape_all(self) -> int:
+    async def scrape_all(self, *, skip_search: bool = False) -> int:
         if not self._is_configured():
             logger.warning("YouTube scraper skipped — YOUTUBE_API_KEY not set")
             return 0
@@ -407,62 +407,65 @@ class YouTubeScraper:
                     await asyncio.sleep(0.5)
 
             # ── Phase 2: Keyword search for new channels ──────────────────────
-            new_channel_ids: list[str] = []
-            search_videos: list[dict] = []
+            if not skip_search:
+                new_channel_ids: list[str] = []
+                search_videos: list[dict] = []
 
-            for query in SEARCH_QUERIES:
-                try:
-                    videos = await self._search_videos(client, query)
-                    logger.info(f"YouTube '{query}': {len(videos)} videos")
-                    for video in videos:
-                        vid_id = video.get("id", {}).get("videoId")
-                        if not vid_id or vid_id in seen_video_ids:
-                            continue
-                        snippet = video.get("snippet", {})
-                        channel_id = snippet.get("channelId", "")
-                        # Collect new channels to batch-check subscriber counts
-                        if channel_id and channel_id not in self._influencer_cache:
-                            new_channel_ids.append(channel_id)
-                        search_videos.append(video)
-                    await asyncio.sleep(1)
-                except Exception as exc:
-                    logger.warning(f"YouTube query '{query}' failed: {exc}")
+                for query in SEARCH_QUERIES:
+                    try:
+                        videos = await self._search_videos(client, query)
+                        logger.info(f"YouTube '{query}': {len(videos)} videos")
+                        for video in videos:
+                            vid_id = video.get("id", {}).get("videoId")
+                            if not vid_id or vid_id in seen_video_ids:
+                                continue
+                            snippet = video.get("snippet", {})
+                            channel_id = snippet.get("channelId", "")
+                            # Collect new channels to batch-check subscriber counts
+                            if channel_id and channel_id not in self._influencer_cache:
+                                new_channel_ids.append(channel_id)
+                            search_videos.append(video)
+                        await asyncio.sleep(1)
+                    except Exception as exc:
+                        logger.warning(f"YouTube query '{query}' failed: {exc}")
 
-            # Batch-fetch subscriber counts for all new channels found in search
-            if new_channel_ids:
-                unique_new = list(dict.fromkeys(new_channel_ids))  # deduplicate, preserve order
-                await self._fetch_subscriber_counts(client, unique_new)
+                # Batch-fetch subscriber counts for all new channels found in search
+                if new_channel_ids:
+                    unique_new = list(dict.fromkeys(new_channel_ids))  # deduplicate, preserve order
+                    await self._fetch_subscriber_counts(client, unique_new)
 
-            # Process search results
-            for video in search_videos:
-                vid_id = video.get("id", {}).get("videoId")
-                if not vid_id or vid_id in seen_video_ids:
-                    continue
-                seen_video_ids.add(vid_id)
+                # Process search results
+                for video in search_videos:
+                    vid_id = video.get("id", {}).get("videoId")
+                    if not vid_id or vid_id in seen_video_ids:
+                        continue
+                    seen_video_ids.add(vid_id)
 
-                snippet = video.get("snippet", {})
-                channel_id = snippet.get("channelId", "")
-                channel_title = snippet.get("channelTitle", "Unknown")
-                title = snippet.get("title", "")
-                description = snippet.get("description", "")
-                published_at = snippet.get("publishedAt")
-                raw_text = f"{title}\n{description}".strip()
+                    snippet = video.get("snippet", {})
+                    channel_id = snippet.get("channelId", "")
+                    channel_title = snippet.get("channelTitle", "Unknown")
+                    title = snippet.get("title", "")
+                    description = snippet.get("description", "")
+                    published_at = snippet.get("publishedAt")
+                    raw_text = f"{title}\n{description}".strip()
 
-                allowed = self._teams_from_title(title)
-                all_picks = extract_all_picks(raw_text, allowed_teams=allowed)
-                if not all_picks:
-                    continue
+                    allowed = self._teams_from_title(title)
+                    all_picks = extract_all_picks(raw_text, allowed_teams=allowed)
+                    if not all_picks:
+                        continue
 
-                sub_count = self._sub_count_cache.get(channel_id, 0)
-                influencer_id = await self._get_or_create_channel(
-                    channel_id, channel_title,
-                    require_min_subs=True,
-                    sub_count=sub_count,
-                )
-                if not influencer_id:
-                    continue
+                    sub_count = self._sub_count_cache.get(channel_id, 0)
+                    influencer_id = await self._get_or_create_channel(
+                        channel_id, channel_title,
+                        require_min_subs=True,
+                        sub_count=sub_count,
+                    )
+                    if not influencer_id:
+                        continue
 
-                total += self._save_picks(db, influencer_id, vid_id, raw_text, all_picks, published_at)
+                    total += self._save_picks(db, influencer_id, vid_id, raw_text, all_picks, published_at)
+            else:
+                logger.info("YouTube: skipping keyword search (SYNC_SKIP_YT_SEARCH)")
 
         logger.info(f"YouTube: saved {total} picks")
         return total

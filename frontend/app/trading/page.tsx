@@ -573,6 +573,49 @@ export default function TradingPage() {
                 </div>
               </div>
 
+              {calData.mlb && (calData.mlb.total_resolved ?? 0) > 0 && (
+                <div className="bg-gray-900 border border-amber-900/40 rounded-xl p-5">
+                  <h3 className="font-semibold mb-1">⚾ MLB Calibration</h3>
+                  <p className="text-xs text-gray-500 mb-4">
+                    {calData.mlb.using_sport_curve
+                      ? "Sport-specific curve (not diluted by World Cup picks)"
+                      : "Using global curve — need more resolved MLB picks for dedicated curve"}
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                    <div className="bg-gray-800 rounded-lg p-3">
+                      <p className="text-xs text-gray-400">Brier (calibrated)</p>
+                      <p className="text-lg font-bold mt-1 text-amber-400">
+                        {(calData.mlb.calibrated_brier_score ?? calData.mlb.brier_score).toFixed(4)}
+                      </p>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-3">
+                      <p className="text-xs text-gray-400">Hit rate</p>
+                      <p className="text-lg font-bold mt-1">
+                        {((calData.mlb.hit_rate ?? 0) * 100).toFixed(1)}%
+                      </p>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-3">
+                      <p className="text-xs text-gray-400">Resolved</p>
+                      <p className="text-lg font-bold mt-1">{calData.mlb.total_resolved}</p>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-3">
+                      <p className="text-xs text-gray-400">Curve samples</p>
+                      <p className="text-lg font-bold mt-1">{calData.mlb.ml_history_size ?? "—"}</p>
+                    </div>
+                  </div>
+                  {calData.mlb.calibration_curve && Object.keys(calData.mlb.calibration_curve).length > 0 && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {Object.entries(calData.mlb.calibration_curve).map(([bucket, rate]) => (
+                        <div key={bucket} className="bg-gray-800/60 rounded-lg p-3">
+                          <p className="text-xs text-gray-400 capitalize">{bucket.replace("-", " ")}</p>
+                          <p className="text-base font-bold mt-1">{(rate * 100).toFixed(0)}%</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Calibration curve */}
               {calData.calibration_curve && Object.keys(calData.calibration_curve).length > 0 && (
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">

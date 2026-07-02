@@ -1,11 +1,13 @@
-name: Sync Picks (legacy — use sync_scrape.yml + sync_ml.yml)
+name: Sync Scrape
 
 on:
+  schedule:
+    # Lightweight pick scrape every 30 minutes
+    - cron: '*/30 * * * *'
   workflow_dispatch:
-  # Scheduled runs moved to sync_scrape.yml (30m) and sync_ml.yml (hourly)
 
 jobs:
-  sync:
+  scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -37,5 +39,5 @@ jobs:
       - name: Validate Supabase secrets
         run: python scripts/ci_check_env.py
 
-      - name: Run full sync (manual only)
-        run: python scripts/run_sync.py
+      - name: Run scrape-only sync
+        run: python scripts/run_sync.py --scrape-only

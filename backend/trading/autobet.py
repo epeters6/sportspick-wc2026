@@ -24,7 +24,7 @@ from loguru import logger
 
 from backend.config import get_settings
 from backend.db import get_db
-from backend.trading.edge_model import compute_edge, remove_vig, _load_calibration_curve
+from backend.trading.edge_model import compute_edge, remove_vig
 from backend.trading.market_matcher import (
     match_market_to_db_match,
     map_outcome_to_token,
@@ -174,9 +174,6 @@ async def _evaluate_autobet_candidate(
     market,
     s,
     mode: str,
-    calibration_curve,
-    calibration_curve_2d,
-    history_size: int,
     bankroll: float,
     total_exposure: float,
     event_exposure: dict,
@@ -211,9 +208,7 @@ async def _evaluate_autobet_candidate(
         market_price=market_price,
         picker_count=picker_count,
         fee_bps=s.polymarket_fee_bps,
-        calibration_curve=calibration_curve,
-        calibration_curve_2d=calibration_curve_2d,
-        history_size=history_size,
+        sport=match.get("sport"),
         paper_mode=paper,
         min_history_override=s.polymarket_paper_min_history if paper else None,
         max_model_weight_override=s.polymarket_paper_max_model_weight if paper else None,
@@ -449,8 +444,7 @@ async def run_autobet() -> dict[str, Any]:
 
     db_matches = [c["matches"] for c in consensus]
 
-    # 3. Shared state: calibration curves, bankroll, exposures
-    calibration_curve, calibration_curve_2d, history_size = _load_calibration_curve()
+    # 3. Shared state: bankroll, exposures
     bankroll = _current_bankroll(db)
     total_exposure, event_exposure = _open_exposures(db)
 
@@ -516,9 +510,6 @@ async def run_autobet() -> dict[str, Any]:
                 market=market,
                 s=s,
                 mode=mode,
-                calibration_curve=calibration_curve,
-                calibration_curve_2d=calibration_curve_2d,
-                history_size=history_size,
                 bankroll=bankroll,
                 total_exposure=total_exposure,
                 event_exposure=event_exposure,

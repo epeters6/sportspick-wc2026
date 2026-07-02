@@ -19,6 +19,11 @@ class Settings(BaseSettings):
 
     youtube_api_key: str = ""
 
+    # Sync pipeline (GitHub Actions) — keep runs under workflow timeout
+    sync_fast_mode: bool = False
+    sync_actionnetwork_max_matches: int = 36
+    sync_skip_youtube_search: bool = False
+
     wc_api_key: str = ""
     wc_api_base: str = "https://api.wc2026api.com/v1"
 
@@ -48,8 +53,10 @@ class Settings(BaseSettings):
     polymarket_paper_min_model_prob: float = 0.08
     polymarket_live_min_settled_bets: int = 50   # paper track record before live
     polymarket_live_min_roi_pct: float = 0.0     # require positive paper ROI
-    clv_weight_scale: float = 2.0                # consensus weight multiplier from avg_clv
+    clv_weight_scale: float = 2.0                # consensus weight multiplier from avg_clv (football/default)
+    clv_weight_scale_mlb: float = 1.5            # MLB lines are sharper — lighter CLV boost
     consensus_min_picks: int = 3               # min pickers to form a consensus
+    consensus_min_picks_mlb: int = 2           # MLB has fewer expert sources per game
     # Paper-mode loosened gates — keep autobets flowing for learning
     polymarket_paper_min_consensus_confidence: float = 0.35
     polymarket_paper_min_prop_confidence: float = 0.35
@@ -84,18 +91,29 @@ class Settings(BaseSettings):
         "supabase_url",
         "supabase_anon_key",
         "supabase_service_role_key",
+        "youtube_api_key",
+        "wc_api_key",
         mode="before",
     )
     @classmethod
     def _strip_secret(cls, v: object) -> object:
-        # GitHub secrets are often pasted with trailing newlines → illegal HTTP headers
+        # GitHub secrets are often pasted with trailing newlines → illegal HTTP headers / bad URLs
         if isinstance(v, str):
             return v.strip()
         return v
 
-    @field_validator("polymarket_live_enabled", mode="before")
+    @field_validator("sync_fast_mode", "sync_skip_youtube_search", mode="before")
     @classmethod
     def _empty_env_bool(cls, v: object) -> object:
+        if v is None or v == "":
+            return False
+        if isinstance(v, str):
+            return v.lower() in ("1", "true", "yes")
+        return v
+
+    @field_validator("polymarket_live_enabled", mode="before")
+    @classmethod
+    def _empty_env_bool_live(cls, v: object) -> object:
         # GitHub Actions passes unset secrets as empty strings
         if v is None or v == "":
             return False

@@ -1,10 +1,8 @@
-name: ML Sync
+name: ML Sync (legacy — use sync_ml.yml)
 
 on:
-  schedule:
-    # Every hour at minute 5 (staggered from scraper)
-    - cron: "5 * * * *"
   workflow_dispatch:
+  # Hourly ML runs moved to sync_ml.yml
 
 jobs:
   ml-sync:
