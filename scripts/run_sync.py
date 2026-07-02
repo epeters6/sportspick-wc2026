@@ -49,7 +49,7 @@ async def run_scrape_phase() -> dict[str, int]:
     print(f"  {covers_picks} picks saved")
 
     print("Scraping YouTube...")
-    yt_picks = await YouTubeScraper().scrape_all(skip_search=skip_yt_search or fast)
+    yt_picks = await YouTubeScraper().scrape_all(skip_search=skip_yt_search)
     print(f"  {yt_picks} picks saved")
 
     print("Scraping ActionNetwork...")

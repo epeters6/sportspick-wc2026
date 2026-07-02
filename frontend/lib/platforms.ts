@@ -7,6 +7,7 @@ export const PLATFORM_LABELS: Record<Platform | string, string> = {
   covers: "Covers",
   youtube: "YouTube",
   actionnetwork: "ActionNetwork",
+  pickswise: "Pickswise",
   reddit: "Reddit",
 };
 
@@ -17,6 +18,7 @@ export const PLATFORM_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "covers", label: "Covers" },
   { value: "youtube", label: "YouTube" },
   { value: "actionnetwork", label: "ActionNetwork" },
+  { value: "pickswise", label: "Pickswise" },
   { value: "instagram", label: "Instagram" },
 ];
 
@@ -24,6 +26,7 @@ export const SYNC_SOURCES = [
   { id: "covers", label: "Covers", color: "text-green-400" },
   { id: "youtube", label: "YouTube", color: "text-red-400" },
   { id: "actionnetwork", label: "ActionNetwork", color: "text-blue-400" },
+  { id: "pickswise", label: "Pickswise", color: "text-amber-400" },
   { id: "twitter", label: "X", color: "text-sky-400" },
   { id: "tiktok", label: "TikTok", color: "text-pink-400" },
 ] as const;

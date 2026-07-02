@@ -8,7 +8,7 @@ const api = axios.create({
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type Platform = "twitter" | "tiktok" | "instagram" | "covers" | "youtube" | "actionnetwork" | "reddit";
+export type Platform = "twitter" | "tiktok" | "instagram" | "covers" | "youtube" | "actionnetwork" | "pickswise" | "reddit";
 export type BetType =
   | "moneyline" | "draw" | "total_goals" | "total_runs" | "btts" | "spread"
   | "corners" | "cards" | "shots"
@@ -34,6 +34,8 @@ export interface Influencer {
   pick_streak: number;
   consensus_score: number;
   avg_clv?: number;
+  elo_by_sport?: Record<string, number>;
+  avg_clv_by_sport?: Record<string, number>;
   last_scraped_at?: string;
   rank?: number;
   bio?: string;

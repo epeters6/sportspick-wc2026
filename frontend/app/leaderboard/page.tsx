@@ -40,7 +40,8 @@ export default function Leaderboard() {
       <div>
         <h1 className="text-2xl font-bold">Influencer Leaderboard</h1>
         <p className="text-gray-400 text-sm mt-1">
-          Ranked across 𝕏, TikTok, Covers, YouTube, ActionNetwork &amp; more
+          Ranked across 𝕏, TikTok, Covers, Pickswise, YouTube, ActionNetwork &amp; more
+          <span className="text-gray-500"> · per-sport Elo when enough picks</span>
         </p>
       </div>
 
@@ -126,7 +127,17 @@ export default function Leaderboard() {
                     {inf.follower_count > 0 ? fmtFollowers(inf.follower_count) : "—"}
                   </td>
                   <td className="px-4 py-3 text-right font-mono text-indigo-300">
-                    {Math.round(inf.elo_score)}
+                    <div>{Math.round(inf.elo_score)}</div>
+                    {inf.elo_by_sport && Object.keys(inf.elo_by_sport).length > 0 && (
+                      <div className="text-[10px] text-gray-500 font-sans mt-0.5">
+                        {inf.elo_by_sport.mlb != null && (
+                          <span className="mr-1.5">⚾ {Math.round(inf.elo_by_sport.mlb)}</span>
+                        )}
+                        {inf.elo_by_sport.football != null && (
+                          <span>⚽ {Math.round(inf.elo_by_sport.football)}</span>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right font-mono text-emerald-400">
                     {pct(inf.accuracy_rate)}

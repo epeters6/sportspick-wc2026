@@ -20,7 +20,6 @@ jobs:
       APP_ENV: production
       LOG_LEVEL: INFO
       SYNC_FAST: "true"
-      SYNC_SKIP_YT_SEARCH: "true"
 
     steps:
       - name: Checkout

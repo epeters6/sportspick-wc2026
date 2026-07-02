@@ -126,7 +126,7 @@ export default function Dashboard() {
               </p>
             )}
             <p className="text-[10px] text-gray-600 mt-3">
-              X/TikTok scrape when session cookies are configured · sync every 30 min
+              Scrape every 30 min · ML/consensus hourly · YouTube keyword search when API key is set
             </p>
           </section>
         </div>
@@ -176,6 +176,14 @@ export default function Dashboard() {
               }
               accent="blue"
             />
+            {calData.mlb && (calData.mlb.total_resolved ?? 0) > 0 && (
+              <StatCard
+                label="MLB Brier"
+                value={(calData.mlb.calibrated_brier_score ?? calData.mlb.brier_score ?? 0).toFixed(4)}
+                sub={`${calData.mlb.total_resolved} MLB picks${calData.mlb.using_sport_curve ? " · sport curve" : ""}`}
+                accent="yellow"
+              />
+            )}
             <StatCard
               label="Simulated ROI"
               value={`${(calData.simulated_roi_pct ?? 0) > 0 ? "+" : ""}${(calData.simulated_roi_pct ?? 0).toFixed(1)}%`}
@@ -235,7 +243,14 @@ export default function Dashboard() {
                   homeLabel={rec.matches?.home_team ?? "Home"}
                   awayLabel={rec.matches?.away_team ?? "Away"}
                 />
-                <p className="text-xs text-gray-500">{rec.pick_count ?? rec.total_votes} pickers · {Math.round(rec.confidence * 100)}% confidence</p>
+                <p className="text-xs text-gray-500">
+                  {rec.pick_count ?? rec.total_votes} pickers ·{" "}
+                  {Math.round((rec.calibrated_confidence ?? rec.confidence) * 100)}% calibrated
+                  {rec.calibrated_confidence != null && rec.raw_confidence != null
+                    && Math.abs(rec.calibrated_confidence - rec.raw_confidence) > 0.03 && (
+                    <span className="text-gray-600"> (raw {Math.round(rec.raw_confidence * 100)}%)</span>
+                  )}
+                </p>
               </div>
             ))}
             {!recsData?.recommendations.length && (

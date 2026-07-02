@@ -43,7 +43,7 @@ function Recommendations() {
         <div>
           <h1 className="text-2xl font-bold">Top Consensus Picks</h1>
           <p className="text-gray-400 text-sm mt-1">
-            Elo-weighted picks from Covers, YouTube, ActionNetwork, 𝕏 &amp; TikTok cappers
+            Elo-weighted picks from Covers, Pickswise, YouTube, ActionNetwork, 𝕏 &amp; TikTok
           </p>
         </div>
         <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1">
@@ -134,6 +134,13 @@ function Recommendations() {
                     <span className="font-mono">{pct}%</span>
                   </div>
                   <ConfidenceBar value={displayConf} />
+                  {rec.calibrated_confidence != null && rec.raw_confidence != null
+                    && Math.abs(rec.calibrated_confidence - rec.raw_confidence) > 0.03 && (
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      Raw crowd: {Math.round(rec.raw_confidence * 100)}%
+                      {matchSport === "mlb" && " · MLB calibration curve"}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -146,7 +153,7 @@ function Recommendations() {
           <Zap className="w-10 h-10 text-gray-600 mx-auto mb-3" />
           <p className="text-gray-400 font-medium">No recommendations yet</p>
           <p className="text-gray-500 text-sm mt-1">
-            Waiting for picks from Covers, YouTube, ActionNetwork, 𝕏 &amp; TikTok. Check back after the next sync.
+            Waiting for picks from Covers, Pickswise, YouTube, ActionNetwork, 𝕏 &amp; TikTok. Check back after the next sync.
           </p>
         </div>
       )}

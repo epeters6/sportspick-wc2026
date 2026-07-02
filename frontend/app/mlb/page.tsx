@@ -50,7 +50,7 @@ export default function MLBPage() {
             MLB Games
           </h1>
           <p className="text-gray-400 text-sm mt-1">
-            Picks from Covers, ActionNetwork, YouTube, 𝕏 &amp; TikTok cappers
+            Picks from Covers, Pickswise, ActionNetwork, YouTube, 𝕏 &amp; TikTok
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -205,8 +205,13 @@ export default function MLBPage() {
                   </p>
                   <p className="font-semibold text-indigo-300 text-sm">{cp.predicted_winner}</p>
                   <div className="mt-1">
-                    <ConfidenceBar value={cp.confidence} />
+                    <ConfidenceBar value={cp.calibrated_confidence ?? cp.confidence} />
                   </div>
+                  {cp.calibrated_confidence != null && (
+                    <p className="text-[10px] text-amber-400/80 mt-0.5">
+                      {Math.round((cp.calibrated_confidence ?? cp.confidence) * 100)}% calibrated
+                    </p>
+                  )}
                 </div>
               )}
             </Link>

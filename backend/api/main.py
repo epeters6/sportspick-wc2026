@@ -81,8 +81,8 @@ def list_influencers(
         db.table("influencers")
         .select(
             "id, platform, handle, display_name, profile_url, avatar_url, "
-            "follower_count, elo_score, accuracy_rate, total_picks, correct_picks, "
-            "pick_streak, consensus_score, avg_clv, last_scraped_at"
+            "follower_count, elo_score, elo_by_sport, accuracy_rate, total_picks, correct_picks, "
+            "pick_streak, consensus_score, avg_clv, avg_clv_by_sport, last_scraped_at"
         )
         .eq("is_active", True)
         .gte("total_picks", min_picks)
@@ -401,7 +401,7 @@ def stats_overview():
     }
 
 
-PLATFORMS = ("twitter", "tiktok", "covers", "youtube", "actionnetwork", "instagram", "reddit")
+PLATFORMS = ("twitter", "tiktok", "covers", "youtube", "actionnetwork", "pickswise", "instagram", "reddit")
 SPORTS = ("football", "mlb")
 
 
@@ -467,8 +467,9 @@ def stats_platforms():
         "mlb_prop_picks_total": mlb_prop_picks,
         "active_sources": [
             {"id": "covers", "label": "Covers.com", "always_on": True},
-            {"id": "youtube", "label": "YouTube", "always_on": True},
+            {"id": "youtube", "label": "YouTube", "always_on": True, "note": "Tracked channels + keyword search"},
             {"id": "actionnetwork", "label": "ActionNetwork", "always_on": True},
+            {"id": "pickswise", "label": "Pickswise", "always_on": True, "note": "MLB moneyline picks"},
             {"id": "twitter", "label": "X / Twitter", "always_on": False, "note": "Requires cookie auth"},
             {"id": "tiktok", "label": "TikTok", "always_on": False, "note": "Requires session cookie"},
         ],

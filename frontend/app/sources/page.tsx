@@ -134,9 +134,10 @@ export default function SourcesPage() {
       <section className="bg-gray-900 border border-gray-800 rounded-xl p-5">
         <h2 className="font-semibold text-sm mb-2">Sync Pipeline</h2>
         <p className="text-sm text-gray-400 leading-relaxed">
-          Every 30 minutes the sync job runs Covers.com, YouTube, and ActionNetwork scrapers,
-          plus World Cup and MLB schedule updates. 𝕏/Twitter (~60+ seeded cappers with keyword discovery)
-          and TikTok run when session cookies are configured in the environment.
+          <strong className="text-gray-300">Scrape phase</strong> runs every 30 minutes: Covers, Pickswise (MLB),
+          YouTube (tracked channels + keyword search), ActionNetwork, plus World Cup and MLB schedules.
+          <strong className="text-gray-300"> ML phase</strong> runs hourly at :15 — pick linking, sport-specific Elo,
+          consensus, calibration, and autobet. 𝕏/Twitter and TikTok run when session cookies are configured.
         </p>
         <div className="flex flex-wrap gap-2 mt-3">
           {SYNC_SOURCES.map((s) => (

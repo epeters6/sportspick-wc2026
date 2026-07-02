@@ -85,6 +85,36 @@ export default function InfluencerDetail({ params }: { params: Promise<{ id: str
             </div>
           ))}
         </div>
+
+        {inf.elo_by_sport && Object.keys(inf.elo_by_sport).length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-gray-800">
+            <span className="text-xs text-gray-500 w-full">Per-sport Elo</span>
+            {Object.entries(inf.elo_by_sport).map(([sport, elo]) => (
+              <span
+                key={sport}
+                className="text-xs px-2.5 py-1 rounded-full bg-gray-800 text-indigo-300 font-mono"
+              >
+                {sport === "mlb" ? "⚾" : sport === "football" ? "⚽" : sport} {Math.round(elo)}
+              </span>
+            ))}
+            {inf.avg_clv_by_sport && Object.keys(inf.avg_clv_by_sport).length > 0 && (
+              <>
+                <span className="text-xs text-gray-500 w-full mt-2">Per-sport CLV</span>
+                {Object.entries(inf.avg_clv_by_sport).map(([sport, clv]) => (
+                  <span
+                    key={`clv-${sport}`}
+                    className={`text-xs px-2.5 py-1 rounded-full bg-gray-800 font-mono ${
+                      clv >= 0 ? "text-emerald-400" : "text-red-400"
+                    }`}
+                  >
+                    {sport === "mlb" ? "⚾" : sport === "football" ? "⚽" : sport}{" "}
+                    {clv >= 0 ? "+" : ""}{(clv * 100).toFixed(1)}%
+                  </span>
+                ))}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Elo history chart */}

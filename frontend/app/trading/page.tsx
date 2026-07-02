@@ -143,7 +143,7 @@ export default function TradingPage() {
             Trading Hub
           </h1>
           <p className="text-gray-400 text-sm mt-1">
-            Polymarket autobet + tracked alt/prop picks + model calibration
+            Polymarket autobet + tracked alt/prop picks + sport-aware calibration
           </p>
         </div>
         {ab && (
@@ -535,6 +535,10 @@ export default function TradingPage() {
       {/* ── CALIBRATION TAB ──────────────────────────────────────────────── */}
       {tab === "calibration" && (
         <div className="space-y-5">
+          <p className="text-xs text-gray-500 -mt-2">
+            Global moneyline curve below · MLB uses a separate curve when enough resolved picks exist (see ⚾ section).
+            Recommendations and autobet use calibrated — not raw — crowd confidence.
+          </p>
           {calLoading ? (
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 animate-pulse h-48" />
           ) : calData && (calData.total_resolved ?? 0) > 0 ? (
