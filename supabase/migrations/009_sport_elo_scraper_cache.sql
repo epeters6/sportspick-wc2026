@@ -14,5 +14,6 @@ CREATE INDEX IF NOT EXISTS scraper_cache_expires_idx ON scraper_cache (expires_a
 
 ALTER TABLE scraper_cache ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY IF NOT EXISTS "service_role_all_scraper_cache"
+DROP POLICY IF EXISTS "service_role_all_scraper_cache" ON scraper_cache;
+CREATE POLICY "service_role_all_scraper_cache"
     ON scraper_cache FOR ALL USING (auth.role() = 'service_role');
