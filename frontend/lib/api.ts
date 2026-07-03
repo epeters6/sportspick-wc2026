@@ -56,7 +56,7 @@ export interface Match {
   tournament: string;
   sport?: Sport;
   consensus_picks?: ConsensusPick[];
-  model_predictions?: { source: string; outcome: string; prob: number }[];
+  model_predictions?: { source: string; outcome: string; prob: number; edge?: number; metadata?: Record<string, any> }[];
 }
 
 export interface Pick {
@@ -365,5 +365,13 @@ export async function fetchSimulatedBets(limit = 50): Promise<{
 
 export async function triggerAutobetRun(): Promise<{ summary: AutobetSummary; resolved: number }> {
   const { data } = await api.post("/trading/autobet/run");
+  return data;
+}
+
+export async function fetchWeatherPredictions(limit = 20): Promise<{
+  predictions: any[];
+  total: number;
+}> {
+  const { data } = await api.get("/weather-predictions", { params: { limit } });
   return data;
 }

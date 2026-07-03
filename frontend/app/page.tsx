@@ -2,15 +2,17 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchOverview, fetchLeaderboard, fetchMatches,
-  fetchCalibration, fetchAutobets, fetchPaperTrading, fetchPlatformStats,
-  fetchPropPicks, fetchRecentPicks,
+  fetchCalibration, fetchAutobets, fetchPlatformStats,
+  fetchPropPicks, fetchRecentPicks, fetchWeatherPredictions,
 } from "@/lib/api";
 import BetTypeBadge from "@/components/BetTypeBadge";
 import OutcomeBadge from "@/components/OutcomeBadge";
 import { formatPickDisplay } from "@/lib/pickDisplay";
 import PlatformBadge from "@/components/PlatformBadge";
+import MatchInsightCard from "@/components/MatchInsightCard";
+import VibrantStatCard from "@/components/VibrantStatCard";
 import Link from "next/link";
-import { ArrowRight, Target, Radio, Layers, Activity, BrainCircuit, Users } from "lucide-react";
+import { ArrowRight, Target, Radio, Layers, Activity, BrainCircuit, Users, CloudRain } from "lucide-react";
 import { SYNC_SOURCES } from "@/lib/platforms";
 
 function fmt(n: number) { return n.toLocaleString(); }
@@ -24,22 +26,8 @@ function roiPct(n: number | null | undefined, decimals = 1) {
   return `${n >= 0 ? "+" : ""}${n.toFixed(decimals)}%`;
 }
 
-// Custom Vibrant StatCard
-function VibrantStatCard({ label, value, sub, icon: Icon, color }: { label: string, value: string, sub?: string, icon: any, color: string }) {
-  return (
-    <div className={`glass-card p-5 border-t-4 border-t-${color}-500 relative overflow-hidden group`}>
-      <div className={`absolute -right-4 -top-4 opacity-10 group-hover:opacity-20 transition-opacity text-${color}-500`}>
-        <Icon className="w-24 h-24" />
-      </div>
-      <p className="text-gray-400 text-sm font-medium tracking-wide uppercase mb-2">{label}</p>
-      <p className={`text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-br from-white to-gray-400 mb-1`}>{value}</p>
-      {sub && <p className={`text-xs text-${color}-400 font-medium`}>{sub}</p>}
-    </div>
-  );
-}
-
 export default function Dashboard() {
-  const { data: overview, isLoading: ovLoading, isError: ovError } = useQuery({
+  const { data: overview, isLoading: ovLoading } = useQuery({
     queryKey: ["overview"], queryFn: fetchOverview, refetchInterval: 60_000,
   });
   const { data: leaderData } = useQuery({
@@ -62,6 +50,9 @@ export default function Dashboard() {
   });
   const { data: mlbPickData } = useQuery({
     queryKey: ["dashboard-mlb-picks"], queryFn: () => fetchRecentPicks({ sport: "mlb", limit: 4 }), refetchInterval: 120_000,
+  });
+  const { data: weatherData } = useQuery({
+    queryKey: ["weather-predictions"], queryFn: () => fetchWeatherPredictions(4), refetchInterval: 120_000,
   });
 
   const ab = autobetData?.summary;
@@ -93,13 +84,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         {ovLoading
           ? [...Array(4)].map((_, i) => <div key={i} className="glass-card h-32 animate-pulse" />)
-          : ovError || !overview
-          ? [...Array(4)].map((_, i) => (
-              <div key={i} className="glass-card h-32 flex items-center justify-center text-gray-500 text-sm">
-                {i === 0 ? "API unavailable — check NEXT_PUBLIC_API_URL" : ""}
-              </div>
-            ))
-          : <>
+          : overview && <>
               <VibrantStatCard label="Tracked Picks" value={fmt(overview.total_picks)} sub={`${fmt(overview.resolved_picks)} Graded`} icon={Layers} color="indigo" />
               <VibrantStatCard label="Crowd Accuracy" value={pct(overview.overall_accuracy)} sub={`${fmt(overview.correct_picks)} Correct Winners`} icon={Target} color="emerald" />
               {calData ? (
@@ -118,93 +103,36 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         
-        {/* Main Panel: Upcoming Matches & ML Model Interaction */}
-        <section className="xl:col-span-2 glass-card p-6 flex flex-col">
-          <div className="flex items-center justify-between mb-6">
+        {/* Main Panel: MatchInsightCards Grid */}
+        <section className="xl:col-span-2 flex flex-col gap-5">
+          <div className="flex items-center justify-between mb-2">
             <div>
               <h2 className="text-lg font-bold flex items-center gap-2">
                 <BrainCircuit className="w-5 h-5 text-indigo-400" />
-                Live Model Consensus
+                Live Match Analysis Deep Dive
               </h2>
-              <p className="text-xs text-gray-400 mt-1">Comparing Crowd Intelligence vs Quantitative MLB Models</p>
+              <p className="text-xs text-gray-400 mt-1">Comparing Crowd Intelligence vs Quantitative Models with Stadium Factors</p>
             </div>
             <Link href="/matches" className="text-xs font-semibold text-indigo-400 flex items-center gap-1 hover:text-indigo-300 transition-colors">
-              View All Pipeline Matches <ArrowRight className="w-4 h-4" />
+              View Pipeline <ArrowRight className="w-4 h-4" />
             </Link>
           </div>
           
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wider text-gray-500 border-b border-gray-800/50">
-                  <th className="pb-3 font-semibold px-2">Matchup</th>
-                  <th className="pb-3 font-semibold text-center">Crowd Consensus</th>
-                  <th className="pb-3 font-semibold text-center">MLB Quant Model</th>
-                  <th className="pb-3 font-semibold text-center">Final Blended Pick</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-800/30">
-                {matchesData?.matches.slice(0, 10).map((m) => {
-                  const cp = m.consensus_picks?.[0];
-                  // Extract ML Prediction for the match winner (not outs)
-                  const mlPreds = m.model_predictions?.filter(p => p.source === "sports_ml" && !p.outcome.includes(" ")) || [];
-                  const ml = mlPreds.length > 0 ? mlPreds[0] : null;
-                  
-                  return (
-                    <tr key={m.id} className="hover:bg-indigo-900/10 transition-colors group">
-                      <td className="py-4 px-2">
-                        <div className="font-semibold text-gray-200">{m.home_team}</div>
-                        <div className="text-gray-500 text-xs mt-0.5">vs {m.away_team}</div>
-                      </td>
-                      
-                      {/* Crowd */}
-                      <td className="py-4 text-center border-l border-gray-800/30 px-2">
-                        {cp ? (
-                          <div>
-                             <span className="text-gray-300 font-medium">{cp.predicted_winner}</span>
-                             <div className="text-[10px] text-gray-500 mt-1">{Math.round((cp.raw_confidence || cp.confidence) * 100)}% Confidence ({cp.total_votes} votes)</div>
-                          </div>
-                        ) : <span className="text-gray-700">—</span>}
-                      </td>
-
-                      {/* ML Model */}
-                      <td className="py-4 text-center border-l border-gray-800/30 px-2 bg-indigo-950/10">
-                        {ml ? (
-                          <div>
-                            <span className="text-indigo-400 font-bold drop-shadow-[0_0_8px_rgba(99,102,241,0.5)]">{ml.outcome}</span>
-                            <div className="text-[10px] text-indigo-300/70 mt-1">{Math.round(ml.prob * 100)}% Probability</div>
-                          </div>
-                        ) : <span className="text-gray-700 text-xs">Awaiting Simulation</span>}
-                      </td>
-                      
-                      {/* Blended / Final */}
-                      <td className="py-4 text-center border-l border-gray-800/30 px-2">
-                        {cp ? (
-                          <div>
-                             <span className={`font-extrabold ${ml && cp.predicted_winner === ml.outcome ? 'text-emerald-400' : 'text-gray-100'}`}>
-                               {cp.predicted_winner}
-                             </span>
-                             <div className="w-full bg-gray-800 h-1.5 rounded-full mt-2 overflow-hidden flex max-w-[80px] mx-auto">
-                               <div className="bg-gradient-to-r from-indigo-500 to-purple-500 h-full" style={{ width: `${Math.round(cp.confidence * 100)}%` }} />
-                             </div>
-                             {ml && cp.predicted_winner !== ml.outcome && (
-                               <div className="text-[9px] text-yellow-500 mt-1 uppercase tracking-wider font-bold">Model Conflict</div>
-                             )}
-                          </div>
-                        ) : <span className="text-gray-700">—</span>}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {!matchesData?.matches.length && (
-              <div className="py-12 flex flex-col items-center justify-center text-gray-500">
-                <Radio className="w-8 h-8 mb-3 opacity-20" />
-                <p>No upcoming matches pipeline syncs detected.</p>
-              </div>
-            )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {matchesData?.matches.slice(0, 4).map((m) => (
+              <MatchInsightCard key={m.id} match={m} />
+            ))}
           </div>
+
+          {!matchesData?.matches.length && (
+            <div className="glass-card py-12 flex flex-col items-center justify-center text-gray-500">
+              <Radio className="w-8 h-8 mb-3 opacity-20" />
+              <p>No upcoming matches pipeline syncs detected.</p>
+            </div>
+          )}
+
+
+
         </section>
 
         {/* Right Sidebar */}

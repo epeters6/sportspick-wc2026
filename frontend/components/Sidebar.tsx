@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BarChart2, Zap, Trophy, Calendar, Star, TrendingUp, Tv2, Layers, Users,
+  BarChart2, Zap, Trophy, Calendar, Star, TrendingUp, Tv2, Layers, Users, CloudRain
 } from "lucide-react";
 import SyncCountdown from "./SyncCountdown";
 
@@ -14,6 +14,7 @@ const nav = [
   { href: "/sources",       label: "Sources",     icon: Users },
   { href: "/matches",       label: "WC Matches",  icon: Calendar },
   { href: "/mlb",           label: "MLB",         icon: Tv2 },
+  { href: "/weather",       label: "Weather",     icon: CloudRain },
   { href: "/trading",       label: "Trading",     icon: TrendingUp },
 ];
 

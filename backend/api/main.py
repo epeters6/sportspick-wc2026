@@ -153,7 +153,7 @@ def list_matches(
             "*, consensus_picks("
             "  id, predicted_winner, confidence, total_votes, pick_count,"
             "  home_probability, draw_probability, away_probability"
-            ")"
+            "), model_predictions(source, outcome, prob, edge, metadata)"
         )
         .order("scheduled_at")
         .limit(limit)
@@ -268,6 +268,20 @@ def list_recent_picks(
     from backend.api.pick_utils import filter_picks_by_sport
     rows = filter_picks_by_sport(rows, sport, limit=limit)
     return {"picks": rows, "total": len(rows)}
+
+
+@app.get("/weather-predictions")
+def list_weather_predictions(limit: int = Query(20, ge=1, le=100)):
+    db = get_db()
+    query = (
+        db.table("model_predictions")
+        .select("*")
+        .eq("domain", "weather")
+        .order("created_at", desc=True)
+        .limit(limit)
+    )
+    rows = query.execute().data or []
+    return {"predictions": rows, "total": len(rows)}
 
 
 @app.get("/picks/props")

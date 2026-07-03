@@ -21,6 +21,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       POLY_KEY_ID: ${{ secrets.POLY_KEY_ID || secrets.POLYMARKET_API_KEY }}
       POLY_SECRET_KEY: ${{ secrets.POLY_SECRET_KEY || secrets.POLYMARKET_API_SECRET }}
