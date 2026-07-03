@@ -77,9 +77,13 @@ class Settings(BaseSettings):
 
     # CLOB credentials (LIVE ONLY — leave blank for paper mode)
     polymarket_private_key: str = ""           # wallet private key (Polygon)
-    polymarket_api_key: str = ""
-    polymarket_api_secret: str = ""
-    polymarket_api_passphrase: str = ""
+    polymarket_key_id: str | None = None
+    polymarket_secret_key: str | None = None
+    polymarket_passphrase: str | None = None
+    
+    # Kalshi Live Trading
+    KALSHI_API_KEY: str | None = None
+    KALSHI_PRIVATE_KEY_PATH: str | None = None
     polymarket_funder_address: str = ""        # proxy/funder wallet address
 
     app_env: str = "development"

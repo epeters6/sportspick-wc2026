@@ -58,6 +58,7 @@ class PolyMarket:
     end_date: str | None = None
     accepting_orders: bool = False
     closed: bool = False
+    venue: str = "polymarket"
 
     def outcome_by_name(self, name: str) -> Outcome | None:
         target = name.strip().lower()

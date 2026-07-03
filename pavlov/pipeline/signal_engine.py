@@ -489,7 +489,8 @@ def parse_market(market: dict) -> dict | None:
 # Edge calculation
 # ---------------------------------------------------------------------------
 
-def calculate_edge(market: dict, bankroll: float) -> dict | None:
+def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True) -> dict | None:
+    suppressed_reason = None
     """Calculate the trading edge for a single Kalshi market.
 
     Args:
@@ -590,7 +591,8 @@ def calculate_edge(market: dict, bankroll: float) -> dict | None:
                     "SignalEngine: NWS/OWM hard disagreement %.1f°F for %s – suppressing",
                     delta, market.get("ticker"),
                 )
-                return None
+                if trading_mode: return None
+                else: suppressed_reason = "owm_disagreement"
             elif delta > 3.0:
                 source_agreement        = "diverge"
                 owm_disagreement_penalty = 1.20   # require 20% larger edge
@@ -744,7 +746,8 @@ def calculate_edge(market: dict, bankroll: float) -> dict | None:
                 "SignalEngine: suppressing %s — ensemble spread %.1f°F too large",
                 market.get("ticker"), ensemble_spread,
             )
-            return None
+            if trading_mode: return None
+            else: suppressed_reason = "ensemble_spread_too_large"
         elif ensemble_spread > 4.0:
             # Require 25% larger edge for uncertain forecasts.
             spread_penalty = 1.25
@@ -756,7 +759,8 @@ def calculate_edge(market: dict, bankroll: float) -> dict | None:
     if days_out >= 4:
         logger.debug("SignalEngine: suppressing %s — %d days out, too uncertain",
                      market.get("ticker"), days_out)
-        return None
+        if trading_mode: return None
+        else: suppressed_reason = "too_far_out"
     horizon_penalty = 1.0 + days_out * 0.10  # +10% per day: day1=1.1x, day3=1.3x
 
     # Combined edge multiplier applied later.
@@ -836,7 +840,8 @@ def calculate_edge(market: dict, bankroll: float) -> dict | None:
             "(%.1fh left, daily low already occurred).",
             market.get("ticker"), hours_left,
         )
-        return None
+        if trading_mode: return None
+        else: suppressed_reason = "post_nadir"
 
     # 4d-ii. Post-peak suppression for same-day HIGH markets.
     #   After ~3 PM local time the afternoon high is essentially locked in.
@@ -867,7 +872,8 @@ def calculate_edge(market: dict, bankroll: float) -> dict | None:
                 "(%.1fh left, no hard METAR constraint).",
                 market.get("ticker"), hours_left,
             )
-            return None
+            if trading_mode: return None
+            else: suppressed_reason = "post_peak"
         # METAR has a hard answer — use it (already set above, but re-apply).
         model_prob = metar_constrained
 
@@ -882,26 +888,30 @@ def calculate_edge(market: dict, bankroll: float) -> dict | None:
             "SignalEngine: suppressing <=3c YES for %s — market=%dc model=%.0f%%",
             market.get("ticker"), yes_ask, model_prob * 100,
         )
-        return None
+        if trading_mode: return None
+        else: suppressed_reason = "sanity_guard_3c_yes"
     if yes_ask <= 5 and model_prob < 0.80:
         logger.debug(
             "SignalEngine: suppressing <=5c YES for %s — market=%dc model=%.0f%%",
             market.get("ticker"), yes_ask, model_prob * 100,
         )
-        return None
+        if trading_mode: return None
+        else: suppressed_reason = "sanity_guard_5c_yes"
     # Mirror guards for NO side (yes_ask >= 95c means NO is <=5c).
     if yes_ask >= 97 and model_prob > 0.08:
         logger.debug(
             "SignalEngine: suppressing <=3c NO for %s — market=%dc model=%.0f%%",
             market.get("ticker"), yes_ask, model_prob * 100,
         )
-        return None
+        if trading_mode: return None
+        else: suppressed_reason = "sanity_guard_3c_no"
     if yes_ask >= 95 and model_prob > 0.20:
         logger.debug(
             "SignalEngine: suppressing <=5c NO for %s — market=%dc model=%.0f%%",
             market.get("ticker"), yes_ask, model_prob * 100,
         )
-        return None
+        if trading_mode: return None
+        else: suppressed_reason = "sanity_guard_5c_no"
 
     # 6. Edge and recommended side.
     edge: float = model_prob - implied_prob

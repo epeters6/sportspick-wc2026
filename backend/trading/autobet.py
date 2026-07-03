@@ -34,7 +34,7 @@ from backend.trading.market_matcher import (
     outcome_belongs_to_match,
     _canonical,
 )
-from backend.trading.polymarket_client import PolymarketClient
+from backend.trading.venue_router import VenueRouter
 from backend.trading.autobet_learning import gates_for_price, learning_summary, assess_live_readiness, invalidate_learning_cache
 from backend.trading.risk import size_position
 
@@ -44,7 +44,7 @@ MARKET_SEARCHES = ["World Cup", "MLB", "baseball"]
 
 
 async def _markets_for_match(
-    client: PolymarketClient,
+    client: VenueRouter,
     match: dict,
     markets: list,
     markets_by_id: dict,
@@ -93,7 +93,7 @@ async def _markets_for_match(
 
 
 async def _find_prop_market(
-    client: PolymarketClient,
+    client: VenueRouter,
     match: dict,
     bet_type: str,
     predicted_winner: str,
@@ -127,7 +127,7 @@ async def _find_prop_market(
 
 
 async def _find_market_for_winner(
-    client: PolymarketClient,
+    client: VenueRouter,
     match: dict,
     winner: str,
     markets: list,
@@ -166,7 +166,7 @@ async def _find_market_for_winner(
 
 async def _evaluate_autobet_candidate(
     *,
-    client: PolymarketClient,
+    client: VenueRouter,
     match: dict,
     winner: str,
     raw_confidence: float,
@@ -214,7 +214,7 @@ async def _evaluate_autobet_candidate(
         max_model_weight_override=s.polymarket_paper_max_model_weight if paper else None,
     )
 
-    _, depth = await client.get_book_depth(outcome.token_id, side="sell")
+    _, depth = await client.get_book_depth(venue=market.venue, token_id=outcome.token_id, market_id=market.market_id, side="sell")
     if depth <= 0:
         depth = market.liquidity
 
@@ -263,7 +263,11 @@ async def _evaluate_autobet_candidate(
 
     clob_order_id = None
     if mode == "live":
-        result = client.place_order(outcome.token_id, market_price, sizing.stake)
+        if market.venue == 'kalshi':
+            logger.warning('Kalshi live orders not yet implemented')
+            return 'rejected', None
+        else:
+            result = client.poly.place_order(outcome.token_id, market_price, sizing.stake)
         if not result["ok"]:
             logger.warning(f"Autobet live order failed for {winner}: {result['error']}")
             return "rejected", None
@@ -357,7 +361,7 @@ async def run_autobet() -> dict[str, Any]:
     """Scan markets, evaluate edges, and place (paper/live) bets. Returns summary."""
     s = get_settings()
     db = get_db()
-    client = PolymarketClient()
+    client = VenueRouter()
     requested_mode = "live" if s.polymarket_live_enabled else "paper"
     mode = requested_mode
     live_blocked = False
@@ -553,6 +557,7 @@ def _record_autobet(
     record = {
         "match_id": match["id"],
         "market_id": market.market_id,
+        "venue": getattr(market, 'venue', 'polymarket'),
         "market_slug": market.slug,
         "question": market.question[:500],
         "outcome_name": winner,

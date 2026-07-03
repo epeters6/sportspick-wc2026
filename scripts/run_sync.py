@@ -183,11 +183,18 @@ async def run_ml_phase() -> dict[str, int]:
         print(f"  Autobet placement skipped: {exc}")
 
     try:
+        from backend.trading.autobet import resolve_autobets
         ab_resolved = resolve_autobets()
         print(f"  autobets resolved={ab_resolved}")
     except Exception as exc:
         print(f"  Autobet resolution failed: {exc}")
-
+        
+    try:
+        from backend.trading.weather_settlement import resolve_weather_autobets
+        w_resolved = await resolve_weather_autobets()
+        print(f"  weather bets resolved={w_resolved}")
+    except Exception as exc:
+        print(f"  Weather autobet resolution failed: {exc}")
     print("Sending Discord alerts...")
     alerts = await send_consensus_alerts()
     signal_sent = 0
