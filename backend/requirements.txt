@@ -28,6 +28,7 @@ scikit-learn>=1.7.0
 numpy>=2.3.0
 pandas>=2.2.3
 joblib
+pybaseball
 
 # NLP
 spacy>=3.8.3

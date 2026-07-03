@@ -225,8 +225,41 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
     draw_probability = _prob("draw")
     away_probability = _prob(away_team)
 
+    # Blend with ML model predictions if they exist
+    ml_pred = (
+        db.table("model_predictions")
+        .select("outcome, prob")
+        .eq("source", "sports_ml")
+        .eq("event_key", match_id)
+        .execute()
+        .data or []
+    )
+    
+    if ml_pred:
+        # Use a 50/50 blend between ML model and Crowd consensus
+        ml_outcome = str(ml_pred[0].get("outcome", "")).strip().lower()
+        ml_prob = float(ml_pred[0].get("prob", 0.0))
+        
+        if ml_outcome == home_team.strip().lower():
+            home_probability = round((home_probability + ml_prob) / 2.0, 4)
+            away_probability = round((away_probability + (1.0 - ml_prob)) / 2.0, 4)
+        elif ml_outcome == away_team.strip().lower():
+            away_probability = round((away_probability + ml_prob) / 2.0, 4)
+            home_probability = round((home_probability + (1.0 - ml_prob)) / 2.0, 4)
+            
+        # Re-evaluate best_team and confidence based on blended probabilities
+        if home_probability > away_probability and home_probability > draw_probability:
+            best_team = home_team
+            confidence = home_probability
+        elif away_probability > home_probability and away_probability > draw_probability:
+            best_team = away_team
+            confidence = away_probability
+        else:
+            best_team = "draw"
+            confidence = draw_probability
+
     # Top 5 influencers backing the consensus pick
-    supporters = sorted(top_supporters[best_team], key=lambda x: x[0], reverse=True)
+    supporters = sorted(top_supporters[best_team], key=lambda x: x[0], reverse=True) if best_team in top_supporters else []
     top_5_ids = [s[1] for s in supporters[:5]]
 
     record = {
@@ -235,8 +268,8 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
         "bet_type": "moneyline",
         "bet_line": None,
         "consensus_key": f"moneyline|{best_team}|",
-        "total_votes": vote_counts[best_team],
-        "weighted_score": round(vote_weights[best_team], 4),
+        "total_votes": vote_counts.get(best_team, 0),
+        "weighted_score": round(vote_weights.get(best_team, 0.0), 4),
         "confidence": round(confidence, 4),
         "top_influencers": top_5_ids,
         "pick_count": len(picks),
@@ -254,6 +287,27 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
         db.table("consensus_picks").upsert(
             record, on_conflict="match_id,predicted_winner"
         ).execute()
+
+    # Unified Prediction Schema (Phase 1)
+    try:
+        db.table("model_predictions").delete().eq("source", "consensus").eq("event_key", match_id).eq("outcome", best_team).execute()
+        db.table("model_predictions").insert({
+            "source": "consensus",
+            "domain": "sports",
+            "event_key": match_id,
+            "outcome": best_team,
+            "prob": round(confidence, 4),
+            "metadata": {
+                "sport": sport,
+                "bet_type": "moneyline",
+                "home_probability": home_probability,
+                "draw_probability": draw_probability,
+                "away_probability": away_probability,
+                "pick_count": len(picks)
+            }
+        }).execute()
+    except Exception as exc:
+        logger.debug(f"Model prediction insert failed: {exc}")
 
     return record
 

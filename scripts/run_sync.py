@@ -103,7 +103,7 @@ async def run_ml_phase() -> dict[str, int]:
         sync_influencer_pick_counts,
         update_all_elo_scores,
     )
-    from backend.ml.paper_trading import place_paper_bets, resolve_paper_bets
+
     from backend.notifications.discord_alerts import send_autobet_signals, send_consensus_alerts
     from backend.sports_data.mlb_fetcher import link_mlb_picks_to_matches
     from backend.sports_data.mlb_stats_fetcher import enrich_upcoming_mlb_pitcher_stats
@@ -156,10 +156,19 @@ async def run_ml_phase() -> dict[str, int]:
             f"ROI={cal.get('simulated_roi_pct', 0):.1f}%"
         )
 
-    print("Paper trading...")
-    bets_placed = place_paper_bets()
-    bets_resolved = resolve_paper_bets()
-    print(f"  {bets_placed} new bets, {bets_resolved} resolved")
+    print("Running weather prediction model (Phase 1)...")
+    from backend.models.weather.sync_weather import sync_weather_predictions
+    try:
+        await sync_weather_predictions()
+    except Exception as exc:
+        print(f"  Weather sync failed: {exc}")
+
+    print("Running MLB Quant Model Orchestrator (Phase 3)...")
+    try:
+        from backend.ml.mlb_quant.orchestrator import setup_daily_slate
+        setup_daily_slate()
+    except Exception as exc:
+        print(f"  MLB Orchestrator failed: {exc}")
 
     print("Running Polymarket autobet...")
     autobet_summary: dict = {}

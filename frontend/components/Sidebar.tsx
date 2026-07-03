@@ -20,7 +20,7 @@ const nav = [
 export default function Sidebar() {
   const path = usePathname();
   return (
-    <aside className="fixed left-0 top-0 h-full w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
+    <aside className="fixed left-0 top-0 h-full w-64 glass-panel border-r-0 border-r-white/5 flex flex-col rounded-none rounded-r-2xl shadow-2xl z-50">
       {/* Logo */}
       <div className="p-5 border-b border-gray-800">
         <div className="flex items-center gap-2">

@@ -27,7 +27,7 @@ TEAM_ALIASES: dict[str, str] = {
     "usa": "USA", "usmnt": "USA", "united states": "USA", "u.s.": "USA",
     # South America
     "brazil": "Brazil", "brasil": "Brazil",
-    "argentina": "Argentina", "messi": "Argentina",
+    "argentina": "Argentina",
     "colombia": "Colombia",
     "chile": "Chile",
     "uruguay": "Uruguay",
@@ -751,6 +751,10 @@ def _extract_btts(text_lower: str, confidence: float | None) -> dict[str, Any] |
 
 
 def _extract_winner(text_lower: str) -> str | None:
+    # Basic negation awareness
+    if re.search(r"\b(?:won'?t|will not|don'?t think|not going to)\b.*?(?:win|beat|over)", text_lower):
+        return None
+
     for pattern in WIN_PATTERNS:
         m = re.search(pattern, text_lower)
         if m:
@@ -903,11 +907,11 @@ def _canonicalise_team(raw: str) -> str | None:
         return TEAM_ALIASES[raw]
     if raw in MLB_TEAM_ALIASES:
         return MLB_TEAM_ALIASES[raw]
-    # Partial match
+    # Partial match using word boundaries to avoid 'iran' in 'terrain'
     for alias, canonical in TEAM_ALIASES.items():
-        if alias in raw or raw in alias:
+        if re.search(rf"\b{re.escape(alias)}\b", raw):
             return canonical
     for alias, canonical in MLB_TEAM_ALIASES.items():
-        if alias in raw or raw in alias:
+        if re.search(rf"\b{re.escape(alias)}\b", raw):
             return canonical
     return None

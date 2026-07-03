@@ -82,7 +82,7 @@ def list_influencers(
         .select(
             "id, platform, handle, display_name, profile_url, avatar_url, "
             "follower_count, elo_score, elo_by_sport, accuracy_rate, total_picks, correct_picks, "
-            "pick_streak, consensus_score, avg_clv, avg_clv_by_sport, last_scraped_at"
+            "pick_streak, consensus_score, wilson_score, avg_clv, avg_clv_by_sport, last_scraped_at"
         )
         .eq("is_active", True)
         .gte("total_picks", min_picks)
@@ -153,7 +153,7 @@ def list_matches(
             "*, consensus_picks("
             "  id, predicted_winner, confidence, total_votes, pick_count,"
             "  home_probability, draw_probability, away_probability"
-            ")"
+            "), model_predictions(source, outcome, prob)"
         )
         .order("scheduled_at")
         .limit(limit)

@@ -1,19 +1,16 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import {
-  fetchOverview, fetchRecommendations, fetchLeaderboard, fetchMatches,
+  fetchOverview, fetchLeaderboard, fetchMatches,
   fetchCalibration, fetchAutobets, fetchPaperTrading, fetchPlatformStats,
   fetchPropPicks, fetchRecentPicks,
 } from "@/lib/api";
 import BetTypeBadge from "@/components/BetTypeBadge";
 import OutcomeBadge from "@/components/OutcomeBadge";
 import { formatPickDisplay } from "@/lib/pickDisplay";
-import StatCard from "@/components/StatCard";
-import ConfidenceBar from "@/components/ConfidenceBar";
 import PlatformBadge from "@/components/PlatformBadge";
-import ProbBar from "@/components/ProbBar";
 import Link from "next/link";
-import { ArrowRight, Target, Radio, Layers } from "lucide-react";
+import { ArrowRight, Target, Radio, Layers, Activity, BrainCircuit, Users } from "lucide-react";
 import { SYNC_SOURCES } from "@/lib/platforms";
 
 function fmt(n: number) { return n.toLocaleString(); }
@@ -27,18 +24,29 @@ function roiPct(n: number | null | undefined, decimals = 1) {
   return `${n >= 0 ? "+" : ""}${n.toFixed(decimals)}%`;
 }
 
+// Custom Vibrant StatCard
+function VibrantStatCard({ label, value, sub, icon: Icon, color }: { label: string, value: string, sub?: string, icon: any, color: string }) {
+  return (
+    <div className={`glass-card p-5 border-t-4 border-t-${color}-500 relative overflow-hidden group`}>
+      <div className={`absolute -right-4 -top-4 opacity-10 group-hover:opacity-20 transition-opacity text-${color}-500`}>
+        <Icon className="w-24 h-24" />
+      </div>
+      <p className="text-gray-400 text-sm font-medium tracking-wide uppercase mb-2">{label}</p>
+      <p className={`text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-br from-white to-gray-400 mb-1`}>{value}</p>
+      {sub && <p className={`text-xs text-${color}-400 font-medium`}>{sub}</p>}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { data: overview, isLoading: ovLoading } = useQuery({
     queryKey: ["overview"], queryFn: fetchOverview, refetchInterval: 60_000,
-  });
-  const { data: recsData } = useQuery({
-    queryKey: ["recommendations", 5], queryFn: () => fetchRecommendations(5), refetchInterval: 120_000,
   });
   const { data: leaderData } = useQuery({
     queryKey: ["leaderboard", 5], queryFn: () => fetchLeaderboard({ limit: 5 }),
   });
   const { data: matchesData } = useQuery({
-    queryKey: ["matches-upcoming"], queryFn: () => fetchMatches({ upcoming_only: true, limit: 8 }), refetchInterval: 120_000,
+    queryKey: ["matches-upcoming"], queryFn: () => fetchMatches({ upcoming_only: true, limit: 12 }), refetchInterval: 120_000,
   });
   const { data: calData } = useQuery({
     queryKey: ["calibration"], queryFn: fetchCalibration, refetchInterval: 300_000,
@@ -46,403 +54,216 @@ export default function Dashboard() {
   const { data: autobetData } = useQuery({
     queryKey: ["autobets-summary"], queryFn: () => fetchAutobets(1), refetchInterval: 120_000,
   });
-  const { data: paperData } = useQuery({
-    queryKey: ["paper-trading"], queryFn: fetchPaperTrading, refetchInterval: 120_000,
-  });
   const { data: platformStats } = useQuery({
     queryKey: ["platform-stats"], queryFn: fetchPlatformStats, refetchInterval: 120_000,
   });
   const { data: propData } = useQuery({
-    queryKey: ["dashboard-props"], queryFn: () => fetchPropPicks({ limit: 6 }), refetchInterval: 120_000,
+    queryKey: ["dashboard-props"], queryFn: () => fetchPropPicks({ limit: 4 }), refetchInterval: 120_000,
   });
   const { data: mlbPickData } = useQuery({
-    queryKey: ["dashboard-mlb-picks"], queryFn: () => fetchRecentPicks({ sport: "mlb", limit: 5 }), refetchInterval: 120_000,
+    queryKey: ["dashboard-mlb-picks"], queryFn: () => fetchRecentPicks({ sport: "mlb", limit: 4 }), refetchInterval: 120_000,
   });
 
   const ab = autobetData?.summary;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-10 pb-12">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-gray-800/50 pb-6">
         <div>
-          <h1 className="text-2xl font-bold">Dashboard</h1>
-          <p className="text-gray-400 text-sm mt-1">World Cup 2026 + MLB — Pick Tracker</p>
+          <h1 className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 tracking-tight">
+            SportsPick Intelligence
+          </h1>
+          <p className="text-gray-400 text-sm mt-2 max-w-2xl">
+            Live Quantitative Prediction Engine. Aggregating crowd consensus, calibrating influencer edges, and blending with MLB fatigue models.
+          </p>
         </div>
         <Link
           href="/sources"
-          className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 bg-indigo-950/50 border border-indigo-900/50 px-3 py-1.5 rounded-lg"
+          className="group flex items-center gap-2 text-xs font-semibold text-indigo-300 hover:text-white bg-indigo-950/40 border border-indigo-500/30 px-4 py-2.5 rounded-xl transition-all hover:bg-indigo-600/40 hover:shadow-[0_0_20px_rgba(99,102,241,0.3)]"
         >
-          <Radio className="w-3.5 h-3.5" />
+          <Activity className="w-4 h-4 animate-pulse text-indigo-400 group-hover:text-white" />
           {platformStats
-            ? `${Object.values(platformStats.influencers_by_platform).reduce((a, b) => a + b, 0)} sources tracked`
-            : "View sources"}
+            ? `${fmt(Object.values(platformStats.influencers_by_platform).reduce((a, b) => a + b, 0))} Verified Sources`
+            : "System Active"}
         </Link>
       </div>
 
-      {/* Active sources + sport breakdown */}
-      {platformStats && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <section className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-            <h2 className="font-semibold text-sm mb-3">Data Sources</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {SYNC_SOURCES.map((s) => {
-                const inf = platformStats.influencers_by_platform[s.id] ?? 0;
-                const picks = platformStats.picks_by_platform[s.id] ?? 0;
-                return (
-                  <div key={s.id} className="bg-gray-800/60 rounded-lg p-3">
-                    <p className={`text-xs font-medium ${s.color}`}>{s.label}</p>
-                    <p className="text-lg font-bold mt-0.5">{fmt(inf)}</p>
-                    <p className="text-[10px] text-gray-500">{fmt(picks)} picks</p>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-          <section className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-            <h2 className="font-semibold text-sm mb-3">By Sport</h2>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-gray-800/60 rounded-lg p-4">
-                <p className="text-xs text-gray-400">⚽ World Cup</p>
-                <p className="text-2xl font-bold mt-1">{fmt(platformStats.matches_by_sport.football ?? 0)}</p>
-                <p className="text-[10px] text-gray-500">matches tracked</p>
-              </div>
-              <div className="bg-gray-800/60 rounded-lg p-4">
-                <p className="text-xs text-gray-400">⚾ MLB</p>
-                <p className="text-2xl font-bold mt-1">{fmt(platformStats.matches_by_sport.mlb ?? 0)}</p>
-                <p className="text-[10px] text-gray-500">games tracked</p>
-                {(platformStats.mlb_prop_picks_total ?? 0) > 0 && (
-                  <p className="text-[10px] text-cyan-400 mt-1">{fmt(platformStats.mlb_prop_picks_total!)} MLB props</p>
-                )}
-                <Link href="/mlb" className="text-[10px] text-indigo-400 hover:text-indigo-300 mt-1 inline-block">
-                  View MLB →
-                </Link>
-              </div>
-            </div>
-            {(platformStats.prop_picks_total ?? 0) > 0 && (
-              <p className="text-[10px] text-gray-500 mt-3">
-                {fmt(platformStats.prop_picks_total!)} alt/prop picks tracked ·{" "}
-                <Link href="/props" className="text-indigo-400 hover:text-indigo-300">View all →</Link>
-              </p>
-            )}
-            <p className="text-[10px] text-gray-600 mt-3">
-              Scrape every 30 min · ML/consensus hourly · YouTube keyword search when API key is set
-            </p>
-          </section>
-        </div>
-      )}
-
-      {/* Stat cards — overview */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Primary Metrics */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         {ovLoading
-          ? [...Array(4)].map((_, i) => (
-              <div key={i} className="bg-gray-900 border border-gray-800 rounded-xl p-5 animate-pulse h-24" />
-            ))
+          ? [...Array(4)].map((_, i) => <div key={i} className="glass-card h-32 animate-pulse" />)
           : overview && <>
-              <StatCard label="Influencers tracked" value={fmt(overview.total_influencers)} accent="blue" />
-              <StatCard
-                label="Total picks"
-                value={fmt(overview.total_picks)}
-                sub={`${fmt(overview.resolved_picks)} resolved`}
-                accent="purple"
-              />
-              <StatCard
-                label="Overall accuracy"
-                value={pct(overview.overall_accuracy)}
-                sub={`${fmt(overview.correct_picks)} correct`}
-                accent="green"
-              />
-              <StatCard
-                label="Matches"
-                value={`${overview.finished_matches} / ${overview.total_matches}`}
-                sub="finished"
-                accent="yellow"
-              />
+              <VibrantStatCard label="Tracked Picks" value={fmt(overview.total_picks)} sub={`${fmt(overview.resolved_picks)} Graded`} icon={Layers} color="indigo" />
+              <VibrantStatCard label="Crowd Accuracy" value={pct(overview.overall_accuracy)} sub={`${fmt(overview.correct_picks)} Correct Winners`} icon={Target} color="emerald" />
+              {calData ? (
+                 <VibrantStatCard label="Brier Score" value={(calData.brier_score ?? 0).toFixed(4)} sub={`Raw: ${(calData.raw_brier_score ?? 0).toFixed(3)}`} icon={BrainCircuit} color="cyan" />
+              ) : (
+                 <VibrantStatCard label="Live Matches" value={fmt(overview.total_matches)} sub={`${fmt(overview.finished_matches)} Completed`} icon={Radio} color="pink" />
+              )}
+              {ab ? (
+                 <VibrantStatCard label="Trading P&L" value={`${ab.total_pnl >= 0 ? "+" : ""}${money(ab.total_pnl)}`} sub={`${money(ab.bankroll)} Bankroll (${ab.mode})`} icon={Activity} color={ab.total_pnl >= 0 ? "emerald" : "red"} />
+              ) : (
+                 <VibrantStatCard label="Verified Influencers" value={fmt(overview.total_influencers)} sub="Across 7 platforms" icon={Users} color="purple" />
+              )}
             </>
         }
       </div>
 
-      {/* ML + Trading stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {calData && (calData.total_resolved ?? 0) > 0 && (
-          <>
-            <StatCard
-              label="Brier score"
-              value={(calData.brier_score ?? 0).toFixed(4)}
-              sub={
-                calData.raw_brier_score != null
-                  ? `calibrated · raw ${calData.raw_brier_score.toFixed(3)}`
-                  : `${calData.total_resolved} resolved picks`
-              }
-              accent="blue"
-            />
-            {calData.mlb && (calData.mlb.total_resolved ?? 0) > 0 && (
-              <StatCard
-                label="MLB Brier"
-                value={(calData.mlb.calibrated_brier_score ?? calData.mlb.brier_score ?? 0).toFixed(4)}
-                sub={`${calData.mlb.total_resolved} MLB picks${calData.mlb.using_sport_curve ? " · sport curve" : ""}`}
-                accent="yellow"
-              />
-            )}
-            <StatCard
-              label="Simulated ROI"
-              value={`${(calData.simulated_roi_pct ?? 0) > 0 ? "+" : ""}${(calData.simulated_roi_pct ?? 0).toFixed(1)}%`}
-              sub="vs implied odds"
-              accent={(calData.simulated_roi_pct ?? 0) >= 0 ? "green" : "red"}
-            />
-          </>
-        )}
-        {ab && (
-          <>
-            <StatCard
-              label={`Polymarket ${ab.mode === "live" ? "🔴 LIVE" : "📝 Paper"}`}
-              value={money(ab.bankroll)}
-              sub={`${ab.total_pnl >= 0 ? "+" : ""}${money(ab.total_pnl)} P&L`}
-              accent={ab.total_pnl >= 0 ? "green" : "red"}
-            />
-            <StatCard
-              label="Open bets"
-              value={String(ab.open_bets)}
-              sub={`${money(ab.open_exposure)} at risk`}
-              accent="purple"
-            />
-          </>
-        )}
-        {paperData && !calData?.total_resolved && (
-          <StatCard
-            label="Paper trading"
-            value={money(paperData.bankroll)}
-            sub={`ROI ${roiPct(paperData.roi_pct, 1)}`}
-            accent={(paperData.roi_pct ?? 0) >= 0 ? "green" : "red"}
-          />
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Top Picks */}
-        <section className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold">{"Today's Top Consensus Picks"}</h2>
-            <Link href="/recommendations" className="text-xs text-indigo-400 flex items-center gap-1 hover:text-indigo-300">
-              View all <ArrowRight className="w-3 h-3" />
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        
+        {/* Main Panel: Upcoming Matches & ML Model Interaction */}
+        <section className="xl:col-span-2 glass-card p-6 flex flex-col">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h2 className="text-lg font-bold flex items-center gap-2">
+                <BrainCircuit className="w-5 h-5 text-indigo-400" />
+                Live Model Consensus
+              </h2>
+              <p className="text-xs text-gray-400 mt-1">Comparing Crowd Intelligence vs Quantitative MLB Models</p>
+            </div>
+            <Link href="/matches" className="text-xs font-semibold text-indigo-400 flex items-center gap-1 hover:text-indigo-300 transition-colors">
+              View All Pipeline Matches <ArrowRight className="w-4 h-4" />
             </Link>
           </div>
-          <div className="space-y-5">
-            {recsData?.recommendations.slice(0, 5).map((rec) => (
-              <div key={rec.match_id} className="space-y-1.5">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="font-medium text-xs text-gray-400">
-                    {rec.matches?.home_team} vs {rec.matches?.away_team}
-                  </span>
-                  <span className="text-indigo-300 font-semibold text-sm">{rec.predicted_winner}</span>
-                </div>
-                <ProbBar
-                  homeProb={rec.home_probability}
-                  drawProb={rec.draw_probability}
-                  awayProb={rec.away_probability}
-                  homeLabel={rec.matches?.home_team ?? "Home"}
-                  awayLabel={rec.matches?.away_team ?? "Away"}
-                />
-                <p className="text-xs text-gray-500">
-                  {rec.pick_count ?? rec.total_votes} pickers ·{" "}
-                  {Math.round((rec.calibrated_confidence ?? rec.confidence) * 100)}% calibrated
-                  {rec.calibrated_confidence != null && rec.raw_confidence != null
-                    && Math.abs(rec.calibrated_confidence - rec.raw_confidence) > 0.03 && (
-                    <span className="text-gray-600"> (raw {Math.round(rec.raw_confidence * 100)}%)</span>
-                  )}
-                </p>
-              </div>
-            ))}
-            {!recsData?.recommendations.length && (
-              <p className="text-sm text-gray-500">No recommendations yet.</p>
-            )}
-          </div>
-        </section>
-
-        {/* Top Influencers */}
-        <section className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold">Top Influencers</h2>
-            <Link href="/leaderboard" className="text-xs text-indigo-400 flex items-center gap-1 hover:text-indigo-300">
-              Full leaderboard <ArrowRight className="w-3 h-3" />
-            </Link>
-          </div>
-          <div className="space-y-3">
-            {leaderData?.influencers.slice(0, 5).map((inf, i) => (
-              <Link
-                key={inf.id}
-                href={`/leaderboard/${inf.id}`}
-                className="flex items-center gap-3 hover:bg-gray-800 rounded-lg p-1.5 -mx-1.5 transition-colors"
-              >
-                <span className="w-5 text-center text-xs text-gray-500 font-mono">{i + 1}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-sm truncate">@{inf.handle}</span>
-                    <PlatformBadge platform={inf.platform} />
-                  </div>
-                  <div className="flex gap-3 text-xs text-gray-400 mt-0.5">
-                    <span>Elo {Math.round(inf.elo_score ?? 1000)}</span>
-                    <span>{pct(inf.accuracy_rate)} acc.</span>
-                    {inf.avg_clv != null && (
-                      <span className={inf.avg_clv >= 0 ? "text-emerald-400" : "text-red-400"}>
-                        CLV {inf.avg_clv >= 0 ? "+" : ""}{(inf.avg_clv * 100).toFixed(1)}%
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className={`text-sm font-bold ${(inf.pick_streak ?? 0) > 0 ? "text-emerald-400" : "text-red-400"}`}>
-                  {(inf.pick_streak ?? 0) > 0 ? "+" : ""}{inf.pick_streak}
-                </div>
-              </Link>
-            ))}
-          </div>
-        </section>
-      </div>
-
-      {/* Alt bets + MLB picks */}
-      {((propData?.picks.length ?? 0) > 0 || (mlbPickData?.picks.length ?? 0) > 0) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {(propData?.picks.length ?? 0) > 0 && (
-            <section className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="font-semibold flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-cyan-400" />
-                  Recent Alt Bets
-                </h2>
-                <Link href="/props" className="text-xs text-indigo-400 flex items-center gap-1 hover:text-indigo-300">
-                  All props <ArrowRight className="w-3 h-3" />
-                </Link>
-              </div>
-              <div className="space-y-2">
-                {propData!.picks.slice(0, 5).map((p) => (
-                  <div key={p.id} className="flex items-center gap-2 bg-gray-800/50 rounded-lg p-2.5">
-                    <BetTypeBadge betType={p.bet_type} betLine={p.bet_line} size="sm" />
-                    <OutcomeBadge outcome={p.outcome} />
-                    <span className="text-sm text-indigo-300 truncate flex-1">{formatPickDisplay(p)}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-          {(mlbPickData?.picks.length ?? 0) > 0 && (
-            <section className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="font-semibold">Recent MLB Picks</h2>
-                <Link href="/mlb" className="text-xs text-indigo-400 flex items-center gap-1 hover:text-indigo-300">
-                  MLB hub <ArrowRight className="w-3 h-3" />
-                </Link>
-              </div>
-              <div className="space-y-2">
-                {mlbPickData!.picks.slice(0, 5).map((p) => (
-                  <div key={p.id} className="flex items-center gap-2 bg-gray-800/50 rounded-lg p-2.5">
-                    {p.bet_type && p.bet_type !== "moneyline" && (
-                      <BetTypeBadge betType={p.bet_type} betLine={p.bet_line} size="sm" />
-                    )}
-                    <span className="text-sm text-indigo-300 truncate flex-1">
-                      {p.bet_type && p.bet_type !== "moneyline" ? formatPickDisplay(p) : p.predicted_winner}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-        </div>
-      )}
-
-      {/* Polymarket open bets mini-table */}
-      {(autobetData?.bets?.filter(b => b.status === "open").length ?? 0) > 0 && (
-        <section className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold flex items-center gap-2">
-              <Target className="w-4 h-4 text-violet-400" />
-              Active Polymarket Bets
-              {ab?.mode === "paper" && (
-                <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded-full">paper</span>
-              )}
-            </h2>
-            <Link href="/trading" className="text-xs text-indigo-400 flex items-center gap-1 hover:text-indigo-300">
-              Full trading hub <ArrowRight className="w-3 h-3" />
-            </Link>
-          </div>
+          
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
-                  <th className="pb-2 font-medium">Market</th>
-                  <th className="pb-2 font-medium">Pick</th>
-                  <th className="pb-2 font-medium text-right">Edge</th>
-                  <th className="pb-2 font-medium text-right">Stake</th>
-                  <th className="pb-2 font-medium text-right">Model</th>
-                  <th className="pb-2 font-medium text-right">Mkt</th>
+                <tr className="text-left text-xs uppercase tracking-wider text-gray-500 border-b border-gray-800/50">
+                  <th className="pb-3 font-semibold px-2">Matchup</th>
+                  <th className="pb-3 font-semibold text-center">Crowd Consensus</th>
+                  <th className="pb-3 font-semibold text-center">MLB Quant Model</th>
+                  <th className="pb-3 font-semibold text-center">Final Blended Pick</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-800">
-                {autobetData!.bets.filter(b => b.status === "open").slice(0, 5).map((b, i) => (
-                  <tr key={i} className="hover:bg-gray-800/50">
-                    <td className="py-2.5 max-w-[200px] truncate text-gray-300 text-xs">{b.question}</td>
-                    <td className="py-2.5 font-medium text-indigo-300">{b.outcome_name}</td>
-                    <td className="py-2.5 text-right">
-                      <span className={b.edge >= 0.07 ? "text-emerald-400" : "text-yellow-400"}>
-                        +{(b.edge * 100).toFixed(1)}%
-                      </span>
-                    </td>
-                    <td className="py-2.5 text-right font-mono text-gray-300">${b.stake.toFixed(2)}</td>
-                    <td className="py-2.5 text-right font-mono text-xs text-gray-400">{Math.round(b.model_prob * 100)}%</td>
-                    <td className="py-2.5 text-right font-mono text-xs text-gray-400">{Math.round(b.market_price * 100)}%</td>
-                  </tr>
-                ))}
+              <tbody className="divide-y divide-gray-800/30">
+                {matchesData?.matches.slice(0, 10).map((m) => {
+                  const cp = m.consensus_picks?.[0];
+                  // Extract ML Prediction for the match winner (not outs)
+                  const mlPreds = m.model_predictions?.filter(p => p.source === "sports_ml" && !p.outcome.includes(" ")) || [];
+                  const ml = mlPreds.length > 0 ? mlPreds[0] : null;
+                  
+                  return (
+                    <tr key={m.id} className="hover:bg-indigo-900/10 transition-colors group">
+                      <td className="py-4 px-2">
+                        <div className="font-semibold text-gray-200">{m.home_team}</div>
+                        <div className="text-gray-500 text-xs mt-0.5">vs {m.away_team}</div>
+                      </td>
+                      
+                      {/* Crowd */}
+                      <td className="py-4 text-center border-l border-gray-800/30 px-2">
+                        {cp ? (
+                          <div>
+                             <span className="text-gray-300 font-medium">{cp.predicted_winner}</span>
+                             <div className="text-[10px] text-gray-500 mt-1">{Math.round((cp.raw_confidence || cp.confidence) * 100)}% Confidence ({cp.total_votes} votes)</div>
+                          </div>
+                        ) : <span className="text-gray-700">—</span>}
+                      </td>
+
+                      {/* ML Model */}
+                      <td className="py-4 text-center border-l border-gray-800/30 px-2 bg-indigo-950/10">
+                        {ml ? (
+                          <div>
+                            <span className="text-indigo-400 font-bold drop-shadow-[0_0_8px_rgba(99,102,241,0.5)]">{ml.outcome}</span>
+                            <div className="text-[10px] text-indigo-300/70 mt-1">{Math.round(ml.prob * 100)}% Probability</div>
+                          </div>
+                        ) : <span className="text-gray-700 text-xs">Awaiting Simulation</span>}
+                      </td>
+                      
+                      {/* Blended / Final */}
+                      <td className="py-4 text-center border-l border-gray-800/30 px-2">
+                        {cp ? (
+                          <div>
+                             <span className={`font-extrabold ${ml && cp.predicted_winner === ml.outcome ? 'text-emerald-400' : 'text-gray-100'}`}>
+                               {cp.predicted_winner}
+                             </span>
+                             <div className="w-full bg-gray-800 h-1.5 rounded-full mt-2 overflow-hidden flex max-w-[80px] mx-auto">
+                               <div className="bg-gradient-to-r from-indigo-500 to-purple-500 h-full" style={{ width: `${Math.round(cp.confidence * 100)}%` }} />
+                             </div>
+                             {ml && cp.predicted_winner !== ml.outcome && (
+                               <div className="text-[9px] text-yellow-500 mt-1 uppercase tracking-wider font-bold">Model Conflict</div>
+                             )}
+                          </div>
+                        ) : <span className="text-gray-700">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+            {!matchesData?.matches.length && (
+              <div className="py-12 flex flex-col items-center justify-center text-gray-500">
+                <Radio className="w-8 h-8 mb-3 opacity-20" />
+                <p>No upcoming matches pipeline syncs detected.</p>
+              </div>
+            )}
           </div>
         </section>
-      )}
 
-      {/* Upcoming matches */}
-      <section className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="font-semibold">Upcoming WC Matches</h2>
-          <Link href="/matches" className="text-xs text-indigo-400 flex items-center gap-1 hover:text-indigo-300">
-            All matches <ArrowRight className="w-3 h-3" />
-          </Link>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
-                <th className="pb-2 font-medium">Match</th>
-                <th className="pb-2 font-medium">Date</th>
-                <th className="pb-2 font-medium">Consensus</th>
-                <th className="pb-2 font-medium">Confidence</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-800">
-              {matchesData?.matches.slice(0, 8).map((m) => {
-                const cp = m.consensus_picks?.[0];
-                return (
-                  <tr key={m.id} className="hover:bg-gray-800/50 transition-colors">
-                    <td className="py-2.5 font-medium">{m.home_team} vs {m.away_team}</td>
-                    <td className="py-2.5 text-gray-400 text-xs">
-                      {new Date(m.scheduled_at).toLocaleDateString("en-US", {
-                        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-                      })}
-                    </td>
-                    <td className="py-2.5">
-                      {cp ? <span className="text-indigo-300 font-medium">{cp.predicted_winner}</span>
-                           : <span className="text-gray-600">—</span>}
-                    </td>
-                    <td className="py-2.5 w-32">
-                      {cp ? <ConfidenceBar value={cp.confidence} /> : null}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {!matchesData?.matches.length && (
-            <p className="text-sm text-gray-500 py-4 text-center">No upcoming matches synced yet.</p>
+        {/* Right Sidebar */}
+        <div className="space-y-6 flex flex-col">
+          {/* Top Influencers */}
+          <section className="glass-panel p-5 flex-1">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-semibold text-gray-200">Alpha Extractors</h2>
+              <Link href="/leaderboard" className="text-[10px] uppercase tracking-wider text-indigo-400 hover:text-indigo-300 transition-colors">
+                Full Leaderboard
+              </Link>
+            </div>
+            <div className="space-y-4">
+              {leaderData?.influencers.slice(0, 5).map((inf, i) => (
+                <Link key={inf.id} href={`/leaderboard/${inf.id}`} className="flex items-center gap-3 p-2 -mx-2 rounded-xl hover:bg-white/5 transition-all group">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i === 0 ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' : i === 1 ? 'bg-gray-300/20 text-gray-300 border border-gray-400/30' : i === 2 ? 'bg-amber-700/20 text-amber-500 border border-amber-700/30' : 'bg-gray-800 text-gray-500'}`}>
+                    {i + 1}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-sm text-gray-200 truncate group-hover:text-white transition-colors">@{inf.handle}</span>
+                      <PlatformBadge platform={inf.platform} />
+                    </div>
+                    <div className="flex justify-between items-center mt-1">
+                       <span className="text-xs font-mono text-indigo-300 bg-indigo-950/50 px-1.5 py-0.5 rounded border border-indigo-500/20">Elo {Math.round(inf.elo_score ?? 1000)}</span>
+                       {inf.avg_clv != null && (
+                         <span className={`text-[10px] font-bold ${inf.avg_clv >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                           {inf.avg_clv >= 0 ? "+" : ""}{(inf.avg_clv * 100).toFixed(1)}% CLV
+                         </span>
+                       )}
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </section>
+
+          {/* Active Polymarket Trading */}
+          {ab && (
+            <section className="glass-panel p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-semibold text-gray-200 flex items-center gap-2">
+                  <Target className="w-4 h-4 text-pink-500" /> Active Positions
+                </h2>
+              </div>
+              <div className="space-y-3">
+                {autobetData!.bets.filter(b => b.status === "open").slice(0, 3).map((b, i) => (
+                  <div key={i} className="bg-black/30 border border-gray-800/50 rounded-lg p-3">
+                    <div className="text-xs text-gray-400 truncate mb-1">{b.question}</div>
+                    <div className="flex items-center justify-between">
+                       <span className="font-semibold text-sm text-white">{b.outcome_name}</span>
+                       <span className="font-mono text-sm text-emerald-400">+{(b.edge * 100).toFixed(1)}%</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-800/50">
+                       <span className="text-[10px] text-gray-500">Stake: <span className="text-gray-300 font-mono">${b.stake.toFixed(2)}</span></span>
+                       <span className="text-[10px] text-gray-500">Mkt: {Math.round(b.market_price * 100)}%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
           )}
         </div>
-      </section>
+      </div>
+      
     </div>
   );
 }

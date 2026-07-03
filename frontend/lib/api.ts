@@ -33,6 +33,7 @@ export interface Influencer {
   correct_picks: number;
   pick_streak: number;
   consensus_score: number;
+  wilson_score?: number;
   avg_clv?: number;
   elo_by_sport?: Record<string, number>;
   avg_clv_by_sport?: Record<string, number>;
@@ -55,6 +56,7 @@ export interface Match {
   tournament: string;
   sport?: Sport;
   consensus_picks?: ConsensusPick[];
+  model_predictions?: { source: string; outcome: string; prob: number }[];
 }
 
 export interface Pick {

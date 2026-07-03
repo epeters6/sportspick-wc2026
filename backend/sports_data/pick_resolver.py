@@ -134,6 +134,8 @@ def resolve_all_pending_picks() -> int:
 
     if resolved:
         logger.info(f"Resolved {resolved} picks ({voided} void)")
+        from backend.trading.edge_model import clear_calibration_cache
+        clear_calibration_cache()
 
     resolved += _resolve_unlinked_player_picks(db)
     return resolved

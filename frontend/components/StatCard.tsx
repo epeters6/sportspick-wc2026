@@ -15,7 +15,7 @@ const accent = {
 
 export default function StatCard({ label, value, sub, accent: a = "blue" }: StatCardProps) {
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+    <div className="glass-card hover-glow p-5 flex flex-col justify-between h-full">
       <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">{label}</p>
       <p className={`text-3xl font-bold mt-1 ${accent[a]}`}>{value}</p>
       {sub && <p className="text-xs text-gray-500 mt-1">{sub}</p>}

@@ -74,13 +74,15 @@ def _parse_line(bet_line: str | None, default: float = 2.5) -> float:
         return default
 
 
-def _ou_result(actual: float, line: float, direction: str) -> bool:
+def _ou_grade(actual: float, line: float, direction: str) -> str:
     d = (direction or "").lower()
+    if actual == line:
+        return "void"
     if d == "over":
-        return actual > line
+        return "correct" if actual > line else "incorrect"
     if d == "under":
-        return actual < line
-    return False
+        return "correct" if actual < line else "incorrect"
+    return "incorrect"
 
 
 def _team_stats(stats: dict, side: str) -> dict:
@@ -138,11 +140,11 @@ def grade_pick(
     # ── Match totals ───────────────────────────────────────────────────────
     if bt == "total_goals":
         total = (home_score or 0) + (away_score or 0)
-        return "correct" if _ou_result(total, _parse_line(bet_line), pw) else "incorrect"
+        return _ou_grade(total, _parse_line(bet_line), pw)
 
     if bt == "total_runs":
         total = (home_score or 0) + (away_score or 0)
-        return "correct" if _ou_result(total, _parse_line(bet_line, 8.5), pw) else "incorrect"
+        return _ou_grade(total, _parse_line(bet_line, 8.5), pw)
 
     if bt == "btts":
         both = (home_score or 0) > 0 and (away_score or 0) > 0
@@ -169,20 +171,20 @@ def grade_pick(
             return None
         if "goal" in bt or bt == "first_half_goals":
             total = hh + ha
-            return "correct" if _ou_result(total, _parse_line(bet_line, 1.5), pw) else "incorrect"
+            return _ou_grade(total, _parse_line(bet_line, 1.5), pw)
         return "void"
 
     if bt == "first_five_runs" or bt.startswith("first_five_"):
         if f5.get("total") is None:
             return None
-        return "correct" if _ou_result(f5["total"], _parse_line(bet_line, 4.5), pw) else "incorrect"
+        return _ou_grade(f5["total"], _parse_line(bet_line, 4.5), pw)
 
     # ── Match-level props (corners, cards, shots sum) ──────────────────────
     if bt == "corners":
         if team_block.get("home", {}).get("corners") is None:
             return None
         total = team_block["home"].get("corners", 0) + team_block["away"].get("corners", 0)
-        return "correct" if _ou_result(total, _parse_line(bet_line), pw) else "incorrect"
+        return _ou_grade(total, _parse_line(bet_line), pw)
 
     if bt == "cards":
         if team_block.get("home", {}).get("yellow_cards") is None:
@@ -191,13 +193,13 @@ def grade_pick(
             team_block[s].get("yellow_cards", 0) + team_block[s].get("red_cards", 0)
             for s in ("home", "away")
         )
-        return "correct" if _ou_result(total, _parse_line(bet_line), pw) else "incorrect"
+        return _ou_grade(total, _parse_line(bet_line), pw)
 
     if bt == "shots":
         if team_block.get("home", {}).get("shots") is None:
             return None
         total = team_block["home"].get("shots", 0) + team_block["away"].get("shots", 0)
-        return "correct" if _ou_result(total, _parse_line(bet_line), pw) else "incorrect"
+        return _ou_grade(total, _parse_line(bet_line), pw)
 
     # ── Team props ─────────────────────────────────────────────────────────
     if bt.startswith("team_"):
@@ -211,13 +213,13 @@ def grade_pick(
             val = ts.get("goals")
             if val is None:
                 val = home_score if side == "home" else away_score
-            return "correct" if _ou_result(val or 0, line, pw) else "incorrect"
+            return _ou_grade(val or 0, line, pw)
 
         if bt == "team_total_runs":
             val = ts.get("runs")
             if val is None:
                 val = home_score if side == "home" else away_score
-            return "correct" if _ou_result(val or 0, line, pw) else "incorrect"
+            return _ou_grade(val or 0, line, pw)
 
         stat_key = {
             "team_shots": "shots",
@@ -226,7 +228,7 @@ def grade_pick(
             "team_strikeouts": "strikeouts",
         }.get(bt)
         if stat_key and ts.get(stat_key) is not None:
-            return "correct" if _ou_result(ts[stat_key], line, pw) else "incorrect"
+            return _ou_grade(ts[stat_key], line, pw)
         return None
 
     # ── Player props ───────────────────────────────────────────────────────
@@ -277,9 +279,9 @@ def grade_pick(
             return "incorrect"
         if stat_key == "goals" and bt == "player_goals":
             line = _parse_line(bet_line, 0.5)
-            return "correct" if _ou_result(val, line, pw) else "incorrect"
+            return _ou_grade(val, line, pw)
         line = _parse_line(bet_line, 0.5)
-        return "correct" if _ou_result(val, line, pw) else "incorrect"
+        return _ou_grade(val, line, pw)
 
     if bt == "spread":
         return "void"

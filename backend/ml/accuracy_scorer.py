@@ -25,7 +25,7 @@ def get_leaderboard(
         .select(
             "id, platform, handle, display_name, profile_url, avatar_url, "
             "follower_count, elo_score, accuracy_rate, total_picks, correct_picks, "
-            "pick_streak, consensus_score, last_scraped_at"
+            "pick_streak, consensus_score, wilson_score, last_scraped_at"
         )
         .eq("is_active", True)
         .gte("total_picks", min_picks)

@@ -162,7 +162,7 @@ def update_all_elo_scores() -> int:
                 ),
                 "total_picks": headline_total,
                 "correct_picks": headline_correct,
-                "consensus_score": headline_wlb,
+                "wilson_score": headline_wlb,
             }
         ).eq("id", iid).execute()
 

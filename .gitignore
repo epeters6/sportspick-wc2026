@@ -39,6 +39,8 @@ twitter_cookies.json
 *.log
 logs/
 pavlov/_state/
+scratch/
+ml_sync_log.txt
 
 # OS
 .DS_Store

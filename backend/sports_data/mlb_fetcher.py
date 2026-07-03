@@ -101,8 +101,9 @@ def canonicalise_mlb_team(raw: str) -> str | None:
     raw = raw.strip().lower()
     if raw in MLB_TEAM_ALIASES:
         return MLB_TEAM_ALIASES[raw]
+    import re
     for alias, canonical in MLB_TEAM_ALIASES.items():
-        if alias in raw or raw in alias:
+        if re.search(rf"\b{re.escape(alias)}\b", raw):
             return canonical
     return None
 

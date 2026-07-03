@@ -155,6 +155,11 @@ def _load_calibration_curve(sport: str = "") -> tuple[
     return _build_curves_from_rows(ml_rows)
 
 
+def clear_calibration_cache() -> None:
+    """Invalidate the calibration curves so they are rebuilt with new resolved picks."""
+    _load_calibration_curve.cache_clear()
+
+
 def calibrate_confidence(
     raw_confidence: float,
     market_price: float | None = None,
