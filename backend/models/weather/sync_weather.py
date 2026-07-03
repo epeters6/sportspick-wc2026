@@ -23,56 +23,40 @@ async def sync_weather_predictions():
     db = get_db()
     client = PolymarketClient()
     
-    # 1. Fetch active weather markets from Polymarket
-    # Polymarket uses tags or search terms for weather.
-    markets = []
+    # 1. Fetch active weather markets
     try:
-        markets = await client.fetch_markets(search="temperature")
-        markets.extend(await client.fetch_markets(search="weather"))
+        # Import pavlov modules dynamically to get access to its parser
+        import sys
+        import os
+        pavlov_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../pavlov"))
+        if pavlov_path not in sys.path:
+            sys.path.insert(0, pavlov_path)
+            
+        from polymarket import poly_client
+        
+        # Override config so poly_client can run even if credentials are not in env
+        # (It throws if they are missing, but for testing we bypass or use .env)
+        markets = poly_client.get_weather_markets()
+        logger.info(f"Fetched {len(markets)} pre-parsed Polymarket weather markets via poly_client.")
+        kalshi_format_markets = markets
     except Exception as e:
         logger.error(f"Failed to fetch weather markets: {e}")
         return
-
-    # Deduplicate markets by ID
-    unique_markets = {m.market_id: m for m in markets}.values()
-    
-    logger.info(f"Found {len(unique_markets)} weather-related markets on Polymarket.")
-    
-    # We will need to map Polymarket markets into the format the signal engine expects
-    # The signal engine parse_market expects a dict with 'title', 'close_time', 'yes_ask', 'yes_bid', etc.
-    kalshi_format_markets = []
-    for m in unique_markets:
-        # Polymarket markets can have multiple outcomes, we only want binary YES/NO for temp
-        if len(m.outcomes) != 2:
-            continue
-            
-        yes_outcome = next((o for o in m.outcomes if o.name.lower() == "yes"), None)
-        no_outcome = next((o for o in m.outcomes if o.name.lower() == "no"), None)
-        
-        if not yes_outcome or not no_outcome:
-            continue
-
-        yes_ask = (yes_outcome.best_ask or yes_outcome.mid_price or 0.5) * 100
-        yes_bid = (yes_outcome.best_bid or yes_outcome.mid_price or 0.5) * 100
-
-        k_mkt = {
-            "ticker": m.market_id,
-            "title": m.question,
-            "close_time": m.end_date_iso, # Need to map to correct field
-            "yes_ask": yes_ask,
-            "yes_bid": yes_bid,
-            "open_interest": m.liquidity,
-            "venue": "poly_us"
-        }
-        kalshi_format_markets.append(k_mkt)
         
     bankroll = 1000.0 # Arbitrary for edge calculation sizing
     
-    # Run the signal engine to compute edge
-    signals = signal_engine.get_all_signals(kalshi_format_markets, bankroll)
-    
+    # Run the signal engine to compute edge for ALL markets (ignoring trading thresholds and already-traded filters)
+    signals = []
+    for m in kalshi_format_markets:
+        try:
+            sig = signal_engine.calculate_edge(m, bankroll)
+            if sig:
+                signals.append(sig)
+        except Exception as e:
+            logger.warning(f"Failed to calculate edge for {m.get('ticker')}: {e}")
+            
     if not signals:
-        logger.info("No actionable weather signals found.")
+        logger.info("No parseable weather markets found.")
         return
         
     logger.info(f"Generated {len(signals)} weather predictions. Writing to model_predictions...")
