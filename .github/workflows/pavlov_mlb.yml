@@ -31,6 +31,11 @@ jobs:
       CHECK_INTERVAL_MINUTES: "30"
       POLY_MLB_AUTO_BET_ENABLED: "0"
       POLY_MLB_INGAME_ENABLED: "0"
+      AUTO_BET_ENABLED: "0"
+      POLY_AUTO_BET_ENABLED: "0"
+      KELLY_FRACTION: "0.25"
+      DISCORD_BOT_TOKEN: "dummy_token"
+      DISCORD_CHANNEL_ID: "0"
 
     steps:
       - uses: actions/checkout@v4
