@@ -1,0 +1,32 @@
+# Secrets — never commit these
+.env
+data/kalshi_private_key.pem
+
+# Runtime caches — regenerated on start
+data/market_cache.json
+data/forecast_cache.json
+data/ensemble_cache.json
+data/metar_cache.json
+data/owm_cache.json
+data/nws_cache.json
+data/pending_signals.json
+data_poly/
+
+# Logs — persisted by the platform, not git
+logs/
+logs_poly/
+
+# MLB sub-app runtime caches (see pavlov-mlb-bot/)
+pavlov-mlb-bot/data/games_cache.json
+pavlov-mlb-bot/data/forecast_cache.json
+pavlov-mlb-bot/data/umpire_cache.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/

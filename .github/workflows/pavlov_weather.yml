@@ -1,0 +1,50 @@
+name: Pavlov Weather
+
+on:
+  schedule:
+    # Every 30 minutes — Kalshi + Polymarket US weather scan
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  weather:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      KALSHI_API_KEY: ${{ secrets.KALSHI_API_KEY }}
+      KALSHI_PRIVATE_KEY_B64: ${{ secrets.KALSHI_PRIVATE_KEY_B64 }}
+      POLY_KEY_ID: ${{ secrets.POLY_KEY_ID || secrets.POLYMARKET_API_KEY }}
+      POLY_SECRET_KEY: ${{ secrets.POLY_SECRET_KEY || secrets.POLYMARKET_API_SECRET }}
+      POLYMARKET_KEY_ID: ${{ secrets.POLYMARKET_KEY_ID }}
+      POLYMARKET_SECRET_KEY: ${{ secrets.POLYMARKET_SECRET_KEY }}
+      OWM_API_KEY: ${{ secrets.OWM_API_KEY }}
+      MIN_EDGE_THRESHOLD: "0.05"
+      CHECK_INTERVAL_MINUTES: "30"
+      AUTO_BET_ENABLED: "0"
+      POLY_AUTO_BET_ENABLED: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            pavlov/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r pavlov/requirements.txt
+
+      - name: Validate Supabase
+        run: python scripts/ci_check_env.py
+
+      - name: Pavlov weather cycle
+        run: python scripts/run_pavlov_weather.py

@@ -44,3 +44,9 @@ pytz
 # Polymarket autobet (live execution only — paper mode needs no extra deps)
 # Uncomment to enable real order placement on the Polygon CLOB:
 # py-clob-client
+
+# Pavlov weather + MLB bots (GitHub Actions)
+requests
+discord.py
+cryptography
+polymarket-us

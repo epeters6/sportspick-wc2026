@@ -1,0 +1,7 @@
+requests
+discord.py
+python-dotenv
+schedule
+aiohttp
+cryptography
+polymarket-us

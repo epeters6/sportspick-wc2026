@@ -38,6 +38,7 @@ twitter_cookies.json
 # Logs
 *.log
 logs/
+pavlov/_state/
 
 # OS
 .DS_Store
