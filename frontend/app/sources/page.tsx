@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
@@ -11,6 +11,14 @@ import { Users, ArrowRight, Radio } from "lucide-react";
 import { SYNC_SOURCES, fmtFollowers } from "@/lib/platforms";
 
 export default function SourcesPage() {
+  return (
+    <Suspense fallback={<div className="h-48 glass-card animate-pulse" />}>
+      <SourcesContent />
+    </Suspense>
+  );
+}
+
+function SourcesContent() {
   const searchParams = useSearchParams();
   const platformParam = searchParams.get("platform");
   const [activeOverride, setActiveOverride] = useState<string | null>(null);

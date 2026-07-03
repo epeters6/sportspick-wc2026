@@ -153,7 +153,7 @@ def list_matches(
             "*, consensus_picks("
             "  id, predicted_winner, confidence, total_votes, pick_count,"
             "  home_probability, draw_probability, away_probability"
-            "), model_predictions(source, outcome, prob)"
+            ")"
         )
         .order("scheduled_at")
         .limit(limit)
@@ -165,6 +165,29 @@ def list_matches(
     if sport:
         query = query.eq("sport", sport)
     rows = query.execute().data or []
+
+    if rows:
+        match_ids = [r["id"] for r in rows]
+        preds = (
+            db.table("model_predictions")
+            .select("event_key, source, outcome, prob")
+            .in_("event_key", match_ids)
+            .execute()
+            .data or []
+        )
+        by_match: dict[str, list] = {}
+        for p in preds:
+            key = p.get("event_key")
+            if not key:
+                continue
+            by_match.setdefault(key, []).append({
+                "source": p.get("source"),
+                "outcome": p.get("outcome"),
+                "prob": p.get("prob"),
+            })
+        for row in rows:
+            row["model_predictions"] = by_match.get(row["id"], [])
+
     return {"matches": rows, "total": len(rows)}
 
 

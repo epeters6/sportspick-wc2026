@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
@@ -18,7 +18,21 @@ const SORT_OPTIONS = [
 
 function pct(n: number) { return `${(n * 100).toFixed(1)}%`; }
 
-export default function Leaderboard() {
+export default function LeaderboardPage() {
+  return (
+    <Suspense fallback={
+      <div className="space-y-4">
+        {[...Array(5)].map((_, i) => (
+          <div key={i} className="h-16 bg-gray-900/50 border border-gray-800 rounded-xl animate-pulse" />
+        ))}
+      </div>
+    }>
+      <Leaderboard />
+    </Suspense>
+  );
+}
+
+function Leaderboard() {
   const searchParams = useSearchParams();
   const platformFromUrl = searchParams.get("platform");
   const [platformOverride, setPlatformOverride] = useState<string | null>(null);

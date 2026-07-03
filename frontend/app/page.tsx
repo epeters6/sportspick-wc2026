@@ -39,7 +39,7 @@ function VibrantStatCard({ label, value, sub, icon: Icon, color }: { label: stri
 }
 
 export default function Dashboard() {
-  const { data: overview, isLoading: ovLoading } = useQuery({
+  const { data: overview, isLoading: ovLoading, isError: ovError } = useQuery({
     queryKey: ["overview"], queryFn: fetchOverview, refetchInterval: 60_000,
   });
   const { data: leaderData } = useQuery({
@@ -93,7 +93,13 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         {ovLoading
           ? [...Array(4)].map((_, i) => <div key={i} className="glass-card h-32 animate-pulse" />)
-          : overview && <>
+          : ovError || !overview
+          ? [...Array(4)].map((_, i) => (
+              <div key={i} className="glass-card h-32 flex items-center justify-center text-gray-500 text-sm">
+                {i === 0 ? "API unavailable — check NEXT_PUBLIC_API_URL" : ""}
+              </div>
+            ))
+          : <>
               <VibrantStatCard label="Tracked Picks" value={fmt(overview.total_picks)} sub={`${fmt(overview.resolved_picks)} Graded`} icon={Layers} color="indigo" />
               <VibrantStatCard label="Crowd Accuracy" value={pct(overview.overall_accuracy)} sub={`${fmt(overview.correct_picks)} Correct Winners`} icon={Target} color="emerald" />
               {calData ? (
