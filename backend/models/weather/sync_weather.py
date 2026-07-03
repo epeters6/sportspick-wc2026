@@ -16,6 +16,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.
 
 # Bypass Pavlov's required env vars since we aren't trading via Kalshi here
 os.environ["PAVLOV_BYPASS_CONFIG"] = "1"
+from backend.config import get_settings
+s = get_settings()
+os.environ["KELLY_FRACTION"] = str(s.polymarket_kelly_multiplier)
 
 from pipeline import signal_engine, owm_client
 
@@ -108,11 +111,19 @@ async def sync_weather_predictions():
 
         # --- Autobet Integration ---
         # If the signal is NOT suppressed, it means the native Pavlov sizing logic deemed it a valid bet!
-        if not sig.get("suppressed_reason") and sig.get("edge", 0) > 0 and sig.get("suggested_stake", 0) > 0:
-            stake = sig["suggested_stake"]
+        logger.info(f"Checking sig: {sig['ticker']} | edge={sig.get('edge')} | kelly_dollars={sig.get('kelly_dollars')} | suppressed={sig.get('suppressed_reason')}")
+        if not sig.get("suppressed_reason") and sig.get("edge", 0) > 0 and sig.get("kelly_dollars", 0) > 0:
+            stake = sig["kelly_dollars"]
             market_id = sig["ticker"]
             outcome_name = "yes"
-            token_id = sig.get("yes_token") or "unknown"
+            token_id = m.get("yes_token", "unknown")
+            # Fallback for Polymarket format if it's a dict
+            if token_id == "unknown" and "outcomes" in m:
+                for out in m.get("outcomes", []):
+                    if isinstance(out, dict) and out.get("name", "").lower() == "yes":
+                        token_id = out.get("token_id", "unknown")
+                        break
+            
             shares = round(stake / sig["implied_prob"], 2) if sig["implied_prob"] > 0 else 0
             
             record = {
