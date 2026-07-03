@@ -172,11 +172,15 @@ def get_hourly_forecast(city: str) -> list[dict]:
     url = f"{_BASE}/gridpoints/{office}/{grid_x},{grid_y}/forecast/hourly"
 
     logger.info("NWSClient: fetching hourly forecast for %s …", city)
-    data = _http_get(url)
-    raw_periods: list[dict] = (
-        data.get("properties", {}).get("periods", [])
-    )
-    periods = [_parse_period(p) for p in raw_periods]
+    try:
+        data = _http_get(url)
+        raw_periods: list[dict] = (
+            data.get("properties", {}).get("periods", [])
+        )
+        periods = [_parse_period(p) for p in raw_periods]
+    except Exception as exc:
+        logger.warning("NWSClient: fetch failed for %s - %s", city, exc)
+        periods = []
 
     cache[key] = {
         "fetched_at": datetime.now(timezone.utc).isoformat(),

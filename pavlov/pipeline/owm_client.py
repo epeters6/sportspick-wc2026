@@ -101,7 +101,7 @@ def _fetch_hourly(city: str) -> list[dict] | None:
         data = resp.json()
     except Exception as exc:
         logger.warning("OWMClient: fetch failed for %s – %s", city, exc)
-        return None
+        data = {}
 
     periods = [
         {

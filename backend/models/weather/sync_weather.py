@@ -7,7 +7,16 @@ import traceback
 
 from backend.db import get_db
 from backend.trading.polymarket_client import PolymarketClient
-from backend.models.weather import signal_engine, owm_client
+
+import sys
+import os
+# Add the pavlov directory to the path so we can import the pipeline modules directly
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../pavlov")))
+
+# Bypass Pavlov's required env vars since we aren't trading via Kalshi here
+os.environ["PAVLOV_BYPASS_CONFIG"] = "1"
+
+from pipeline import signal_engine, owm_client
 
 async def sync_weather_predictions():
     logger.info("Starting weather prediction sync...")

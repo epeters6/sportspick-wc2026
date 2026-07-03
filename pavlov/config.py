@@ -222,12 +222,17 @@ def _load_config() -> dict:
             config[key] = _cast(key, raw, meta["type"])
 
     if missing:
-        raise EnvironmentError(
-            "pavlov-weather-bot: the following required environment variables "
-            "are missing or empty.\n"
-            "Copy .env.example to .env and fill in the values:\n\n"
-            + "\n".join(missing)
-        )
+        if os.environ.get("PAVLOV_BYPASS_CONFIG", "0") == "1":
+            for k in _REQUIRED:
+                if k not in config:
+                    config[k] = "" if _REQUIRED[k]["type"] == str else 0
+        else:
+            raise EnvironmentError(
+                "pavlov-weather-bot: the following required environment variables "
+                "are missing or empty.\n"
+                "Copy .env.example to .env and fill in the values:\n\n"
+                + "\n".join(missing)
+            )
 
     # Load optional keys (use default if not set).
     for key, meta in _OPTIONAL.items():

@@ -286,6 +286,11 @@ def _fetch_members(
 
     if total_members == 0:
         logger.warning("EnsembleClient: no members fetched for %s %s", city, metric)
+        cache[key] = {
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "by_date":    {},
+        }
+        _save_cache(cache)
         return None
 
     cache[key] = {
