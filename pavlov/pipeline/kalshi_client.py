@@ -178,6 +178,9 @@ def _load_private_key() -> RSAPrivateKey:
 
     Handles bare-base64 files, CRLF line endings, and UTF-8 BOM.
     """
+    if os.environ.get("PAVLOV_BYPASS_CONFIG", "0") == "1":
+        return None  # type: ignore
+
     # 1. Try the env-var route first (cloud-friendly).
     b64_env = os.environ.get("KALSHI_PRIVATE_KEY_B64", "").strip()
     if b64_env:
