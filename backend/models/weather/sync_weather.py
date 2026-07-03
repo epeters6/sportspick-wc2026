@@ -33,9 +33,14 @@ async def sync_weather_predictions():
             sys.path.insert(0, pavlov_path)
             
         from polymarket import poly_client
-        
-        # Override config so poly_client can run even if credentials are not in env
-        # (It throws if they are missing, but for testing we bypass or use .env)
+        if not poly_client.poly_configured():
+            logger.warning("POLYMARKET_KEY_ID not set. Using dummy keys for public data.")
+            poly_client.poly_configured = lambda: True
+            original_get_client = poly_client.get_client
+            def mock_get_client():
+                from polymarket_us import PolymarketUS
+                return PolymarketUS(key_id="dummy", secret_key="dummy", passphrase="dummy")
+            poly_client.get_client = mock_get_client
         markets = poly_client.get_weather_markets()
         logger.info(f"Fetched {len(markets)} pre-parsed Polymarket weather markets via poly_client.")
         kalshi_format_markets = markets
