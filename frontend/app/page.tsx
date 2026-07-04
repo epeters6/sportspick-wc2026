@@ -179,16 +179,16 @@ export default function Dashboard() {
                 </h2>
               </div>
               <div className="space-y-3">
-                {autobetData!.bets.filter(b => b.status === "open").slice(0, 3).map((b, i) => (
+                {autobetData?.bets?.filter(b => b?.status === "open").slice(0, 3).map((b, i) => (
                   <div key={i} className="bg-black/30 border border-gray-800/50 rounded-lg p-3">
-                    <div className="text-xs text-gray-400 truncate mb-1">{b.question}</div>
+                    <div className="text-xs text-gray-400 truncate mb-1">{b?.question}</div>
                     <div className="flex items-center justify-between">
-                       <span className="font-semibold text-sm text-white">{b.outcome_name}</span>
-                       <span className="font-mono text-sm text-emerald-400">+{(b.edge * 100).toFixed(1)}%</span>
+                       <span className="font-semibold text-sm text-white">{b?.outcome_name}</span>
+                       <span className="font-mono text-sm text-emerald-400">+{(Number(b?.edge || 0) * 100).toFixed(1)}%</span>
                     </div>
                     <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-800/50">
-                       <span className="text-[10px] text-gray-500">Stake: <span className="text-gray-300 font-mono">${b.stake.toFixed(2)}</span></span>
-                       <span className="text-[10px] text-gray-500">Mkt: {Math.round(b.market_price * 100)}%</span>
+                       <span className="text-[10px] text-gray-500">Stake: <span className="text-gray-300 font-mono">${Number(b?.stake || 0).toFixed(2)}</span></span>
+                       <span className="text-[10px] text-gray-500">Mkt: {Math.round(Number(b?.market_price || 0) * 100)}%</span>
                     </div>
                   </div>
                 ))}
