@@ -376,7 +376,7 @@ def sync_politics() -> int:
             "display_name": "Silver Bulletin",
             "platform": "twitter",
             "handle": "NateSilver538",
-            "followers_count": 100000,
+            "follower_count": 100000,
             "elo_score": 1900,
             "last_scraped_at": datetime.now(timezone.utc).isoformat()
         }).execute().data

@@ -101,7 +101,7 @@ class PickswiseScraper:
                     "confidence": confidence,
                     "bet_type": "moneyline",
                     "scraped_at": datetime.now(timezone.utc).isoformat(),
-                    "status": "pending",
+                    "outcome": "pending",
                 },
                 on_conflict="platform,post_id",
             ).execute()
