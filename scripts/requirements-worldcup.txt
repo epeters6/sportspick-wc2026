@@ -12,3 +12,4 @@ tenacity
 youtube-transcript-api
 beautifulsoup4
 lxml
+polymarket-us
