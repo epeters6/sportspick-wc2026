@@ -238,10 +238,15 @@ def _load_config() -> dict:
             cfg[key] = _cast(key, raw, meta["type"])
 
     if missing:
-        raise EnvironmentError(
-            "pavlov-mlb-bot: missing required environment variables:\n"
-            + "\n".join(missing)
-        )
+        if os.environ.get("PAVLOV_BYPASS_CONFIG", "0") == "1":
+            for k in _REQUIRED:
+                if k not in cfg:
+                    cfg[k] = "" if _REQUIRED[k]["type"] == str else 0
+        else:
+            raise EnvironmentError(
+                "pavlov-mlb-bot: missing required environment variables:\n"
+                + "\n".join(missing)
+            )
 
     for key, meta in _OPTIONAL.items():
         raw = os.environ.get(key, "").strip()

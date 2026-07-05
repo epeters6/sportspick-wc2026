@@ -9,6 +9,9 @@ pavlov_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.pa
 if pavlov_path not in sys.path:
     sys.path.insert(0, pavlov_path)
 
+# Bypass Pavlov's required env vars since we are just calculating probabilities
+os.environ["PAVLOV_BYPASS_CONFIG"] = "1"
+
 try:
     from pipeline.mlb_client import get_todays_games
     from pipeline.mlb_signal_engine import calculate_win_probability
