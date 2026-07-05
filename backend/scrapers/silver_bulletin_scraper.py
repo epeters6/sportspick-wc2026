@@ -370,12 +370,12 @@ def sync_politics() -> int:
     db = get_db()
     
     # 1. Ensure Silver Bulletin influencer exists
-    inf_res = db.table("influencers").select("id").eq("display_name", "Silver Bulletin").eq("platform", "politics").execute().data
+    inf_res = db.table("influencers").select("id").eq("display_name", "Silver Bulletin").eq("platform", "twitter").execute().data
     if not inf_res:
         inf_res = db.table("influencers").insert({
             "display_name": "Silver Bulletin",
-            "platform": "politics",
-            "handle": "silverbulletin",
+            "platform": "twitter",
+            "handle": "NateSilver538",
             "followers_count": 100000,
             "elo_score": 1900,
             "last_scraped_at": datetime.now(timezone.utc).isoformat()
