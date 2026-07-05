@@ -162,9 +162,9 @@ async def run_ml_phase() -> dict[str, int]:
         )
 
     print("Running weather prediction model (Phase 1)...")
-    from backend.models.weather.sync_weather import sync_weather_predictions
     try:
-        await sync_weather_predictions()
+        import subprocess
+        subprocess.run([sys.executable, "backend/models/weather/sync_weather.py"], check=True)
     except Exception as exc:
         print(f"  Weather sync failed: {exc}")
 
