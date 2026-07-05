@@ -201,6 +201,10 @@ async def _evaluate_autobet_candidate(
     market_prob = vig_free[idx] if idx < len(vig_free) else outcome.mid_price
     market_price = outcome.best_ask or outcome.mid_price
 
+    # Hard go-live gating: sports longshots are unproven under the new CLV system and need fresh paper trading
+    base_sport = match.get("sport") or "football"
+    sport_label = base_sport
+    
     paper = mode == "paper"
     min_liq = s.polymarket_paper_min_liquidity if paper else s.polymarket_min_liquidity
     edge_res = compute_edge(
@@ -208,11 +212,23 @@ async def _evaluate_autobet_candidate(
         market_price=market_price,
         picker_count=picker_count,
         fee_bps=s.polymarket_fee_bps,
-        sport=match.get("sport"),
+        sport=base_sport,
         paper_mode=paper,
         min_history_override=s.polymarket_paper_min_history if paper else None,
         max_model_weight_override=s.polymarket_paper_max_model_weight if paper else None,
     )
+    
+    if base_sport in ("football", "mlb"):
+        if edge_res.model_prob >= 0.50:
+            sport_label = f"{base_sport}_fav"
+        elif edge_res.model_prob >= 0.15:
+            sport_label = f"{base_sport}_dog"
+        else:
+            sport_label = f"{base_sport}_longshot"
+            
+    if sport_label in ("football_longshot", "mlb_longshot"):
+        mode = "paper"
+        paper = True
 
     _, depth = await client.get_book_depth(venue=market.venue, token_id=outcome.token_id, market_id=market.market_id, side="sell")
     if depth <= 0:
@@ -222,7 +238,7 @@ async def _evaluate_autobet_candidate(
         market_price,
         paper=paper,
         raw_confidence=raw_confidence,
-        sport=match.get("sport"),
+        sport=sport_label,
     )
     # Skip if we already track this pick (prevents re-run stake inflation)
     if (
@@ -275,7 +291,7 @@ async def _evaluate_autobet_candidate(
 
     _record_autobet(db, match, market, outcome, winner, edge_res,
                     sizing, mode, bankroll, clob_order_id=clob_order_id,
-                    bet_type=bet_type, bet_line=bet_line)
+                    bet_type=bet_type, bet_line=bet_line, sport_label=sport_label)
 
     pick_label = winner
     if bet_type == "total_goals" and bet_line:
@@ -367,11 +383,28 @@ async def run_autobet() -> dict[str, Any]:
     live_blocked = False
 
     if requested_mode == "live":
-        readiness = assess_live_readiness(db)
-        if not readiness["live_ready"]:
-            logger.warning(f"Live autobet blocked: {readiness['message']}")
-            mode = "paper"
-            live_blocked = True
+        # 1. Check Guardian Halt
+        import json
+        import os
+        halt_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".guardian_halt.json")
+        if os.path.exists(halt_file):
+            try:
+                with open(halt_file, "r") as f:
+                    state = json.load(f)
+                    if state.get("halted"):
+                        logger.warning(f"Live autobet blocked by Guardian: {state.get('reasons')}")
+                        mode = "paper"
+                        live_blocked = True
+            except Exception as exc:
+                logger.error(f"Failed to read guardian halt file: {exc}")
+                
+        # 2. Check Live Readiness (only if not already halted)
+        if not live_blocked:
+            readiness = assess_live_readiness(db)
+            if not readiness["live_ready"]:
+                logger.warning(f"Live autobet blocked: {readiness['message']}")
+                mode = "paper"
+                live_blocked = True
 
     # 1. Pull markets (dedupe by market_id)
     markets_by_id: dict[str, Any] = {}
@@ -551,6 +584,7 @@ def _record_autobet(
     *, clob_order_id: str | None = None,
     bet_type: str = "moneyline",
     bet_line: str | None = None,
+    sport_label: str = "football",
 ) -> None:
     """Upsert an OPEN autobets row (unique per market+outcome+mode)."""
     shares = round(sizing.stake / edge_res.market_price, 2) if edge_res.market_price > 0 else 0
@@ -568,7 +602,7 @@ def _record_autobet(
         "market_price": edge_res.market_price,
         "edge": edge_res.edge,
         "raw_confidence": edge_res.raw_confidence,
-        "sport": match.get("sport"),
+        "sport": sport_label,
         "kelly_fraction": sizing.kelly_fraction,
         "stake": sizing.stake,
         "bankroll_at_time": round(bankroll, 2),
@@ -785,6 +819,78 @@ def resolve_autobets() -> int:
     if resolved:
         logger.info(f"Autobet: resolved {resolved} bets")
     return resolved
+
+
+def update_closing_prices() -> int:
+    """
+    Fetch all open autobets and simulated bets and update their closing_price and clv to the latest market price.
+    Since this runs periodically (e.g. via run_sync), the last update before the bet resolves
+    will naturally be the true closing line.
+    """
+    from backend.trading.polymarket_client import get_active_markets
+    from collections import defaultdict
+    
+    db = get_db()
+    
+    # Process autobets
+    open_bets = (
+        db.table("autobets")
+        .select("id, sport, market_id, outcome_name, market_price")
+        .eq("status", "open")
+        .execute()
+        .data or []
+    )
+    
+    # Process simulated bets
+    sim_bets = (
+        db.table("simulated_bets")
+        .select("id, sport, market_id, outcome_name, market_price")
+        .eq("status", "open")
+        .execute()
+        .data or []
+    )
+    
+    if not open_bets and not sim_bets:
+        return 0
+        
+    updated_count = 0
+    for table_name, bets in [("autobets", open_bets), ("simulated_bets", sim_bets)]:
+        if not bets:
+            continue
+            
+        bets_by_sport = defaultdict(list)
+        for b in bets:
+            bets_by_sport[b.get("sport") or "football"].append(b)
+            
+        for sport, sport_bets in bets_by_sport.items():
+            markets = get_active_markets(sport)
+            market_map = {m.market_id: m for m in markets}
+            
+            for bet in sport_bets:
+                m = market_map.get(bet["market_id"])
+                if not m:
+                    continue
+                
+                current_price = None
+                for out in m.outcomes:
+                    if out.name.lower() == str(bet.get("outcome_name", "")).lower():
+                        current_price = out.price
+                        break
+                        
+                if current_price is not None:
+                    original_price = float(bet.get("market_price") or 0.0)
+                    clv = current_price - original_price
+                    
+                    try:
+                        db.table(table_name).update({
+                            "closing_price": current_price,
+                            "clv": round(clv, 4)
+                        }).eq("id", bet["id"]).execute()
+                        updated_count += 1
+                    except Exception as exc:
+                        logger.debug(f"Failed to update CLV for {table_name} {bet['id']}: {exc}")
+                        
+    return updated_count
 
 
 def get_autobet_summary() -> dict[str, Any]:

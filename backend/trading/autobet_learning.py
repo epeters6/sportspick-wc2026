@@ -12,6 +12,9 @@ from typing import Any
 
 from loguru import logger
 
+def _binom_cdf(k: int, n: int, p: float) -> float:
+    pass # Removed in favor of exact product formula
+
 from backend.config import get_settings
 from backend.db import get_db
 
@@ -137,8 +140,10 @@ def compute_tier_stats(db=None) -> dict[str, dict[str, Any]]:
             "win_rate": 0.0,
             "avg_market_price": 0.0,
             "avg_edge": 0.0,
+            "avg_model_prob": 0.0,
             "sharpe": None,
             "_returns": [],
+            "_clusters": {}, # match_id -> {"probs": [], "wins": 0}
         }
         for _, _, label in PRICE_TIERS
     }
@@ -155,6 +160,19 @@ def compute_tier_stats(db=None) -> dict[str, dict[str, Any]]:
         b["total_pnl"] += pnl
         b["avg_market_price"] += r.get("market_price") or 0.0
         b["avg_edge"] += r.get("edge") or 0.0
+        b["avg_model_prob"] += r.get("model_prob") or 0.0
+        
+        # Track cluster-level data for absurdity backstop
+        match_id = r.get("match_id") or f"unclustered_{r.get('id')}"
+        if match_id not in b["_clusters"]:
+            b["_clusters"][match_id] = {"probs": [], "wins": 0}
+        
+        # Use raw_confidence (un-haircut prob) for the backstop math
+        raw_prob = r.get("raw_confidence") or r.get("model_prob") or 0.05
+        b["_clusters"][match_id]["probs"].append(raw_prob)
+        if r.get("status") == "won":
+            b["_clusters"][match_id]["wins"] += 1
+            
         if stake > 0:
             b["_returns"].append(pnl / stake)
 
@@ -163,6 +181,7 @@ def compute_tier_stats(db=None) -> dict[str, dict[str, Any]]:
         if n:
             b["avg_market_price"] = round(b["avg_market_price"] / n, 4)
             b["avg_edge"] = round(b["avg_edge"] / n, 4)
+            b["avg_model_prob"] = round(b["avg_model_prob"] / n, 4)
             rets = b.pop("_returns")
             if len(rets) >= 3:
                 mean_r = sum(rets) / len(rets)
@@ -241,9 +260,13 @@ def assess_live_readiness(db=None) -> dict[str, Any]:
         # mode may not be in select — use all settled for paper track
         paper_rows = rows
 
-    settled = len(rows)
-    total_staked = sum(r.get("stake") or 0 for r in rows)
-    total_pnl = sum(r.get("pnl") or 0 for r in rows)
+    # Exclude longshots from the global PnL readiness check. 
+    # Longshots expect massive losing streaks and are gated separately.
+    core_rows = [r for r in paper_rows if "longshot" not in (r.get("sport") or "") and "tail" not in (r.get("sport") or "")]
+
+    settled = len(core_rows)
+    total_staked = sum(r.get("stake") or 0 for r in core_rows)
+    total_pnl = sum(r.get("pnl") or 0 for r in core_rows)
     roi_pct = (total_pnl / total_staked * 100) if total_staked else 0.0
 
     min_n = s.polymarket_live_min_settled_bets
@@ -338,14 +361,51 @@ def gates_for_price(
         )
 
     tier_stats = compute_tier_stats().get(tier, {})
-    if (tier_stats.get("settled") or 0) >= MIN_TIER_SAMPLES:
+    settled_count = tier_stats.get("settled") or 0
+    if settled_count >= MIN_TIER_SAMPLES:
         roi_frac = (tier_stats.get("roi_pct") or 0) / 100.0
-        if roi_frac <= TIER_ROI_PENALTY_THRESHOLD:
+        
+        # Determine if we should penalize
+        should_penalize = False
+        penalize_reason = ""
+        
+        if tier != "longshot":
+            if roi_frac <= TIER_ROI_PENALTY_THRESHOLD:
+                should_penalize = True
+                penalize_reason = f"ROI {tier_stats['roi_pct']:.1f}%"
+        else:
+            # Longshot Statistical Absurdity Backstop
+            # Calculate probability of observing exactly ZERO wins across all clusters
+            clusters = tier_stats.get("_clusters", {})
+            cluster_count = len(clusters)
+            
+            # Require at least 8 distinct clusters to have statistical power
+            if cluster_count >= 8:
+                total_cluster_wins = sum(c["wins"] for c in clusters.values())
+                
+                # Treat bets within the same cluster as perfectly correlated
+                # The chance the cluster wins is the max of the individual bet win probs.
+                cluster_loss_probs = []
+                for c in clusters.values():
+                    cluster_win_prob = max(c["probs"]) if c["probs"] else 0.0
+                    cluster_loss_probs.append(1.0 - cluster_win_prob)
+                
+                streak_probability = math.prod(cluster_loss_probs) if cluster_loss_probs else 1.0
+                
+                if total_cluster_wins == 0 and streak_probability < 0.01:
+                    should_penalize = True
+                    penalize_reason = f"Absurdity Trip (P={streak_probability:.4f}, 0/{cluster_count} clusters won)"
+                else:
+                    logger.debug(f"Longshot Absurdity check: {total_cluster_wins}/{cluster_count} clusters won, P(streak)={streak_probability:.4f}")
+            else:
+                logger.debug(f"Longshot Absurdity check skipped: only {cluster_count}/8 required clusters.")
+                
+        if should_penalize:
             min_edge = min(0.15, min_edge + 0.015)
             min_prob = min(0.65, min_prob + 0.05)
             adjusted = True
-            notes.append(f"{tier} ROI {tier_stats['roi_pct']:.1f}%")
-        elif roi_frac >= TIER_ROI_BONUS_THRESHOLD and tier_stats["settled"] >= MIN_TIER_SAMPLES * 2:
+            notes.append(f"{tier} {penalize_reason}")
+        elif roi_frac >= TIER_ROI_BONUS_THRESHOLD and settled_count >= MIN_TIER_SAMPLES * 2:
             floor = get_settings().polymarket_paper_min_edge if paper else get_settings().polymarket_min_edge
             min_edge = max(min_edge - 0.005, floor)
             adjusted = True

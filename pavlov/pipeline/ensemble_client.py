@@ -342,6 +342,8 @@ def get_ensemble_prob(
         }
         or None if data unavailable.
     """
+    import math
+    
     by_date_all = _fetch_members(city, metric)
     if not by_date_all:
         return None
@@ -353,43 +355,98 @@ def get_ensemble_prob(
             city, metric, date_str, list(by_date_all.keys())[:4],
         )
         return None
+        
+    # Lead-Time Aware Blending
+    try:
+        target_dt = datetime.fromisoformat(date_str)
+        if target_dt.tzinfo is None:
+            target_dt = target_dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        lead_time_days = (target_dt.date() - now.date()).days
+    except Exception:
+        lead_time_days = 3
+        
+    dynamic_weights = dict(_MODELS)
+    if lead_time_days <= 2:
+        # Day 0-2: High-resolution models dominate
+        dynamic_weights["gfs025"] = 2.0
+        dynamic_weights["icon_seamless"] = 2.0
+    elif lead_time_days <= 8:
+        # Day 3-8: ECMWF ensemble is gold standard
+        dynamic_weights["ecmwf_ifs04"] = 3.0
+    else:
+        # Long-range degrades
+        dynamic_weights["ecmwf_ifs04"] = 1.0
 
-    weighted_votes = 0.0
-    weighted_total = 0.0
-    all_members:   list[float] = []
-
-    for model, weight in _MODELS.items():
+    # 1. Calculate weighted mean
+    weighted_sum = 0.0
+    weight_total = 0.0
+    all_members: list[float] = []
+    
+    for model, weight in dynamic_weights.items():
         members = date_models.get(model, [])
         if not members:
             continue
-
-        if direction == "above":
-            votes = sum(1 for v in members if v > threshold_f)
-        elif direction == "below":
-            votes = sum(1 for v in members if v < threshold_f)
-        elif direction == "in_range" and threshold_lo is not None and threshold_hi is not None:
-            votes = sum(1 for v in members if threshold_lo <= v <= threshold_hi)
-        else:
-            continue
-
-        weighted_votes += weight * votes
-        weighted_total += weight * len(members)
+        weighted_sum += weight * sum(members)
+        weight_total += weight * len(members)
         all_members.extend(members)
+        
+    if weight_total == 0 or len(all_members) < 5:
+        return None
+        
+    mean_f = weighted_sum / weight_total
+    
+    # 2. Calculate weighted variance (spread)
+    var_sum = 0.0
+    for model, weight in dynamic_weights.items():
+        members = date_models.get(model, [])
+        for v in members:
+            var_sum += weight * ((v - mean_f) ** 2)
+            
+    variance = var_sum / weight_total
+    spread_f = variance ** 0.5
+    
+    # Calibrate: Ensembles are historically underdispersed. Apply minimum spread.
+    spread_f = max(spread_f, 1.5)
+    
+    # ── Intraday Nowcasting Shift ──
+    # If this is a same-day market (lead_time_days == 0), aggressively adjust the forecast
+    # based on live METAR station observations.
+    if lead_time_days == 0:
+        try:
+            import sys
+            import os
+            backend_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            if backend_path not in sys.path:
+                sys.path.insert(0, backend_path)
+            from backend.ml.intraday_nowcast import apply_hrrr_nowcast_shift
+            from pipeline.station_mapper import STATION_MAP
+            station_data = STATION_MAP.get(city)
+            if station_data:
+                mean_f, spread_f = apply_hrrr_nowcast_shift(city, station_data["station"], mean_f, spread_f)
+        except Exception as exc:
+            logger.warning(f"Failed to run intraday nowcast for {city}: {exc}")
 
-    if weighted_total == 0 or len(all_members) < 5:
+    def _normal_cdf(x: float, mu: float, s: float) -> float:
+        if s == 0: return 1.0 if x >= mu else 0.0
+        return 0.5 * (1 + math.erf((x - mu) / (s * math.sqrt(2))))
+
+    # 3. Parametric Probability via Normal CDF
+    if direction == "above":
+        prob = 1.0 - _normal_cdf(threshold_f, mean_f, spread_f)
+    elif direction == "below":
+        prob = _normal_cdf(threshold_f, mean_f, spread_f)
+    elif direction == "in_range" and threshold_lo is not None and threshold_hi is not None:
+        prob = _normal_cdf(threshold_hi, mean_f, spread_f) - _normal_cdf(threshold_lo, mean_f, spread_f)
+    else:
         return None
 
-    prob = weighted_votes / weighted_total
-
-    n        = len(all_members)
-    mean_f   = sum(all_members) / n
-    variance = sum((v - mean_f) ** 2 for v in all_members) / n
-    spread_f = variance ** 0.5
+    n = len(all_members)
 
     logger.debug(
-        "EnsembleClient: %s %s %s %.1f°F on %s → %.1f%% (weighted, %d members).",
+        "EnsembleClient: %s %s %s %.1f°F on %s → %.1f%% (parametric, %d members, spread=%.1f).",
         city, metric, direction, threshold_f, date_str,
-        prob * 100, n,
+        prob * 100, n, spread_f
     )
 
     return {

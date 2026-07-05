@@ -87,6 +87,7 @@ async def sync_weather_predictions():
             "owm_predicted": sig.get('owm_predicted'),
             "ensemble_members": sig.get('ensemble_members'),
             "threshold_f": sig.get('threshold_f'),
+            "z_score": sig.get('z_score', 0.0),
             "suppressed_reason": sig.get("suppressed_reason")
         }
         
@@ -101,6 +102,7 @@ async def sync_weather_predictions():
                 "event_key": event_key,
                 "outcome": outcome,
                 "prob": sig['model_prob'],
+                "raw_model_prob": sig.get('raw_model_prob', sig['model_prob']),
                 "market_price": sig['implied_prob'],
                 "edge": sig['edge'],
                 "metadata": metadata
@@ -125,21 +127,31 @@ async def sync_weather_predictions():
                         break
             
             shares = round(stake / sig["implied_prob"], 2) if sig["implied_prob"] > 0 else 0
+            sport_tier = "weather_far_tail" if sig.get("z_score", 0.0) >= 2.0 else ("weather_near_tail" if sig.get("z_score", 0.0) >= 1.0 else "weather_mode")
             
+            # Hard go-live gating: these tiers are unproven under the new CLV system and need fresh paper trading
+            bet_mode = mode
+            if sport_tier in ("weather_near_tail", "weather_far_tail"):
+                bet_mode = "paper"
+                
+            # Treat all weather bets in the same tier on the same day as a single correlated event
+            # so the event_exposure cap restricts total dollars wagered on tail correlations.
+            virtual_match_id = f"{sport_tier}_{sig['date']}"
+                
             record = {
-                "match_id": None, # MUST be null to isolate from MLB/WC
+                "match_id": virtual_match_id,
                 "market_id": market_id,
                 "market_slug": market_id,
                 "question": f"Weather: {sig['city']} {sig['metric']} {outcome} {sig.get('threshold_f')}",
                 "outcome_name": outcome_name,
                 "token_id": token_id,
-                "mode": mode,
+                "mode": bet_mode,
                 "model_prob": sig["model_prob"],
                 "market_prob": sig["implied_prob"],
                 "market_price": sig["implied_prob"], # We don't fetch order book depth here currently, assume implied
                 "edge": sig["edge"],
-                "raw_confidence": sig["model_prob"],
-                "sport": "weather",
+                "raw_confidence": sig.get("raw_model_prob", sig["model_prob"]),
+                "sport": sport_tier,
                 "kelly_fraction": sig.get("kelly_fraction", 0),
                 "stake": stake,
                 "bankroll_at_time": round(bankroll, 2),
@@ -149,7 +161,7 @@ async def sync_weather_predictions():
             }
             
             # Check if bet is already open
-            existing = db.table("autobets").select("id").eq("market_id", market_id).eq("outcome_name", outcome_name).eq("mode", mode).eq("status", "open").execute()
+            existing = db.table("autobets").select("id").eq("market_id", market_id).eq("outcome_name", outcome_name).eq("mode", bet_mode).eq("status", "open").execute()
             if not existing.data:
                 try:
                     db.table("autobets").insert(record).execute()

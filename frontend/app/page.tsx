@@ -4,6 +4,7 @@ import {
   fetchOverview, fetchLeaderboard, fetchMatches,
   fetchCalibration, fetchAutobets, fetchPlatformStats,
   fetchPropPicks, fetchRecentPicks, fetchWeatherPredictions,
+  fetchTreasury, fetchGuardian, fetchArbScan,
 } from "@/lib/api";
 import BetTypeBadge from "@/components/BetTypeBadge";
 import OutcomeBadge from "@/components/OutcomeBadge";
@@ -12,7 +13,7 @@ import PlatformBadge from "@/components/PlatformBadge";
 import MatchInsightCard from "@/components/MatchInsightCard";
 import VibrantStatCard from "@/components/VibrantStatCard";
 import Link from "next/link";
-import { ArrowRight, Target, Radio, Layers, Activity, BrainCircuit, Users, CloudRain } from "lucide-react";
+import { ArrowRight, Target, Radio, Layers, Activity, BrainCircuit, Users, CloudRain, AlertTriangle, Wallet, ArrowLeftRight, ShieldAlert, ShieldCheck } from "lucide-react";
 import { SYNC_SOURCES } from "@/lib/platforms";
 
 function fmt(n: number) { return n.toLocaleString(); }
@@ -53,6 +54,15 @@ export default function Dashboard() {
   });
   const { data: weatherData } = useQuery({
     queryKey: ["weather-predictions"], queryFn: () => fetchWeatherPredictions(4), refetchInterval: 120_000,
+  });
+  const { data: treasuryData } = useQuery({
+    queryKey: ["treasury"], queryFn: fetchTreasury, refetchInterval: 60_000,
+  });
+  const { data: guardianData } = useQuery({
+    queryKey: ["guardian"], queryFn: fetchGuardian, refetchInterval: 60_000,
+  });
+  const { data: arbData } = useQuery({
+    queryKey: ["arb-scan"], queryFn: fetchArbScan, refetchInterval: 30_000,
   });
 
   const ab = autobetData?.summary;
@@ -103,15 +113,154 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         
-        {/* Main Panel: MatchInsightCards Grid */}
-        <section className="xl:col-span-2 flex flex-col gap-5">
-          <div className="flex items-center justify-between mb-2">
+        {/* Main Panel: Command Center */}
+        <section className="xl:col-span-2 flex flex-col gap-6">
+          
+          {/* Guardian & Treasury Row */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            
+            {/* Guardian Circuit Breaker */}
+            <div className="glass-panel p-5 relative overflow-hidden group">
+              <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+              <div className="flex items-center justify-between mb-4 relative z-10">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <ShieldCheck className={`w-5 h-5 ${guardianData?.halted ? 'text-red-400' : 'text-emerald-400'}`} />
+                  Guardian Circuit Status
+                </h3>
+              </div>
+              <div className="relative z-10 flex flex-col gap-3">
+                <div className="flex items-center justify-between p-3 rounded-xl bg-black/40 border border-white/5">
+                  <span className="text-sm font-medium text-gray-300">Global Execution</span>
+                  <span className={`px-2 py-1 rounded text-xs font-bold ${guardianData?.halted ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}`}>
+                    {guardianData?.halted ? "HALTED" : "LIVE"}
+                  </span>
+                </div>
+                {guardianData?.halted && guardianData?.reasons?.map((r: string, i: number) => (
+                  <div key={i} className="text-xs text-red-300 bg-red-950/30 p-2 rounded border border-red-900/50 flex items-start gap-2">
+                    <ShieldAlert className="w-4 h-4 shrink-0" />
+                    <span>{r}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Treasury Watcher */}
+            <div className="glass-panel p-5 relative overflow-hidden group">
+              <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+              <div className="flex items-center justify-between mb-4 relative z-10">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <Wallet className="w-5 h-5 text-purple-400" />
+                  Treasury Watcher
+                </h3>
+              </div>
+              <div className="relative z-10 flex flex-col gap-3">
+                <div className="flex justify-between items-center bg-black/30 p-2 rounded-lg border border-white/5">
+                  <span className="text-sm text-gray-400">Kalshi USD</span>
+                  <span className="font-mono text-sm text-white">${treasuryData?.kalshi_usd?.toFixed(2) || "0.00"}</span>
+                </div>
+                <div className="flex justify-between items-center bg-black/30 p-2 rounded-lg border border-white/5">
+                  <span className="text-sm text-gray-400">Polymarket USDC</span>
+                  <span className="font-mono text-sm text-white">${treasuryData?.polymarket_usdc?.toFixed(2) || "0.00"}</span>
+                </div>
+                {/* Visual warning if treasury is low */}
+                {treasuryData && (treasuryData.kalshi_usd < 50 || treasuryData.polymarket_usdc < 50) && (
+                   <div className="text-[10px] text-amber-400 flex items-center gap-1 mt-1">
+                     <AlertTriangle className="w-3 h-3" /> Treasury low. Arb executions may fail.
+                   </div>
+                )}
+              </div>
+            </div>
+            
+          </div>
+
+          {/* Arb Scanner Feed */}
+          <div className="glass-panel p-5">
+             <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <ArrowLeftRight className="w-5 h-5 text-pink-400" />
+                  Live Arbitrage Scanner
+                </h3>
+                <span className="text-xs text-indigo-400 bg-indigo-950/50 px-2 py-1 rounded-full animate-pulse border border-indigo-500/30">Scanning...</span>
+             </div>
+             
+             {arbData?.opportunities?.length > 0 ? (
+               <div className="space-y-3">
+                 {arbData.opportunities.map((arb: any, i: number) => (
+                   <div key={i} className="flex flex-col md:flex-row md:items-center justify-between p-4 bg-black/40 rounded-xl border border-pink-500/20 hover:border-pink-500/50 transition-colors">
+                     <div>
+                       <div className="text-sm font-medium text-white mb-1">{arb.market}</div>
+                       <div className="text-xs text-gray-400 flex items-center gap-2">
+                         <span className="bg-blue-950/50 text-blue-300 px-1.5 rounded border border-blue-500/30">Kalshi: {arb.kalshi_side}</span>
+                         <span>+</span>
+                         <span className="bg-purple-950/50 text-purple-300 px-1.5 rounded border border-purple-500/30">Poly: {arb.poly_side}</span>
+                       </div>
+                     </div>
+                     <div className="mt-3 md:mt-0 flex flex-col md:items-end">
+                       <span className="text-sm font-mono text-emerald-400 font-bold">+{arb.margin.toFixed(2)}¢ Margin</span>
+                       <span className="text-[10px] text-gray-500 mt-1">Max Size: {arb.available_size} | {arb.timestamp}</span>
+                     </div>
+                   </div>
+                 ))}
+               </div>
+             ) : (
+               <div className="flex flex-col items-center justify-center py-8 text-gray-500">
+                 <Radio className="w-8 h-8 mb-3 opacity-20" />
+                 <p className="text-sm">No cross-exchange arbitrage opportunities found.</p>
+               </div>
+             )}
+          </div>
+
+          {/* Parametric Weather Nowcasting */}
+          <div className="glass-panel p-5 mt-4 border-t-2 border-t-sky-500">
+             <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <CloudRain className="w-5 h-5 text-sky-400" />
+                  Parametric Weather Nowcasting
+                </h3>
+             </div>
+             
+             {weatherData?.predictions?.length > 0 ? (
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 {weatherData.predictions.slice(0, 2).map((wp: any, i: number) => (
+                   <div key={i} className="flex flex-col p-4 bg-black/40 rounded-xl border border-sky-500/20">
+                     <div className="flex items-center justify-between mb-3">
+                       <div className="text-sm font-bold text-gray-200">{wp.outcome}</div>
+                       <span className="text-[10px] text-sky-400 font-mono bg-sky-950/40 px-2 py-0.5 rounded uppercase">{wp.event_key}</span>
+                     </div>
+                     <div className="flex justify-between items-end mb-2">
+                       <div>
+                         <div className="text-xs text-gray-500 uppercase">Model Probability</div>
+                         <div className="text-lg font-bold text-sky-300">{Math.round(wp.prob * 100)}%</div>
+                       </div>
+                       <div className="text-right">
+                         <div className="text-xs text-gray-500 uppercase">Market Price</div>
+                         <div className="text-lg font-bold text-gray-300">{Math.round((wp.market_price || 0) * 100)}¢</div>
+                       </div>
+                     </div>
+                     <div className="mt-2 pt-2 border-t border-sky-900/30 flex justify-between items-center">
+                        <span className="text-[10px] text-gray-500 uppercase font-semibold">Calculated Edge</span>
+                        <span className={`text-sm font-bold font-mono ${wp.edge && wp.edge >= 0.05 ? "text-emerald-400" : "text-gray-400"}`}>
+                          {wp.edge != null ? `+${(wp.edge * 100).toFixed(1)}%` : "—"}
+                        </span>
+                     </div>
+                   </div>
+                 ))}
+               </div>
+             ) : (
+               <div className="flex flex-col items-center justify-center py-6 text-gray-500">
+                 <Radio className="w-8 h-8 mb-2 opacity-20" />
+                 <p className="text-sm">Awaiting METAR/Ensemble updates...</p>
+               </div>
+             )}
+          </div>
+          
+          {/* Matches Deep Dive (Original) */}
+          <div className="flex items-center justify-between mb-2 mt-4">
             <div>
               <h2 className="text-lg font-bold flex items-center gap-2">
                 <BrainCircuit className="w-5 h-5 text-indigo-400" />
                 Live Match Analysis Deep Dive
               </h2>
-              <p className="text-xs text-gray-400 mt-1">Comparing Crowd Intelligence vs Quantitative Models with Stadium Factors</p>
             </div>
             <Link href="/matches" className="text-xs font-semibold text-indigo-400 flex items-center gap-1 hover:text-indigo-300 transition-colors">
               View Pipeline <ArrowRight className="w-4 h-4" />
@@ -119,19 +268,10 @@ export default function Dashboard() {
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {matchesData?.matches.slice(0, 4).map((m) => (
+            {matchesData?.matches.slice(0, 4).map((m: any) => (
               <MatchInsightCard key={m.id} match={m} />
             ))}
           </div>
-
-          {!matchesData?.matches.length && (
-            <div className="glass-card py-12 flex flex-col items-center justify-center text-gray-500">
-              <Radio className="w-8 h-8 mb-3 opacity-20" />
-              <p>No upcoming matches pipeline syncs detected.</p>
-            </div>
-          )}
-
-
 
         </section>
 

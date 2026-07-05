@@ -227,6 +227,10 @@ def _poly_strike_fields(full_title: str) -> dict[str, Any] | None:
     """
     t = full_title
     tl = full_title.lower()
+    
+    # Strip out ISO dates (YYYY-MM-DD) so they aren't parsed as temperature ranges
+    t = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "", t)
+    tl = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "", tl)
 
     m = re.search(r"\b(\d{2,3})\s*(?:-|–|—|to)\s*(\d{2,3})\b", tl)
     if m:
@@ -612,8 +616,7 @@ def get_weather_markets() -> list[dict]:
 
 def get_market_result(slug: str) -> str | None:
     """Return 'yes' or 'no' if settled, else None.
-
-    Matches Polymarket US ``MarketSettlement``: ``settledAt``, ``settlementPrice`` (Amount).
+    Matches Polymarket US ``MarketSettlement``: ``settlement`` (0 or 1).
     """
     client = get_client()
     try:
@@ -622,34 +625,14 @@ def get_market_result(slug: str) -> str | None:
         logger.debug("PolyClient: settlement(%s) — %s", slug, exc)
         return None
 
-    s = raw
-    if isinstance(raw, dict):
-        inner = raw.get("settlement") or raw.get("marketSettlement")
-        if isinstance(inner, dict):
-            s = inner
-
-    settled = None
-    if isinstance(s, dict):
-        settled = s.get("settledAt") or s.get("settled_at")
-
-    if not settled:
-        return None
-
-    amt = None
-    if isinstance(s, dict):
-        amt = s.get("settlementPrice") or s.get("settlement_price")
-
-    px = _amount_to_prob(amt if isinstance(amt, dict) else None)
-    if px is None and isinstance(amt, (int, float, str)):
-        try:
-            px = float(amt)
-        except (TypeError, ValueError):
-            px = None
-    if px is None:
-        return None
-    if px >= 0.5:
-        return "yes"
-    return "no"
+    if isinstance(raw, dict) and "settlement" in raw:
+        val = raw["settlement"]
+        if val == 1 or val == "1":
+            return "yes"
+        elif val == 0 or val == "0":
+            return "no"
+            
+    return None
 
 
 def place_order(

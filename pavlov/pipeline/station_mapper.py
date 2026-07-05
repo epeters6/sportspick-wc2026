@@ -60,12 +60,12 @@ STATION_MAP: dict[str, dict] = {
         "grid_y":      72,
     },
     "New York": {
-        "station":    "KJFK",
-        "lat":         40.6413,
-        "lon":        -73.7781,
+        "station":    "KNYC",
+        "lat":         40.7812,
+        "lon":        -73.9665,
         "nws_office": "OKX",
-        "grid_x":      42,
-        "grid_y":      40,
+        "grid_x":      33,
+        "grid_y":      36,
     },
     "Los Angeles": {
         "station":    "KLAX",

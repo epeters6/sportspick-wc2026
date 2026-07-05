@@ -19,14 +19,34 @@ export default function OutcomeBadge({ outcome }: { outcome?: Pick["outcome"] | 
 
 export function SportBadge({ sport }: { sport?: string | null }) {
   if (!sport) return null;
-  const isMlb = sport === "mlb";
+  const sportLower = sport.toLowerCase();
+  
+  if (sportLower === "mlb") {
+    return (
+      <span className="inline-flex items-center rounded border font-medium px-1.5 py-0.5 text-[10px] bg-blue-950 text-blue-300 border-blue-800">
+        ⚾ MLB
+      </span>
+    );
+  }
+  if (sportLower === "weather") {
+    return (
+      <span className="inline-flex items-center rounded border font-medium px-1.5 py-0.5 text-[10px] bg-sky-950 text-sky-300 border-sky-800">
+        🌤️ Weather
+      </span>
+    );
+  }
+  if (sportLower === "politics") {
+    return (
+      <span className="inline-flex items-center rounded border font-medium px-1.5 py-0.5 text-[10px] bg-purple-950 text-purple-300 border-purple-800">
+        🏛️ Politics
+      </span>
+    );
+  }
+
+  // Fallback to Football / WC
   return (
-    <span className={`inline-flex items-center rounded border font-medium px-1.5 py-0.5 text-[10px] ${
-      isMlb
-        ? "bg-blue-950 text-blue-300 border-blue-800"
-        : "bg-green-950 text-green-300 border-green-800"
-    }`}>
-      {isMlb ? "⚾ MLB" : "⚽ WC"}
+    <span className="inline-flex items-center rounded border font-medium px-1.5 py-0.5 text-[10px] bg-green-950 text-green-300 border-green-800">
+      ⚽ WC
     </span>
   );
 }

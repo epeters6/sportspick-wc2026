@@ -2,12 +2,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BarChart2, Zap, Trophy, Calendar, Star, TrendingUp, Tv2, Layers, Users, CloudRain
+  BarChart2, Zap, Trophy, Calendar, Star, TrendingUp, Tv2, Layers, Users, CloudRain, BrainCircuit
 } from "lucide-react";
 import SyncCountdown from "./SyncCountdown";
 
 const nav = [
   { href: "/",              label: "Dashboard",   icon: BarChart2 },
+  { href: "/models",        label: "AI Models",   icon: BrainCircuit },
   { href: "/recommendations", label: "Top Picks", icon: Zap },
   { href: "/props",           label: "Alt Bets",    icon: Layers },
   { href: "/leaderboard",   label: "Leaderboard", icon: Trophy },

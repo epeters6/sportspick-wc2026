@@ -39,11 +39,10 @@ MIN_CLV_SAMPLES = 5           # need this many CLV picks before weighting kicks 
 
 def _elo_weight(elo: float) -> float:
     """
-    Non-linear Elo weight.  At ELO_DEFAULT → 1.0.  At 1200 → 1.44.  At 800 → 0.64.
-    Squares the normalised ratio so high-Elo pickers have a more pronounced edge.
+    Linear Elo weight. Removes the previous squaring logic to prevent amplifying
+    highly correlated public consensus on heavy favorites.
     """
-    ratio = elo / ELO_DEFAULT
-    return ratio * ratio
+    return max(0.1, elo / ELO_DEFAULT)
 
 
 def _clv_weight(avg_clv: float | None, clv_samples: int, *, sport: str | None = None) -> float:
@@ -211,6 +210,16 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
     if not vote_weights:
         return None
 
+    # Effective Sample Size (ESS) discount to decorrelate the crowd.
+    # Treats multiple influencers on the same side as partially correlated.
+    # E.g., 4 picks count as sqrt(4) = 2 independent votes.
+    import math
+    for t in list(vote_weights.keys()):
+        count = vote_counts[t]
+        if count > 1:
+            avg_weight = vote_weights[t] / count
+            vote_weights[t] = avg_weight * math.sqrt(count)
+
     total_weight = sum(vote_weights.values())
     best_team = max(vote_weights, key=lambda t: vote_weights[t])
     confidence = vote_weights[best_team] / total_weight if total_weight > 0 else 0.0
@@ -225,38 +234,69 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
     draw_probability = _prob("draw")
     away_probability = _prob(away_team)
 
-    # Blend with ML model predictions if they exist
-    ml_pred = (
-        db.table("model_predictions")
-        .select("outcome, prob")
-        .eq("source", "sports_ml")
-        .eq("event_key", match_id)
-        .execute()
-        .data or []
-    )
-    
-    if ml_pred:
-        # Use a 50/50 blend between ML model and Crowd consensus
-        ml_outcome = str(ml_pred[0].get("outcome", "")).strip().lower()
-        ml_prob = float(ml_pred[0].get("prob", 0.0))
-        
-        if ml_outcome == home_team.strip().lower():
-            home_probability = round((home_probability + ml_prob) / 2.0, 4)
-            away_probability = round((away_probability + (1.0 - ml_prob)) / 2.0, 4)
-        elif ml_outcome == away_team.strip().lower():
-            away_probability = round((away_probability + ml_prob) / 2.0, 4)
-            home_probability = round((home_probability + (1.0 - ml_prob)) / 2.0, 4)
+    # ── Meta-Model Blending Layer ──
+    if sport == "mlb":
+        # 1. MLB uses the specialized Pavlov Quant Engine (Weather, Pitcher metrics, etc)
+        from backend.ml.mlb_quant import get_mlb_quant_probability
+        quant_probs = get_mlb_quant_probability(home_team, away_team)
+        if quant_probs:
+            quant_home = quant_probs["home_prob"]
+            quant_away = quant_probs["away_prob"]
             
-        # Re-evaluate best_team and confidence based on blended probabilities
-        if home_probability > away_probability and home_probability > draw_probability:
-            best_team = home_team
-            confidence = home_probability
-        elif away_probability > home_probability and away_probability > draw_probability:
-            best_team = away_team
-            confidence = away_probability
-        else:
-            best_team = "draw"
-            confidence = draw_probability
+            # Inverse-Variance Weighting via meta-model blender
+            from backend.ml.model_blender import build_blender_from_db
+            blender = build_blender_from_db()
+            
+            blended_home, weights_home = blender.combine({
+                "mlb_quant": quant_home,
+                "consensus": home_probability
+            })
+            blended_away, weights_away = blender.combine({
+                "mlb_quant": quant_away,
+                "consensus": away_probability
+            })
+            
+            home_probability = round(blended_home, 4)
+            away_probability = round(blended_away, 4)
+            if home_probability > away_probability:
+                best_team = home_team
+                confidence = home_probability
+            else:
+                best_team = away_team
+                confidence = away_probability
+    else:
+        # 2. Other sports blend with generalized sports_ml predictions if they exist
+        ml_pred = (
+            db.table("model_predictions")
+            .select("outcome, prob")
+            .eq("source", "sports_ml")
+            .eq("event_key", match_id)
+            .execute()
+            .data or []
+        )
+        
+        if ml_pred:
+            # Use a 50/50 blend between ML model and Crowd consensus
+            ml_outcome = str(ml_pred[0].get("outcome", "")).strip().lower()
+            ml_prob = float(ml_pred[0].get("prob", 0.0))
+            
+            if ml_outcome == home_team.strip().lower():
+                home_probability = round((home_probability + ml_prob) / 2.0, 4)
+                away_probability = round((away_probability + (1.0 - ml_prob)) / 2.0, 4)
+            elif ml_outcome == away_team.strip().lower():
+                away_probability = round((away_probability + ml_prob) / 2.0, 4)
+                home_probability = round((home_probability + (1.0 - ml_prob)) / 2.0, 4)
+                
+            # Re-evaluate best_team and confidence based on blended probabilities
+            if home_probability > away_probability and home_probability > draw_probability:
+                best_team = home_team
+                confidence = home_probability
+            elif away_probability > home_probability and away_probability > draw_probability:
+                best_team = away_team
+                confidence = away_probability
+            else:
+                best_team = "draw"
+                confidence = draw_probability
 
     # Top 5 influencers backing the consensus pick
     supporters = sorted(top_supporters[best_team], key=lambda x: x[0], reverse=True) if best_team in top_supporters else []

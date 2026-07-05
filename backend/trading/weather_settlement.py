@@ -5,27 +5,37 @@ from loguru import logger
 from backend.db import get_db
 from backend.trading.kalshi_client import KalshiClient
 
-async def check_polymarket_resolution(condition_id: str) -> dict | None:
-    """Check gamma-api for Polymarket market resolution."""
-    url = f"https://gamma-api.polymarket.com/events?condition_id={condition_id}"
+import os
+import sys
+
+# Add pavlov to path for poly_client
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../pavlov")))
+os.environ["PAVLOV_BYPASS_CONFIG"] = "1"
+from polymarket import poly_client
+
+async def check_polymarket_resolution(slug: str) -> dict | None:
+    """Check Polymarket US API for market resolution using poly_client."""
+    if not poly_client.poly_configured():
+        logger.warning("POLYMARKET_KEY_ID not set. Using dummy keys for public data.")
+        poly_client.poly_configured = lambda: True
+        original_get_client = poly_client.get_client
+        def mock_get_client():
+            from polymarket_us import PolymarketUS
+            return PolymarketUS(key_id="dummy", secret_key="dummy")
+        poly_client.get_client = mock_get_client
+
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, timeout=10.0)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data and isinstance(data, list) and len(data) > 0:
-                    event = data[0]
-                    # Gamma API returns markets inside the event
-                    for m in event.get("markets", []):
-                        if m.get("conditionId") == condition_id:
-                            return {
-                                "closed": m.get("closed", False),
-                                "active": m.get("active", True),
-                                "resolved": m.get("resolved", False),
-                                "winner": m.get("winner")  # Usually "Yes" or "No" or token index
-                            }
+        # get_market_result returns 'yes' or 'no' if settled, else None
+        res = poly_client.get_market_result(slug)
+        if res:
+            return {
+                "closed": True,
+                "active": False,
+                "resolved": True,
+                "winner": res
+            }
     except Exception as e:
-        logger.warning(f"Error fetching Polymarket resolution for {condition_id}: {e}")
+        logger.warning(f"Error fetching Polymarket resolution for {slug}: {e}")
     return None
 
 async def check_kalshi_resolution(ticker: str) -> dict | None:

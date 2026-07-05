@@ -201,6 +201,7 @@ def compute_edge(
     picker_count: int,
     fee_bps: float = 0.0,
     sport: str | None = None,
+    bet_type: str = "moneyline",
     calibration_curve: dict | None = None,
     calibration_curve_2d: dict | None = None,
     history_size: int | None = None,
@@ -243,8 +244,20 @@ def compute_edge(
             w = min(w, max_w)
 
     blended = w * calibrated + (1 - w) * market_price
+    
+    # Guardian Layer: Hard-cap model confidence (don't bet with 99% certainty on sports)
+    blended = max(0.15, min(0.85, blended))
+    
+    # Execution Layer: Synthetic slippage discount
+    # Prop markets and niche sports have vastly thinner books than NFL moneylines.
+    is_mainline = bet_type in ("moneyline", "spread", "total")
+    slippage_bps = 25.0 if is_mainline else 75.0
+    
     fee = fee_bps / 10_000.0
-    edge = blended - market_price - fee
+    slippage = slippage_bps / 10_000.0
+    
+    # The expected edge must hurdle BOTH exchange fees and expected slippage
+    edge = blended - market_price - fee - slippage
 
     note = ""
     if w == 0.0:

@@ -207,6 +207,8 @@ export default function TradingPage() {
           { value: "all", label: "All domains" },
           { value: "football", label: "⚽ Football" },
           { value: "mlb", label: "⚾ MLB" },
+          { value: "weather", label: "🌤️ Weather" },
+          { value: "politics", label: "🏛️ Politics" },
         ] as const).map((s) => (
           <button
             key={s.value}
@@ -306,6 +308,7 @@ export default function TradingPage() {
                       <th className="pb-3 px-2 font-semibold">Pick</th>
                       <th className="pb-3 px-2 font-semibold text-right">Edge</th>
                       <th className="pb-3 px-2 font-semibold text-right">Stake</th>
+                      <th className="pb-3 px-2 font-semibold text-right">CLV</th>
                       <th className="pb-3 px-2 font-semibold text-right">P&L</th>
                     </tr>
                   </thead>
@@ -318,6 +321,15 @@ export default function TradingPage() {
                         <td className="py-3 px-2 text-xs font-medium text-indigo-300">{formatAutobetPick(b)}</td>
                         <td className="py-3 px-2 text-right text-xs text-gray-500 font-mono">{edge(b.edge)}</td>
                         <td className="py-3 px-2 text-right text-xs font-mono text-gray-400">{money(b.stake)}</td>
+                        <td className="py-3 px-2 text-right text-xs font-mono">
+                          {b.clv != null ? (
+                            <span className={b.clv > 0 ? "text-emerald-400" : b.clv < 0 ? "text-red-400" : "text-gray-500"}>
+                              {b.clv > 0 ? "+" : ""}{(b.clv * 100).toFixed(1)}%
+                            </span>
+                          ) : (
+                            <span className="text-gray-700">-</span>
+                          )}
+                        </td>
                         <td className="py-3 px-2 text-right">
                           <span className={`text-xs font-bold px-2 py-1 rounded ${
                             b.status === "won" ? "bg-emerald-500/20 text-emerald-400" :

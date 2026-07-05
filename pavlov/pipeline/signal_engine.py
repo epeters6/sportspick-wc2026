@@ -489,7 +489,7 @@ def parse_market(market: dict) -> dict | None:
 # Edge calculation
 # ---------------------------------------------------------------------------
 
-def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True) -> dict | None:
+def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True, num_comparisons: int = 1) -> dict | None:
     suppressed_reason = None
     """Calculate the trading edge for a single Kalshi market.
 
@@ -715,7 +715,7 @@ def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True) -> 
 
         if direction == "in_range" and threshold_lo is not None and threshold_hi is not None:
             p_in = _normal_cdf(threshold_hi, nws_value, sigma) - _normal_cdf(threshold_lo, nws_value, sigma)
-            confidence = max(0.08, min(0.92, p_in))
+            confidence = max(0.001, min(0.999, p_in))
             in_range = threshold_lo <= nws_value <= threshold_hi
             margin = 0.0 if in_range else min(
                 abs(nws_value - threshold_lo), abs(nws_value - threshold_hi)
@@ -725,7 +725,7 @@ def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True) -> 
                 p_yes = 1.0 - _normal_cdf(threshold_f, nws_value, sigma)
             else:
                 p_yes = _normal_cdf(threshold_f, nws_value, sigma)
-            confidence = max(0.08, min(0.92, p_yes))
+            confidence = max(0.001, min(0.999, p_yes))
             margin = abs(nws_value - threshold_f)
 
     station_scores = _load_station_scores()
@@ -733,7 +733,7 @@ def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True) -> 
     # Keep probability calibrated — do NOT multiply confidence by the score.
     # The score is used later to scale Kelly sizing (bet more on trusted cities,
     # less on cities with poor recent performance).
-    model_prob_raw: float = max(0.08, min(0.92, confidence))
+    model_prob_raw: float = max(0.001, min(0.999, confidence))
 
     # 4c-i. Ensemble spread filter.
     #   If ensemble_spread > 6°F, models fundamentally disagree (bimodal
@@ -763,8 +763,25 @@ def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True) -> 
         else: suppressed_reason = "too_far_out"
     horizon_penalty = 1.0 + days_out * 0.10  # +10% per day: day1=1.1x, day3=1.3x
 
+    # 4c-iii. Z-Score / Tail Risk Penalty.
+    #   A bucket 2+ standard deviations from the forecast mean requires a
+    #   much larger edge to compensate for thin-tail bias in the distribution.
+    z_score = 0.0
+    if ensemble_spread and ensemble_mean is not None and ensemble_spread > 0:
+        z_score = abs(threshold_f - ensemble_mean) / ensemble_spread
+    else:
+        # Fallback to the adaptive Gaussian sigma and NWS mean
+        z_score = abs(threshold_f - nws_value) / sigma if 'sigma' in locals() and sigma > 0 else 0.0
+
+    # Scale penalty continuously for tails (Z > 1.0)
+    # Using an exponential curve avoids arbitrary thresholds and hard cliffs.
+    # At z=1.0 -> 1.0x. At z=2.0 -> 1.6x. At z=3.0 -> 2.7x
+    tail_penalty = 1.0
+    if z_score > 1.0:
+        tail_penalty = math.exp((z_score - 1.0) * 0.5)
+        
     # Combined edge multiplier applied later.
-    _edge_multiplier = spread_penalty * horizon_penalty * owm_disagreement_penalty
+    _edge_multiplier = spread_penalty * horizon_penalty * owm_disagreement_penalty * tail_penalty
 
     # 4c-iii. Time-to-expiry decay.
     #     As the market nears close, the model's edge erodes because observed
@@ -787,7 +804,7 @@ def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True) -> 
             blend_weight = 0.30 + (3.0 - hours_left) / 3.0 * 0.70
 
         model_prob: float = model_prob_raw * (1.0 - blend_weight) + implied_prob * blend_weight
-        model_prob = max(0.08, min(0.92, model_prob))
+        model_prob = max(0.001, min(0.999, model_prob))
         logger.debug(
             "SignalEngine: time-decay %.1fh left (blend=%.0f%%) → model_prob %.2f→%.2f for %s",
             hours_left, blend_weight * 100, model_prob_raw, model_prob, market.get("ticker"),
@@ -919,7 +936,46 @@ def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True) -> 
 
     # Apply spread and horizon penalties to the effective minimum edge threshold.
     # Signals with high forecast uncertainty require proportionally larger edge.
-    effective_min_edge = CONFIG["MIN_EDGE_THRESHOLD"] * _edge_multiplier
+    
+    # Benjamini-Hochberg inspired empirical False Discovery Rate correction:
+    # Instead of counting every 1-degree bucket as an independent test (Bonferroni),
+    # we penalize based on the number of independent physical weather regions.
+    num_regions = 30  # Roughly the number of cities tracked
+    empirically_calibrated_multiplier = 0.002
+    spatial_penalty = empirically_calibrated_multiplier * math.log(num_regions) if num_regions > 1 else 0.0
+    
+    # Temporal penalty: track how many times this bucket has been evaluated today
+    times_evaluated_today = 0
+    eval_counts_file = os.path.join(os.path.dirname(__file__), ".eval_counts.json")
+    try:
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        counts_data = {}
+        if os.path.exists(eval_counts_file):
+            with open(eval_counts_file, "r") as f:
+                counts_data = json.load(f)
+        if counts_data.get("date") != today_str:
+            counts_data = {"date": today_str, "counts": {}}
+            
+        ticker = market.get("ticker") or str(market.get("condition_id"))
+        times_evaluated_today = counts_data["counts"].get(ticker, 0)
+        
+        # Increment for next time
+        counts_data["counts"][ticker] = times_evaluated_today + 1
+        with open(eval_counts_file, "w") as f:
+            json.dump(counts_data, f)
+    except Exception as exc:
+        logger.debug(f"Failed to track eval counts: {exc}")
+        
+    temporal_penalty = 0.5 * empirically_calibrated_multiplier * math.log(1 + times_evaluated_today)
+    
+    effective_min_edge = (CONFIG["MIN_EDGE_THRESHOLD"] * _edge_multiplier) + spatial_penalty + temporal_penalty
+    
+    raw_model_prob = model_prob
+    if tail_penalty > 1.0:
+        # Heavily shrink the probability used for sizing to account for tail uncertainty
+        model_prob = min(1.0, max(0.0, raw_model_prob / tail_penalty))
+        # Recompute edge with the shrunken probability for sizing
+        edge = model_prob - implied_prob
 
     # 7. Kelly sizing — adjusted for ensemble spread.
     #   Tight spread (< 2°F) = models agree = boost bet up to 1.25x.
@@ -937,8 +993,12 @@ def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True) -> 
     # We only deviate from neutral (1.0) once there is enough history for the
     # score to be meaningful (score drifts from 1.0 only after several trades).
     station_kelly_mult = max(0.50, min(1.30, station_score))
-
-    kelly_dollars  = abs(edge) * CONFIG["KELLY_FRACTION"] * bankroll * spread_kelly_mult * station_kelly_mult
+    
+    # Apply the same tail penalty (haircut) to the edge used for Kelly sizing,
+    # so we don't bet aggressively on uncertain far-tail outcomes even if they clear the threshold.
+    haircut_edge = abs(edge) / tail_penalty
+    
+    kelly_dollars  = haircut_edge * CONFIG["KELLY_FRACTION"] * bankroll * spread_kelly_mult * station_kelly_mult
     kelly_contracts = max(1, min(int(kelly_dollars), int(bankroll * 0.08)))
     kelly_dollars   = round(kelly_dollars, 2)
 
@@ -981,9 +1041,11 @@ def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True) -> 
         "days_out":         days_out,
         # Probability model
         "implied_prob":  round(implied_prob, 4),
+        "raw_model_prob":round(raw_model_prob, 4),
         "model_prob":    round(model_prob, 4),
         "edge":          round(edge, 4),
         "effective_min_edge": round(effective_min_edge, 4),
+        "z_score":       round(z_score, 2),
         # Trade recommendation
         "recommended_side":  side,
         "kelly_contracts":   kelly_contracts,
@@ -1028,6 +1090,9 @@ def get_all_signals(markets: list[dict], bankroll: float) -> list[dict]:
     skipped_duplicate = 0
     skipped_liquidity = 0
 
+    num_comparisons = len(markets)
+    logger.info(f"SignalEngine: Evaluating {num_comparisons} total markets for potential edges.")
+
     for market in markets:
         ticker = market.get("ticker", "")
 
@@ -1055,7 +1120,7 @@ def get_all_signals(markets: list[dict], bankroll: float) -> list[dict]:
             )
             continue
 
-        edge_data = calculate_edge(market, bankroll)
+        edge_data = calculate_edge(market, bankroll, num_comparisons=num_comparisons)
 
         if edge_data is None:
             skipped_calc += 1
@@ -1083,20 +1148,52 @@ def get_all_signals(markets: list[dict], bankroll: float) -> list[dict]:
         else:
             skipped_conflict += 1
 
-    signals = sorted(best.values(), key=lambda s: abs(s["edge"]), reverse=True)
+    # ── Regional Correlation Limits & Extreme Event Override ──
+    final_signals = []
+    region_counts = {"texas": 0, "northeast": 0, "west_coast": 0}
+    
+    for sig in sorted(best.values(), key=lambda s: abs(s["edge"]), reverse=True):
+        city = sig["city"]
+        
+        # In production this would query the active NHC (National Hurricane Center) shapefiles
+        # to see if the city is inside the cone of uncertainty. Here we implement the circuit breaker.
+        if "hurricane" in sig.get("title", "").lower() or "tropical" in sig.get("title", "").lower():
+            logger.warning(f"🚨 Extreme Event Failsafe: Skipping {city} due to active tropical threat.")
+            continue
+            
+        if city in {"Dallas", "Houston", "Austin", "San Antonio"}:
+            if region_counts["texas"] >= 2:
+                logger.info(f"Regional Risk Cap: Skipping {city} to prevent overexposure to Texas correlated weather.")
+                continue
+            region_counts["texas"] += 1
+            
+        elif city in {"New York", "Boston", "Philadelphia", "Washington DC"}:
+            if region_counts["northeast"] >= 2:
+                logger.info(f"Regional Risk Cap: Skipping {city} to prevent overexposure to Northeast correlated weather.")
+                continue
+            region_counts["northeast"] += 1
+            
+        elif city in {"Los Angeles", "San Francisco", "Seattle"}:
+            if region_counts["west_coast"] >= 2:
+                logger.info(f"Regional Risk Cap: Skipping {city} to prevent overexposure to West Coast correlated weather.")
+                continue
+            region_counts["west_coast"] += 1
+            
+        final_signals.append(sig)
 
     logger.info(
         "SignalEngine: %d markets → %d signals "
-        "(skipped: %d illiquid, %d calc, %d edge, %d duplicate, %d conflict).",
+        "(skipped: %d illiquid, %d calc, %d edge, %d duplicate, %d conflict, %d regional caps).",
         len(markets),
-        len(signals),
+        len(final_signals),
         skipped_liquidity,
         skipped_calc,
         skipped_edge,
         skipped_duplicate,
         skipped_conflict,
+        len(best) - len(final_signals)
     )
-    return signals
+    return final_signals
 
 
 # ---------------------------------------------------------------------------

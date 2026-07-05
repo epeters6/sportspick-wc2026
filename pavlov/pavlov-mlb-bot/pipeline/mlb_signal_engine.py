@@ -198,6 +198,13 @@ def calculate_win_probability(game: Mapping[str, Any], bankroll: float) -> dict[
     lineup_prob = _clamp(0.50 + lineup_edge, 0.40, 0.60)
 
     run_env = park_factors.get_run_environment(venue, gdate, is_dome)
+    total_run_factor = float(run_env.get("total_factor", 1.0))
+    
+    # Scale pitcher and bullpen edge inversely to the run environment.
+    # In a hitter-friendly park with wind blowing out (total_factor > 1.0),
+    # pitching predictability drops. In a pitcher's park (total_factor < 1.0), pitching dominates.
+    pitcher_edge = pitcher_edge / total_run_factor
+    bullpen_edge = bullpen_edge / total_run_factor
 
     # Travel: home is always 0 fatigue (function returns zeros). Away fatigue
     # penalty → positive home edge. (Previous code subtracted away fatigue,
@@ -213,18 +220,35 @@ def calculate_win_probability(game: Mapping[str, Any], bankroll: float) -> dict[
 
     # Coors penalty: extreme run env reduces home pitching edge predictability,
     # so trim some home prob.
-    coors_penalty = 0.03 if "Coors" in venue else 0.0
+    import math
+    
+    def to_logit(prob):
+        p = _clamp(prob, 0.05, 0.95)
+        return math.log(p / (1 - p))
+        
+    def to_prob(logit):
+        return 1 / (1 + math.exp(-logit))
 
-    raw_edge = (
-        HOME_FIELD_EDGE
-        + pitcher_edge
-        + bullpen_edge
-        + form_edge
-        + lineup_edge
-        + travel_edge
+    # Convert all component probabilities to logits (relative to 0)
+    # The probabilities were anchored at 0.50, so we can convert directly.
+    sum_logits = (
+        to_logit(0.50 + HOME_FIELD_EDGE)
+        + to_logit(pitcher_prob)
+        + to_logit(bullpen_prob)
+        + to_logit(form_prob)
+        + to_logit(lineup_prob)
+        + to_logit(travel_prob)
     )
-    raw = 0.50 + raw_edge
+    
+    # We subtract the baseline logits (since we added 0.50 6 times)
+    # Actually, to_logit(0.50) = 0, so it doesn't matter!
+    
+    # Coors penalty is tricky in logit space. We'll apply it directly to probability later.
+    raw = to_prob(sum_logits)
+    coors_penalty = 0.03 if "Coors" in venue else 0.0
+    
     final_home_prob = _clamp(raw - coors_penalty, 0.10, 0.90)
+    raw_edge = raw - 0.50
 
     return {
         "pitcher_prob": round(pitcher_prob, 4),

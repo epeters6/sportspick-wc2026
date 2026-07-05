@@ -23,6 +23,7 @@ async def run_scrape_phase() -> dict[str, int]:
     from backend.scrapers.youtube_scraper import YouTubeScraper
     from backend.scrapers.actionnetwork_scraper import ActionNetworkScraper
     from backend.scrapers.pickswise_scraper import PickswiseScraper
+    from backend.scrapers.silver_bulletin_scraper import sync_politics
     from backend.sports_data.mlb_fetcher import sync_mlb_matches
     from backend.sports_data.worldcup_fetcher import sync_matches
 
@@ -59,6 +60,10 @@ async def run_scrape_phase() -> dict[str, int]:
     print("Scraping Pickswise MLB...")
     pw_picks = await PickswiseScraper().scrape_all()
     print(f"  {pw_picks} picks saved")
+
+    print("Scraping Silver Bulletin (Politics)...")
+    pol_picks = sync_politics()
+    print(f"  {pol_picks} picks saved")
 
     tw_picks = 0
     if settings.twitter_auth_token and settings.twitter_ct0:
@@ -173,6 +178,25 @@ async def run_ml_phase() -> dict[str, int]:
     print("Running Polymarket autobet...")
     autobet_summary: dict = {}
     try:
+        # --- GUARDIAN HEALTH CHECK ---
+        print("  Running Guardian Health Check...")
+        try:
+            from scripts.guardian_health import check_health
+            check_health()
+        except Exception as exc:
+            print(f"  Guardian health check failed (Continuing anyway): {exc}")
+            
+        # --- TREASURY & ARBITRAGE (Phase 4) ---
+        print("  Running Treasury & Arb Scans...")
+        try:
+            from backend.trading.treasury import check_treasury_health
+            from backend.trading.arb_engine import run_arb_scan
+            check_treasury_health()
+            run_arb_scan()
+        except Exception as exc:
+            print(f"  Treasury/Arb execution failed: {exc}")
+
+        # autobet (live vs paper dictated by config)
         autobet_summary = await run_autobet()
         print(
             f"  [{autobet_summary.get('mode')}] "
@@ -183,7 +207,11 @@ async def run_ml_phase() -> dict[str, int]:
         print(f"  Autobet placement skipped: {exc}")
 
     try:
-        from backend.trading.autobet import resolve_autobets
+        from backend.trading.autobet import resolve_autobets, update_closing_prices
+        
+        clv_updated = update_closing_prices()
+        print(f"  clv updated={clv_updated} open bets")
+        
         ab_resolved = resolve_autobets()
         print(f"  autobets resolved={ab_resolved}")
     except Exception as exc:

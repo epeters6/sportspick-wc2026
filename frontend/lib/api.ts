@@ -222,6 +222,8 @@ export interface AutobetRow {
   stake: number;
   status: "open" | "won" | "lost" | "void" | "rejected";
   pnl?: number;
+  closing_price?: number | null;
+  clv?: number | null;
   created_at: string;
   resolved_at?: string;
   reject_reason?: string;
@@ -354,7 +356,6 @@ export async function fetchTrackedPicks(params?: {
   const { data } = await api.get("/trading/tracked-picks", { params });
   return data;
 }
-
 export async function fetchSimulatedBets(limit = 50): Promise<{
   bets: SimulatedBetRow[];
   total: number;
@@ -362,16 +363,32 @@ export async function fetchSimulatedBets(limit = 50): Promise<{
   const { data } = await api.get("/trading/simulated", { params: { limit } });
   return data;
 }
-
 export async function triggerAutobetRun(): Promise<{ summary: AutobetSummary; resolved: number }> {
   const { data } = await api.post("/trading/autobet/run");
   return data;
 }
 
-export async function fetchWeatherPredictions(limit = 20): Promise<{
-  predictions: any[];
-  total: number;
-}> {
+export async function fetchWeatherPredictions(limit = 20) {
   const { data } = await api.get("/weather-predictions", { params: { limit } });
+  return data;
+}
+
+export async function fetchTreasury() {
+  const { data } = await api.get("/trading/treasury");
+  return data;
+}
+
+export async function fetchGuardian() {
+  const { data } = await api.get("/trading/guardian");
+  return data;
+}
+
+export async function fetchArbScan() {
+  const { data } = await api.get("/trading/arb-scan");
+  return data;
+}
+
+export async function fetchReadiness() {
+  const { data } = await api.get("/trading/readiness");
   return data;
 }

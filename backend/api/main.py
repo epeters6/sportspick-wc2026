@@ -45,9 +45,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Sports Pick Tracker",
+    title="SportsPick API",
     description="Track top sports pick influencers and get AI-powered consensus recommendations.",
-    version="1.0.0",
+    version="0.1.0",
     lifespan=lifespan,
 )
 
@@ -59,6 +59,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from backend.api.routers import models
+app.include_router(models.router)
 
 # ─── Health ──────────────────────────────────────────────────────────────────
 
@@ -153,7 +155,7 @@ def list_matches(
             "*, consensus_picks("
             "  id, predicted_winner, confidence, total_votes, pick_count,"
             "  home_probability, draw_probability, away_probability"
-            "), model_predictions(source, outcome, prob, edge, metadata)"
+            ")"
         )
         .order("scheduled_at")
         .limit(limit)
@@ -276,7 +278,7 @@ def list_weather_predictions(limit: int = Query(20, ge=1, le=100)):
     query = (
         db.table("model_predictions")
         .select("*")
-        .eq("domain", "weather")
+        .eq("source", "weather_model")
         .order("created_at", desc=True)
         .limit(limit)
     )
@@ -338,7 +340,7 @@ def trading_autobet(limit: int = Query(50, ge=1, le=200)):
         .select(
             "question, outcome_name, mode, model_prob, market_price, edge, "
             "stake, status, pnl, created_at, resolved_at, reject_reason, "
-            "bet_type, bet_line, bet_subject, sport"
+            "bet_type, bet_line, bet_subject, sport, closing_price, clv"
         )
         .order("created_at", desc=True)
         .limit(limit)
@@ -356,7 +358,7 @@ def trading_simulated(limit: int = Query(50, ge=1, le=200)):
         db.table("simulated_bets")
         .select(
             "id, predicted_outcome, bet_type, bet_line, bet_subject, confidence, "
-            "edge, bet_size, outcome, pnl, created_at, resolved_at, "
+            "edge, bet_size, outcome, pnl, created_at, resolved_at, closing_price, clv, "
             "matches(home_team, away_team, sport, scheduled_at)"
         )
         .order("created_at", desc=True)
@@ -402,6 +404,125 @@ async def trading_autobet_run():
     summary = await run_autobet()
     resolved = resolve_autobets()
     return {"summary": summary, "resolved": resolved}
+
+
+@app.get("/trading/treasury")
+def get_treasury_status():
+    """Returns live Kalshi/Polymarket balances."""
+    from backend.trading.treasury import get_unified_balances
+    return get_unified_balances()
+
+
+@app.get("/trading/guardian")
+def get_guardian_status():
+    """Returns Guardian Circuit Breaker health status."""
+    import os, json
+    from scripts.guardian_health import HALT_FILE
+    if os.path.exists(HALT_FILE):
+        with open(HALT_FILE, "r") as f:
+            return json.load(f)
+    return {"halted": False, "reasons": [], "updated_at": None}
+
+
+@app.get("/trading/arb-scan")
+def get_arb_opportunities():
+    """Mocks an arb scan return for the UI (using the strict ARB_MAP logic)."""
+    # For UI display purposes, we return a mock active arb opportunity based on ARB_MAP
+    from backend.trading.arb_engine import ARB_MAP
+    opportunities = []
+    if ARB_MAP:
+        # Mock active arb
+        opportunities.append({
+            "market": ARB_MAP[0]["kalshi_ticker"],
+            "kalshi_side": "YES",
+            "poly_side": "NO",
+            "net_cost": 97.5,
+            "margin": 2.5,
+            "available_size": 25,
+            "timestamp": "Just now"
+        })
+    return {"opportunities": opportunities}
+
+@app.get("/models/blender")
+def get_model_blender_diagnostics():
+    from backend.ml.model_blender import build_blender_from_db
+    blender = build_blender_from_db()
+    return {"diagnostics": blender.diagnostics(["mlb_quant", "consensus", "sports_ml"])}
+
+@app.get("/trading/readiness")
+def get_trading_readiness():
+    """Evaluates paper-trading performance to determine live-trading readiness per domain."""
+    db = get_db()
+    
+    # We will look at autobets with status='paper' or mode='paper' and clv data
+    # In this mock-up for the UI, we'll evaluate the actual db but also provide a structured response
+    from datetime import datetime, timedelta
+    fourteen_days_ago = (datetime.utcnow() - timedelta(days=14)).isoformat()
+    recent_bets = (
+        db.table("autobets")
+        .select("sport, stake_size, placed_price, closing_price")
+        .gte("created_at", fourteen_days_ago)
+        .not_.is_("closing_price", "null")
+        .execute()
+        .data or []
+    )
+    
+    domains = {}
+    for b in recent_bets:
+        sport = b.get("sport") or "unknown"
+        stake = float(b.get("stake_size") or 0.0)
+        placed = float(b.get("placed_price") or 0.0)
+        closing = float(b.get("closing_price") or 0.0)
+        
+        if placed <= 0 or closing <= 0 or stake <= 0:
+            continue
+            
+        payout = stake / placed
+        ev = (payout * closing) - stake
+        
+        if sport not in domains:
+            domains[sport] = {"ev": 0.0, "staked": 0.0, "count": 0}
+            
+        domains[sport]["ev"] += ev
+        domains[sport]["staked"] += stake
+        domains[sport]["count"] += 1
+        
+    def apply_shrinkage(observed_roi: float, n_bets: int, prior_roi: float = 0.0, k: float = 20.0) -> float:
+        weight = n_bets / (n_bets + k)
+        return (weight * observed_roi) + ((1 - weight) * prior_roi)
+
+    readiness = []
+    
+    # Ensure all sports are represented even if no recent bets
+    all_sports = ["football", "mlb", "weather", "politics"]
+    for s in all_sports:
+        if s not in domains:
+            domains[s] = {"ev": 0.0, "staked": 0.0, "count": 0}
+            
+    for sport, data in domains.items():
+        n = data["count"]
+        raw_roi = (data["ev"] / data["staked"]) if data["staked"] > 0 else 0.0
+        shrunken_roi = apply_shrinkage(raw_roi, n)
+        
+        # Criteria: At least 10 trades AND Shrunken ROI > 0%
+        req_trades = 10
+        min_roi = 0.00
+        
+        is_ready = n >= req_trades and shrunken_roi > min_roi
+        progress_trades = min(100, (n / req_trades) * 100) if req_trades > 0 else 100
+        
+        readiness.append({
+            "domain": sport,
+            "is_ready": is_ready,
+            "trades_count": n,
+            "trades_required": req_trades,
+            "trades_progress_pct": progress_trades,
+            "shrunken_roi": shrunken_roi,
+            "raw_roi": raw_roi,
+            "status": "LIVE CLEARED" if is_ready else "PAPER ONLY"
+        })
+        
+    return {"domains": readiness}
 
 
 # ─── Stats ───────────────────────────────────────────────────────────────────
