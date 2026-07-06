@@ -359,9 +359,17 @@ class PolymarketClient:
             return {"ok": True, "order_id": order_id, "error": None}
             
         except Exception as exc:
-            # Check structural HTTP status codes if available via the SDK
-            status = getattr(exc, "status_code", getattr(getattr(exc, "response", None), "status_code", None))
-            error_msg = getattr(exc, "message", str(exc))
+            import httpx
+            status = None
+            error_msg = str(exc)
+            
+            if isinstance(exc, httpx.HTTPStatusError):
+                status = exc.response.status_code
+                error_msg = exc.response.text
+            else:
+                # Fallback extraction for SDK-wrapped errors
+                status = getattr(exc, "status_code", getattr(getattr(exc, "response", None), "status_code", None))
+                error_msg = getattr(exc, "message", str(exc))
             
             if status in (403, 451) or "compliance" in error_msg.lower() or "kyc" in error_msg.lower():
                 logger.error(f"🚨 POLYMARKET US COMPLIANCE/KYC HOLD DETECTED: {error_msg}. Guardian Circuit Breaker tripped.")
@@ -369,7 +377,6 @@ class PolymarketClient:
                 import json, datetime, tempfile, os
                 
                 # Atomically append to HALT_FILE
-                reasons = []
                 state = {"halted": True, "reasons": [], "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
                 if os.path.exists(HALT_FILE):
                     try:

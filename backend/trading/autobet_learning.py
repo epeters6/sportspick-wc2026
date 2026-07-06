@@ -141,6 +141,7 @@ def compute_tier_stats(db=None) -> dict[str, dict[str, Any]]:
             "avg_market_price": 0.0,
             "avg_edge": 0.0,
             "avg_model_prob": 0.0,
+            "recent_7d_pnl": 0.0,
             "sharpe": None,
             "_returns": [],
             "_clusters": {}, # match_id -> {"probs": [], "wins": 0}
@@ -161,6 +162,17 @@ def compute_tier_stats(db=None) -> dict[str, dict[str, Any]]:
         b["avg_market_price"] += r.get("market_price") or 0.0
         b["avg_edge"] += r.get("edge") or 0.0
         b["avg_model_prob"] += r.get("model_prob") or 0.0
+        
+        resolved_str = r.get("resolved_at") or r.get("created_at") or ""
+        if resolved_str:
+            from datetime import datetime, timezone, timedelta
+            try:
+                # Handle ISO format strings
+                dt = datetime.fromisoformat(resolved_str.replace("Z", "+00:00"))
+                if datetime.now(timezone.utc) - dt <= timedelta(days=7):
+                    b["recent_7d_pnl"] += pnl
+            except Exception:
+                pass
         
         # Track cluster-level data for absurdity backstop
         match_id = r.get("match_id") or f"unclustered_{r.get('id')}"
@@ -399,6 +411,21 @@ def gates_for_price(
                     logger.debug(f"Longshot Absurdity check: {total_cluster_wins}/{cluster_count} clusters won, P(streak)={streak_probability:.4f}")
             else:
                 logger.debug(f"Longshot Absurdity check skipped: only {cluster_count}/8 required clusters.")
+                
+            # Independent Model-Free Hard Stop: 5% of bankroll in 7 days
+            recent_7d_loss = -tier_stats.get("recent_7d_pnl", 0.0)
+            max_allowed_loss = get_settings().polymarket_bankroll * 0.05
+            
+            if recent_7d_loss > max_allowed_loss:
+                # Halt immediately regardless of probabilities or clusters
+                notes.append(f"7-day dollar-loss hard stop (${recent_7d_loss:.2f} > ${max_allowed_loss:.2f})")
+                return TierGates(
+                    tier=tier,
+                    min_edge=99.0,
+                    min_model_prob=99.0,
+                    adjusted=True,
+                    note="; ".join(notes)
+                )
                 
         if should_penalize:
             min_edge = min(0.15, min_edge + 0.015)

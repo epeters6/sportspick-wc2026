@@ -1,0 +1,2 @@
+ALTER TABLE autobets ADD COLUMN IF NOT EXISTS clv_source TEXT DEFAULT 'live';
+ALTER TABLE simulated_bets ADD COLUMN IF NOT EXISTS clv_source TEXT DEFAULT 'live';

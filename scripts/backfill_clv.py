@@ -48,7 +48,7 @@ async def backfill_clv():
                 db.table("autobets").update({
                     "closing_price": mock_closing_price,
                     "clv": clv,
-                    "reject_reason": (bet.get("reject_reason") or "") + " [clv_source=backfilled]"
+                    "clv_source": "backfilled"
                 }).eq("id", bet["id"]).execute()
                 
                 updated += 1
