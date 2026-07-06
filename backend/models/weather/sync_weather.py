@@ -97,6 +97,7 @@ async def sync_weather_predictions():
             "ensemble_members": sig.get('ensemble_members'),
             "threshold_f": sig.get('threshold_f'),
             "z_score": sig.get('z_score', 0.0),
+            "raw_model_prob": sig.get('raw_model_prob', sig['model_prob']),
             "suppressed_reason": sig.get("suppressed_reason")
         }
         
@@ -111,7 +112,6 @@ async def sync_weather_predictions():
                 "event_key": event_key,
                 "outcome": outcome,
                 "prob": sig['model_prob'],
-                "raw_model_prob": sig.get('raw_model_prob', sig['model_prob']),
                 "market_price": sig['implied_prob'],
                 "edge": sig['edge'],
                 "metadata": metadata
@@ -145,7 +145,7 @@ async def sync_weather_predictions():
                 
             # Treat all weather bets in the same tier on the same day as a single correlated event
             # so the event_exposure cap restricts total dollars wagered on tail correlations.
-            virtual_match_id = f"{sport_tier}_{sig['date']}"
+            virtual_match_id = f"{sport_tier}_{sig.get('market_date', '')}"
                 
             record = {
                 "match_id": virtual_match_id,
