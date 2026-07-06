@@ -46,7 +46,16 @@ async def sync_weather_predictions():
             poly_client.get_client = mock_get_client
         markets = poly_client.get_weather_markets()
         logger.info(f"Fetched {len(markets)} pre-parsed Polymarket weather markets via poly_client.")
-        kalshi_format_markets = markets
+        
+        try:
+            from pipeline import kalshi_client
+            kalshi_markets = kalshi_client.get_weather_markets()
+            logger.info(f"Fetched {len(kalshi_markets)} pre-parsed Kalshi weather markets via kalshi_client.")
+            markets.extend(kalshi_markets)
+        except Exception as e:
+            logger.warning(f"Failed to fetch Kalshi weather markets: {e}")
+            
+        combined_markets = markets
     except Exception as e:
         logger.error(f"Failed to fetch weather markets: {e}")
         return
@@ -56,7 +65,7 @@ async def sync_weather_predictions():
     
     # Run the signal engine to compute edge for ALL markets
     signals = []
-    for m in kalshi_format_markets:
+    for m in combined_markets:
         try:
             sig = signal_engine.calculate_edge(m, bankroll, trading_mode=False)
             if sig:

@@ -289,6 +289,9 @@ def _sign_request(method: str, path: str) -> dict[str, str]:
     Returns:
         Dict with uppercase Kalshi auth header names.
     """
+    if _private_key is None:
+        return {}
+
     timestamp_ms = str(int(time.time() * 1000))
     message = (timestamp_ms + method.upper() + path).encode("utf-8")
 
