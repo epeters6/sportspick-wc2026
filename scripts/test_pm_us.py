@@ -25,17 +25,17 @@ async def run_test():
     # 1. Read-only test
     logger.info("Running read-only test...")
     try:
-        res = client_us.portfolio.list()
-        logger.info(f"Read-only test passed. Fetched portfolio.")
+        res = client_us.portfolio.positions()
+        logger.info(f"Read-only test passed. Fetched portfolio positions.")
     except Exception as read_exc:
         logger.error(f"Read portfolio failed: {read_exc}")
             
     # 2. Live-fire test
     logger.info("Running live-fire test...")
     try:
-        events = client_us.events.list(query={"active": True, "closed": False, "limit": 1})
-        if events and len(events) > 0:
-            event = events[0]
+        events = client_us.events.list(params={"active": True, "closed": False, "limit": 1})
+        if events and getattr(events, 'data', None) and len(events.data) > 0:
+            event = events.data[0]
             markets = event.get("markets", [])
             if markets:
                 market = markets[0]
