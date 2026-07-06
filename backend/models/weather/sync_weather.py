@@ -148,7 +148,7 @@ async def sync_weather_predictions():
             virtual_match_id = f"{sport_tier}_{sig.get('market_date', '')}"
                 
             record = {
-                "match_id": virtual_match_id,
+                "bet_subject": virtual_match_id,
                 "market_id": market_id,
                 "market_slug": market_id,
                 "question": f"Weather: {sig['city']} {sig['metric']} {outcome} {sig.get('threshold_f')}",
