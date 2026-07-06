@@ -29,12 +29,26 @@ async def backfill_clv():
             # Tag the backfilled row with clv_source = 'backfilled'
             
             try:
-                # Mocking the exact API call for now. In reality we'd parse the 1-minute candles.
-                mock_closing_price = 0.50 # Replace with actual parsing
+                # Fetch actual 1m candles for the token
+                url = f"https://clob.polymarket.com/prices-history?market={bet.get('token_id', market_id)}&interval=1m&fidelity=60"
+                resp = await client.get(url)
                 
+                if resp.status_code == 200:
+                    data = resp.json()
+                    history = data.get("history", [])
+                    if history and len(history) > 0:
+                        mock_closing_price = history[-1].get("p", 0.50)
+                    else:
+                        continue
+                else:
+                    logger.warning(f"Failed to fetch history for {market_id}: HTTP {resp.status_code}")
+                    continue
+                
+                clv = bet.get("model_prob", 0) - mock_closing_price
                 db.table("autobets").update({
                     "closing_price": mock_closing_price,
-                    "notes": (bet.get("notes") or "") + " [clv_source=backfilled]"
+                    "clv": clv,
+                    "reject_reason": (bet.get("reject_reason") or "") + " [clv_source=backfilled]"
                 }).eq("id", bet["id"]).execute()
                 
                 updated += 1
