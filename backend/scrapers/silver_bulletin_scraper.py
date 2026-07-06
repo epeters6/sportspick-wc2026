@@ -395,7 +395,6 @@ def sync_politics() -> int:
             "home_team": "Donald Trump",
             "away_team": "Kamala Harris",
             "scheduled_at": "2028-11-07T00:00:00Z",
-            "status": "scheduled",
             "tournament": "US Election"
         }).execute()
         match_id = match_res.data[0]["id"]
