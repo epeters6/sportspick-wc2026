@@ -388,10 +388,10 @@ def sync_politics() -> int:
     inf_id = inf_res[0]["id"]
 
     # 2. Ensure mock match exists
-    match_query = db.table("matches").select("id").eq("sport", "politics").eq("home_team", "Donald Trump").execute().data
+    match_query = db.table("matches").select("id").eq("sport", "stocks").eq("home_team", "Donald Trump").execute().data
     if not match_query:
         match_res = db.table("matches").insert({
-            "sport": "politics",
+            "sport": "stocks",
             "home_team": "Donald Trump",
             "away_team": "Kamala Harris",
             "scheduled_at": "2028-11-07T00:00:00Z",
@@ -411,7 +411,7 @@ def sync_politics() -> int:
                 latest_data = snap.raw_dataframe.iloc[0].to_dict()
                 
                 # Check for existing pick for this topic
-                existing = db.table("picks").select("id").eq("influencer_id", inf_id).eq("match_id", match_id).eq("bet_subject", topic_name).execute().data
+                existing = db.table("picks").select("id").eq("influencer_id", inf_id).eq("match_id", match_id).eq("post_id", topic_name).execute().data
                 if existing:
                     db.table("picks").update({
                         "raw_text": str(latest_data),
@@ -421,8 +421,9 @@ def sync_politics() -> int:
                     db.table("picks").insert({
                         "influencer_id": inf_id,
                         "match_id": match_id,
+                        "platform": "twitter",
                         "bet_type": "moneyline",
-                        "bet_subject": topic_name,
+                        "post_id": topic_name,
                         "raw_text": str(latest_data),
                         "outcome": "pending",
                         "scraped_at": datetime.now(timezone.utc).isoformat()
