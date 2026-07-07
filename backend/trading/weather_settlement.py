@@ -60,7 +60,7 @@ async def resolve_weather_autobets():
     db = get_db()
     
     # Fetch all open weather bets
-    open_bets = db.table("autobets").select("*").eq("sport", "weather").eq("status", "open").execute().data or []
+    open_bets = db.table("autobets").select("*").eq("bet_type", "weather").eq("status", "open").execute().data or []
     
     if not open_bets:
         logger.info("No open weather bets found.")

@@ -183,7 +183,7 @@ async def sync_weather_predictions():
             logger.info(f"Scaling down {market_id} stake to ${stake:.2f} to fit {virtual_match_id} exposure cap")
             
         # Update running exposure
-        exposure_tracker[virtual_match_id] += stake
+        exposure_tracker[virtual_match_id] = exposure_tracker.get(virtual_match_id, 0.0) + stake
         shares = round(stake / sig["implied_prob"], 2) if sig["implied_prob"] > 0 else 0
             
         record = {
