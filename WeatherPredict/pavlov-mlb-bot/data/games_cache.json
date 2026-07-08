@@ -1,0 +1,482 @@
+{
+  "2026-05-18": {
+    "cached_at": 1779139970.8519306,
+    "games": [
+      {
+        "game_id": 824277,
+        "game_time_et": "2026-05-18T18:40:00-04:00",
+        "venue_name": "Comerica Park",
+        "status": "Pre-Game",
+        "home": {
+          "id": 116,
+          "name": "Detroit Tigers",
+          "abbr": "DET"
+        },
+        "away": {
+          "id": 114,
+          "name": "Cleveland Guardians",
+          "abbr": "CLE"
+        },
+        "home_pitcher": {
+          "id": 664285,
+          "name": "Framber Valdez",
+          "throws": "L",
+          "era": 4.32
+        },
+        "away_pitcher": {
+          "id": 677944,
+          "name": "Slade Cecconi",
+          "throws": "R",
+          "era": 5.6
+        },
+        "weather": {
+          "condition": "Partly Cloudy",
+          "temp_f": 76.0,
+          "wind_speed": 21.0,
+          "wind_dir": "Out To LF"
+        },
+        "series_game_number": 1
+      },
+      {
+        "game_id": 822980,
+        "game_time_et": "2026-05-18T18:40:00-04:00",
+        "venue_name": "Tropicana Field",
+        "status": "Pre-Game",
+        "home": {
+          "id": 139,
+          "name": "Tampa Bay Rays",
+          "abbr": "TB"
+        },
+        "away": {
+          "id": 110,
+          "name": "Baltimore Orioles",
+          "abbr": "BAL"
+        },
+        "home_pitcher": {
+          "id": 663556,
+          "name": "Shane McClanahan",
+          "throws": "L",
+          "era": 2.27
+        },
+        "away_pitcher": {
+          "id": 669432,
+          "name": "Trevor Rogers",
+          "throws": "L",
+          "era": 5.77
+        },
+        "weather": {
+          "condition": "Dome",
+          "temp_f": 72.0,
+          "wind_speed": 0.0,
+          "wind_dir": "None"
+        },
+        "series_game_number": 1
+      },
+      {
+        "game_id": 823465,
+        "game_time_et": "2026-05-18T18:40:00-04:00",
+        "venue_name": "Citizens Bank Park",
+        "status": "Pre-Game",
+        "home": {
+          "id": 143,
+          "name": "Philadelphia Phillies",
+          "abbr": "PHI"
+        },
+        "away": {
+          "id": 113,
+          "name": "Cincinnati Reds",
+          "abbr": "CIN"
+        },
+        "home_pitcher": {
+          "id": 691725,
+          "name": "Andrew Painter",
+          "throws": "R",
+          "era": 6.21
+        },
+        "away_pitcher": {
+          "id": 666157,
+          "name": "Nick Lodolo",
+          "throws": "L",
+          "era": 8.68
+        },
+        "weather": {
+          "condition": "Clear",
+          "temp_f": 95.0,
+          "wind_speed": 13.0,
+          "wind_dir": "Out To LF"
+        },
+        "series_game_number": 1
+      },
+      {
+        "game_id": 823867,
+        "game_time_et": "2026-05-18T18:40:00-04:00",
+        "venue_name": "loanDepot park",
+        "status": "Pre-Game",
+        "home": {
+          "id": 146,
+          "name": "Miami Marlins",
+          "abbr": "MIA"
+        },
+        "away": {
+          "id": 144,
+          "name": "Atlanta Braves",
+          "abbr": "ATL"
+        },
+        "home_pitcher": {
+          "id": 676974,
+          "name": "Max Meyer",
+          "throws": "R",
+          "era": 3.21
+        },
+        "away_pitcher": {
+          "id": 702275,
+          "name": "JR Ritchie",
+          "throws": "R",
+          "era": 3.32
+        },
+        "weather": {
+          "condition": "Dome",
+          "temp_f": 72.0,
+          "wind_speed": 0.0,
+          "wind_dir": "None"
+        },
+        "series_game_number": 1
+      },
+      {
+        "game_id": 822734,
+        "game_time_et": "2026-05-18T18:45:00-04:00",
+        "venue_name": "Nationals Park",
+        "status": "Pre-Game",
+        "home": {
+          "id": 120,
+          "name": "Washington Nationals",
+          "abbr": "WSH"
+        },
+        "away": {
+          "id": 121,
+          "name": "New York Mets",
+          "abbr": "NYM"
+        },
+        "home_pitcher": {
+          "id": 663623,
+          "name": "Jake Irvin",
+          "throws": "R",
+          "era": 5.91
+        },
+        "away_pitcher": {
+          "id": 681035,
+          "name": "Christian Scott",
+          "throws": "R",
+          "era": 3.45
+        },
+        "weather": {
+          "condition": "Clear",
+          "temp_f": 92.0,
+          "wind_speed": 8.0,
+          "wind_dir": "Out To CF"
+        },
+        "series_game_number": 1
+      },
+      {
+        "game_id": 823549,
+        "game_time_et": "2026-05-18T19:05:00-04:00",
+        "venue_name": "Yankee Stadium",
+        "status": "Pre-Game",
+        "home": {
+          "id": 147,
+          "name": "New York Yankees",
+          "abbr": "NYY"
+        },
+        "away": {
+          "id": 141,
+          "name": "Toronto Blue Jays",
+          "abbr": "TOR"
+        },
+        "home_pitcher": {
+          "id": 677960,
+          "name": "Ryan Weathers",
+          "throws": "L",
+          "era": 3.0
+        },
+        "away_pitcher": {
+          "id": 571578,
+          "name": "Patrick Corbin",
+          "throws": "L",
+          "era": 3.93
+        },
+        "weather": {
+          "condition": "Clear",
+          "temp_f": 81.0,
+          "wind_speed": 10.0,
+          "wind_dir": "In From RF"
+        },
+        "series_game_number": 1
+      },
+      {
+        "game_id": 824114,
+        "game_time_et": "2026-05-18T19:10:00-04:00",
+        "venue_name": "Kauffman Stadium",
+        "status": "Pre-Game",
+        "home": {
+          "id": 118,
+          "name": "Kansas City Royals",
+          "abbr": "KC"
+        },
+        "away": {
+          "id": 111,
+          "name": "Boston Red Sox",
+          "abbr": "BOS"
+        },
+        "home_pitcher": {
+          "id": 607625,
+          "name": "Seth Lugo",
+          "throws": "R",
+          "era": 3.76
+        },
+        "away_pitcher": {
+          "id": 543243,
+          "name": "Sonny Gray",
+          "throws": "R",
+          "era": 3.18
+        },
+        "weather": {
+          "condition": "Partly Cloudy",
+          "temp_f": 77.0,
+          "wind_speed": 19.0,
+          "wind_dir": "R To L"
+        },
+        "series_game_number": 1
+      },
+      {
+        "game_id": 823705,
+        "game_time_et": "2026-05-18T19:40:00-04:00",
+        "venue_name": "Target Field",
+        "status": "Pre-Game",
+        "home": {
+          "id": 142,
+          "name": "Minnesota Twins",
+          "abbr": "MIN"
+        },
+        "away": {
+          "id": 117,
+          "name": "Houston Astros",
+          "abbr": "HOU"
+        },
+        "home_pitcher": {
+          "id": 696070,
+          "name": "Kendry Rojas",
+          "throws": "L",
+          "era": 2.45
+        },
+        "away_pitcher": {
+          "id": 837227,
+          "name": "Tatsuya Imai",
+          "throws": "R",
+          "era": 9.24
+        },
+        "weather": {
+          "condition": "Partly Cloudy",
+          "temp_f": 67.0,
+          "wind_speed": 5.0,
+          "wind_dir": "Out To RF"
+        },
+        "series_game_number": 1
+      },
+      {
+        "game_id": 824680,
+        "game_time_et": "2026-05-18T19:40:00-04:00",
+        "venue_name": "Wrigley Field",
+        "status": "Pre-Game",
+        "home": {
+          "id": 112,
+          "name": "Chicago Cubs",
+          "abbr": "CHC"
+        },
+        "away": {
+          "id": 158,
+          "name": "Milwaukee Brewers",
+          "abbr": "MIL"
+        },
+        "home_pitcher": {
+          "id": 684007,
+          "name": "Shota Imanaga",
+          "throws": "L",
+          "era": 2.32
+        },
+        "away_pitcher": {
+          "id": 687075,
+          "name": "Brandon Sproat",
+          "throws": "R",
+          "era": 5.75
+        },
+        "weather": {
+          "condition": "Partly Cloudy",
+          "temp_f": 76.0,
+          "wind_speed": 17.0,
+          "wind_dir": "Out To LF"
+        },
+        "series_game_number": 1
+      },
+      {
+        "game_id": 824357,
+        "game_time_et": "2026-05-18T20:40:00-04:00",
+        "venue_name": "Coors Field",
+        "status": "Scheduled",
+        "home": {
+          "id": 115,
+          "name": "Colorado Rockies",
+          "abbr": "COL"
+        },
+        "away": {
+          "id": 140,
+          "name": "Texas Rangers",
+          "abbr": "TEX"
+        },
+        "home_pitcher": {
+          "id": 500779,
+          "name": "Jose Quintana",
+          "throws": "L",
+          "era": 3.97
+        },
+        "away_pitcher": {
+          "id": 669022,
+          "name": "MacKenzie Gore",
+          "throws": "L",
+          "era": 4.5
+        },
+        "weather": null,
+        "series_game_number": 1
+      },
+      {
+        "game_id": 824035,
+        "game_time_et": "2026-05-18T21:38:00-04:00",
+        "venue_name": "Angel Stadium",
+        "status": "Pre-Game",
+        "home": {
+          "id": 108,
+          "name": "Los Angeles Angels",
+          "abbr": "LAA"
+        },
+        "away": {
+          "id": 133,
+          "name": "Athletics",
+          "abbr": "ATH"
+        },
+        "home_pitcher": {
+          "id": 700712,
+          "name": "Walbert Ure\u00f1a",
+          "throws": "R",
+          "era": 3.29
+        },
+        "away_pitcher": {
+          "id": 669372,
+          "name": "J.T. Ginn",
+          "throws": "R",
+          "era": 3.12
+        },
+        "weather": {
+          "condition": "Partly Cloudy",
+          "temp_f": 72.0,
+          "wind_speed": 9.0,
+          "wind_dir": "Out To CF"
+        },
+        "series_game_number": 1
+      },
+      {
+        "game_id": 823301,
+        "game_time_et": "2026-05-18T21:40:00-04:00",
+        "venue_name": "Petco Park",
+        "status": "Scheduled",
+        "home": {
+          "id": 135,
+          "name": "San Diego Padres",
+          "abbr": "SD"
+        },
+        "away": {
+          "id": 119,
+          "name": "Los Angeles Dodgers",
+          "abbr": "LAD"
+        },
+        "home_pitcher": {
+          "id": 650633,
+          "name": "Michael King",
+          "throws": "R",
+          "era": 2.63
+        },
+        "away_pitcher": {
+          "id": 808967,
+          "name": "Yoshinobu Yamamoto",
+          "throws": "R",
+          "era": 3.6
+        },
+        "weather": null,
+        "series_game_number": 1
+      },
+      {
+        "game_id": 825087,
+        "game_time_et": "2026-05-18T21:40:00-04:00",
+        "venue_name": "Chase Field",
+        "status": "Scheduled",
+        "home": {
+          "id": 109,
+          "name": "Arizona Diamondbacks",
+          "abbr": "AZ"
+        },
+        "away": {
+          "id": 137,
+          "name": "San Francisco Giants",
+          "abbr": "SF"
+        },
+        "home_pitcher": {
+          "id": 668678,
+          "name": "Zac Gallen",
+          "throws": "R",
+          "era": 5.02
+        },
+        "away_pitcher": {
+          "id": 592662,
+          "name": "Robbie Ray",
+          "throws": "L",
+          "era": 3.04
+        },
+        "weather": null,
+        "series_game_number": 1
+      },
+      {
+        "game_id": 823137,
+        "game_time_et": "2026-05-18T21:40:00-04:00",
+        "venue_name": "T-Mobile Park",
+        "status": "Pre-Game",
+        "home": {
+          "id": 136,
+          "name": "Seattle Mariners",
+          "abbr": "SEA"
+        },
+        "away": {
+          "id": 145,
+          "name": "Chicago White Sox",
+          "abbr": "CWS"
+        },
+        "home_pitcher": {
+          "id": 693433,
+          "name": "Bryan Woo",
+          "throws": "R",
+          "era": 3.91
+        },
+        "away_pitcher": {
+          "id": 702273,
+          "name": "Noah Schultz",
+          "throws": "L",
+          "era": 4.91
+        },
+        "weather": {
+          "condition": "Partly Cloudy",
+          "temp_f": 66.0,
+          "wind_speed": 6.0,
+          "wind_dir": "In From LF"
+        },
+        "series_game_number": 1
+      }
+    ]
+  }
+}

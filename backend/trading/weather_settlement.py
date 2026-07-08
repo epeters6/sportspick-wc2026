@@ -16,6 +16,13 @@ from polymarket import poly_client
 
 # Kalshi tickers are typically uppercase: KXHIGHTDC-26JUL06-T84
 _KALSHI_TICKER_RE = re.compile(r'^[A-Z]{2,}[A-Z0-9-]+$')
+# Pattern to extract date from Kalshi ticker: e.g. 26JUL06 -> 2026-07-06
+_KALSHI_DATE_RE = re.compile(r'-(\d{2})([A-Z]{3})(\d{2})-')
+_MONTH_MAP = {
+    'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+    'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12,
+}
+
 
 def _detect_venue(market_id: str) -> str:
     """Auto-detect whether a market_id is Kalshi or Polymarket based on format."""
@@ -25,6 +32,24 @@ def _detect_venue(market_id: str) -> str:
     if _KALSHI_TICKER_RE.match(market_id):
         return "kalshi"
     return "polymarket"
+
+
+def _kalshi_ticker_date(market_id: str) -> datetime | None:
+    """Extract the settlement date from a Kalshi ticker like KXHIGHTDC-26JUL06-T84.
+    Returns a timezone-aware datetime (UTC midnight) or None if unparseable."""
+    m = _KALSHI_DATE_RE.search(market_id)
+    if not m:
+        return None
+    try:
+        yr = 2000 + int(m.group(1))
+        mo = _MONTH_MAP.get(m.group(2).upper())
+        day = int(m.group(3))
+        if mo is None:
+            return None
+        return datetime(yr, mo, day, tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
 
 
 def _ensure_poly_configured():
@@ -145,34 +170,64 @@ async def resolve_weather_autobets() -> int:
                     logger.error(f"Failed to update weather bet {bet['id']}: {e}")
             continue
 
-        # Stale-bet expiry: if the bet is more than 5 days old and not settled,
-        # assume it expired/lost so it doesn't pile up in 'open' forever.
-        created_raw = bet.get("created_at") or ""
-        if created_raw:
+        # ── Stale-bet expiry ──────────────────────────────────────────────
+        # For Kalshi tickers with an encoded date (e.g. KXHIGHTDC-26JUL06-T84),
+        # or Polymarket slugs with a date (tc-temp-mdwhigh-2026-07-06-*),
+        # expire 2 days after the market's settlement date.
+        # Fallback: expire 3 days after creation for any other stale bets.
+
+        expiry_triggered = False
+
+        # Try Kalshi date from ticker
+        kalshi_market_date = _kalshi_ticker_date(market_id) if venue == "kalshi" else None
+        if kalshi_market_date is not None:
+            days_since_settlement = (now - kalshi_market_date).total_seconds() / 86400
+            if days_since_settlement >= 2:
+                expiry_triggered = True
+                reason = f"Kalshi ticker date {kalshi_market_date.date()} ({days_since_settlement:.1f}d past)"
+
+        # Try Polymarket slug date: tc-temp-mdwhigh-2026-07-06-* or similar
+        if not expiry_triggered and venue == "polymarket":
+            poly_date_m = re.search(r'(\d{4}-\d{2}-\d{2})', market_id)
+            if poly_date_m:
+                try:
+                    mkt_date = datetime.strptime(poly_date_m.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    days_since_settlement = (now - mkt_date).total_seconds() / 86400
+                    if days_since_settlement >= 2:
+                        expiry_triggered = True
+                        reason = f"Poly slug date {mkt_date.date()} ({days_since_settlement:.1f}d past)"
+                except ValueError:
+                    pass
+
+        # Fallback: age from created_at
+        if not expiry_triggered:
+            created_raw = bet.get("created_at") or ""
+            if created_raw:
+                try:
+                    created_at = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+                    age_days = (now - created_at).total_seconds() / 86400
+                    if age_days >= 3:
+                        expiry_triggered = True
+                        reason = f"age {age_days:.1f}d since creation"
+                except (ValueError, TypeError):
+                    pass
+
+        if expiry_triggered:
+            stake = bet.get("stake") or 0.0
             try:
-                created_at = datetime.fromisoformat(
-                    created_raw.replace("Z", "+00:00")
+                db.table("autobets").update({
+                    "status": "lost",
+                    "pnl": round(-stake, 2),
+                    "resolved_at": now.isoformat()
+                }).eq("id", bet["id"]).execute()
+                resolved_count += 1
+                logger.info(
+                    f"Expired stale weather bet {bet['id'][:8]} [{market_id}] "
+                    f"-> lost ({reason})"
                 )
-                age_days = (now - created_at).total_seconds() / 86400
-                if age_days >= 5:
-                    stake = bet.get("stake") or 0.0
-                    try:
-                        db.table("autobets").update({
-                            "status": "lost",
-                            "pnl": round(-stake, 2),
-                            "resolved_at": now.isoformat()
-                        }).eq("id", bet["id"]).execute()
-                        resolved_count += 1
-                        logger.info(
-                            f"Expired stale weather bet {bet['id'][:8]} "
-                            f"[{market_id}] (age {age_days:.1f}d) -> lost"
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to expire stale weather bet {bet['id']}: {e}"
-                        )
-            except (ValueError, TypeError):
-                pass
+            except Exception as e:
+                logger.error(f"Failed to expire stale weather bet {bet['id']}: {e}")
+
 
     logger.info(f"Resolved {resolved_count} weather bets.")
     return resolved_count

@@ -1,0 +1,2196 @@
+{
+  "39.756_-104.994": {
+    "fetched_at": "2026-05-18T21:45:31.232246+00:00",
+    "periods": [
+      {
+        "time": "2026-05-18T14:00:00-06:00",
+        "temp_f": 41,
+        "wind_speed": 15,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-18T15:00:00-06:00",
+        "temp_f": 38,
+        "wind_speed": 15,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-18T16:00:00-06:00",
+        "temp_f": 39,
+        "wind_speed": 13,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-18T17:00:00-06:00",
+        "temp_f": 40,
+        "wind_speed": 10,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-18T18:00:00-06:00",
+        "temp_f": 38,
+        "wind_speed": 10,
+        "wind_dir": "N",
+        "short_forecast": "Rain Showers Likely"
+      },
+      {
+        "time": "2026-05-18T19:00:00-06:00",
+        "temp_f": 39,
+        "wind_speed": 10,
+        "wind_dir": "N",
+        "short_forecast": "Rain Showers Likely"
+      },
+      {
+        "time": "2026-05-18T20:00:00-06:00",
+        "temp_f": 39,
+        "wind_speed": 10,
+        "wind_dir": "N",
+        "short_forecast": "Rain Showers Likely"
+      },
+      {
+        "time": "2026-05-18T21:00:00-06:00",
+        "temp_f": 40,
+        "wind_speed": 10,
+        "wind_dir": "N",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-18T22:00:00-06:00",
+        "temp_f": 39,
+        "wind_speed": 9,
+        "wind_dir": "N",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-18T23:00:00-06:00",
+        "temp_f": 38,
+        "wind_speed": 9,
+        "wind_dir": "N",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-19T00:00:00-06:00",
+        "temp_f": 38,
+        "wind_speed": 8,
+        "wind_dir": "N",
+        "short_forecast": "Patchy Fog"
+      },
+      {
+        "time": "2026-05-19T01:00:00-06:00",
+        "temp_f": 39,
+        "wind_speed": 7,
+        "wind_dir": "N",
+        "short_forecast": "Patchy Fog"
+      },
+      {
+        "time": "2026-05-19T02:00:00-06:00",
+        "temp_f": 38,
+        "wind_speed": 6,
+        "wind_dir": "N",
+        "short_forecast": "Patchy Fog"
+      },
+      {
+        "time": "2026-05-19T03:00:00-06:00",
+        "temp_f": 38,
+        "wind_speed": 5,
+        "wind_dir": "N",
+        "short_forecast": "Patchy Fog"
+      },
+      {
+        "time": "2026-05-19T04:00:00-06:00",
+        "temp_f": 37,
+        "wind_speed": 5,
+        "wind_dir": "NNE",
+        "short_forecast": "Patchy Fog"
+      },
+      {
+        "time": "2026-05-19T05:00:00-06:00",
+        "temp_f": 37,
+        "wind_speed": 3,
+        "wind_dir": "NNE",
+        "short_forecast": "Patchy Fog"
+      },
+      {
+        "time": "2026-05-19T06:00:00-06:00",
+        "temp_f": 37,
+        "wind_speed": 3,
+        "wind_dir": "NNE",
+        "short_forecast": "Patchy Fog"
+      },
+      {
+        "time": "2026-05-19T07:00:00-06:00",
+        "temp_f": 36,
+        "wind_speed": 2,
+        "wind_dir": "NE",
+        "short_forecast": "Patchy Fog"
+      },
+      {
+        "time": "2026-05-19T08:00:00-06:00",
+        "temp_f": 38,
+        "wind_speed": 2,
+        "wind_dir": "E",
+        "short_forecast": "Patchy Fog"
+      },
+      {
+        "time": "2026-05-19T09:00:00-06:00",
+        "temp_f": 39,
+        "wind_speed": 3,
+        "wind_dir": "ESE",
+        "short_forecast": "Partly Sunny"
+      },
+      {
+        "time": "2026-05-19T10:00:00-06:00",
+        "temp_f": 42,
+        "wind_speed": 3,
+        "wind_dir": "ESE",
+        "short_forecast": "Partly Sunny"
+      },
+      {
+        "time": "2026-05-19T11:00:00-06:00",
+        "temp_f": 44,
+        "wind_speed": 3,
+        "wind_dir": "E",
+        "short_forecast": "Partly Sunny"
+      },
+      {
+        "time": "2026-05-19T12:00:00-06:00",
+        "temp_f": 46,
+        "wind_speed": 5,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-19T13:00:00-06:00",
+        "temp_f": 48,
+        "wind_speed": 5,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-19T14:00:00-06:00",
+        "temp_f": 49,
+        "wind_speed": 5,
+        "wind_dir": "NE",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-19T15:00:00-06:00",
+        "temp_f": 50,
+        "wind_speed": 6,
+        "wind_dir": "NNE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T16:00:00-06:00",
+        "temp_f": 51,
+        "wind_speed": 7,
+        "wind_dir": "NNE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T17:00:00-06:00",
+        "temp_f": 49,
+        "wind_speed": 7,
+        "wind_dir": "N",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T18:00:00-06:00",
+        "temp_f": 48,
+        "wind_speed": 7,
+        "wind_dir": "N",
+        "short_forecast": "Rain Showers Likely"
+      },
+      {
+        "time": "2026-05-19T19:00:00-06:00",
+        "temp_f": 48,
+        "wind_speed": 6,
+        "wind_dir": "N",
+        "short_forecast": "Rain Showers Likely"
+      },
+      {
+        "time": "2026-05-19T20:00:00-06:00",
+        "temp_f": 46,
+        "wind_speed": 5,
+        "wind_dir": "NNW",
+        "short_forecast": "Rain Showers Likely"
+      },
+      {
+        "time": "2026-05-19T21:00:00-06:00",
+        "temp_f": 46,
+        "wind_speed": 3,
+        "wind_dir": "NNW",
+        "short_forecast": "Rain Showers Likely"
+      },
+      {
+        "time": "2026-05-19T22:00:00-06:00",
+        "temp_f": 46,
+        "wind_speed": 2,
+        "wind_dir": "NNW",
+        "short_forecast": "Rain Showers Likely"
+      },
+      {
+        "time": "2026-05-19T23:00:00-06:00",
+        "temp_f": 46,
+        "wind_speed": 2,
+        "wind_dir": "NW",
+        "short_forecast": "Rain Showers Likely"
+      },
+      {
+        "time": "2026-05-20T00:00:00-06:00",
+        "temp_f": 46,
+        "wind_speed": 2,
+        "wind_dir": "SW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T01:00:00-06:00",
+        "temp_f": 46,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T02:00:00-06:00",
+        "temp_f": 46,
+        "wind_speed": 3,
+        "wind_dir": "SSE",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T03:00:00-06:00",
+        "temp_f": 44,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T04:00:00-06:00",
+        "temp_f": 43,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T05:00:00-06:00",
+        "temp_f": 43,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T06:00:00-06:00",
+        "temp_f": 41,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T07:00:00-06:00",
+        "temp_f": 44,
+        "wind_speed": 5,
+        "wind_dir": "S",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T08:00:00-06:00",
+        "temp_f": 45,
+        "wind_speed": 3,
+        "wind_dir": "SSW",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T09:00:00-06:00",
+        "temp_f": 47,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T10:00:00-06:00",
+        "temp_f": 50,
+        "wind_speed": 5,
+        "wind_dir": "SE",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T11:00:00-06:00",
+        "temp_f": 53,
+        "wind_speed": 6,
+        "wind_dir": "E",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T12:00:00-06:00",
+        "temp_f": 55,
+        "wind_speed": 6,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-20T13:00:00-06:00",
+        "temp_f": 56,
+        "wind_speed": 5,
+        "wind_dir": "ENE",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-20T14:00:00-06:00",
+        "temp_f": 57,
+        "wind_speed": 6,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-20T15:00:00-06:00",
+        "temp_f": 57,
+        "wind_speed": 7,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-20T16:00:00-06:00",
+        "temp_f": 57,
+        "wind_speed": 7,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-20T17:00:00-06:00",
+        "temp_f": 57,
+        "wind_speed": 7,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-20T18:00:00-06:00",
+        "temp_f": 57,
+        "wind_speed": 7,
+        "wind_dir": "NNE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-20T19:00:00-06:00",
+        "temp_f": 56,
+        "wind_speed": 6,
+        "wind_dir": "NE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-20T20:00:00-06:00",
+        "temp_f": 55,
+        "wind_speed": 5,
+        "wind_dir": "E",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-20T21:00:00-06:00",
+        "temp_f": 54,
+        "wind_speed": 3,
+        "wind_dir": "SE",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T22:00:00-06:00",
+        "temp_f": 53,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T23:00:00-06:00",
+        "temp_f": 51,
+        "wind_speed": 2,
+        "wind_dir": "SSW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-21T00:00:00-06:00",
+        "temp_f": 50,
+        "wind_speed": 2,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T01:00:00-06:00",
+        "temp_f": 48,
+        "wind_speed": 3,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T02:00:00-06:00",
+        "temp_f": 47,
+        "wind_speed": 3,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T03:00:00-06:00",
+        "temp_f": 45,
+        "wind_speed": 3,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T04:00:00-06:00",
+        "temp_f": 43,
+        "wind_speed": 3,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T05:00:00-06:00",
+        "temp_f": 42,
+        "wind_speed": 3,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T06:00:00-06:00",
+        "temp_f": 42,
+        "wind_speed": 2,
+        "wind_dir": "WSW",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T07:00:00-06:00",
+        "temp_f": 45,
+        "wind_speed": 1,
+        "wind_dir": "SSW",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T08:00:00-06:00",
+        "temp_f": 49,
+        "wind_speed": 1,
+        "wind_dir": "SE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T09:00:00-06:00",
+        "temp_f": 53,
+        "wind_speed": 1,
+        "wind_dir": "E",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T10:00:00-06:00",
+        "temp_f": 57,
+        "wind_speed": 2,
+        "wind_dir": "E",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T11:00:00-06:00",
+        "temp_f": 61,
+        "wind_speed": 5,
+        "wind_dir": "ENE",
+        "short_forecast": "Partly Sunny"
+      },
+      {
+        "time": "2026-05-21T12:00:00-06:00",
+        "temp_f": 64,
+        "wind_speed": 6,
+        "wind_dir": "NE",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-21T13:00:00-06:00",
+        "temp_f": 65,
+        "wind_speed": 6,
+        "wind_dir": "NE",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-21T14:00:00-06:00",
+        "temp_f": 66,
+        "wind_speed": 6,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-21T15:00:00-06:00",
+        "temp_f": 66,
+        "wind_speed": 6,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-21T16:00:00-06:00",
+        "temp_f": 65,
+        "wind_speed": 7,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-21T17:00:00-06:00",
+        "temp_f": 64,
+        "wind_speed": 8,
+        "wind_dir": "NE",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-21T18:00:00-06:00",
+        "temp_f": 64,
+        "wind_speed": 8,
+        "wind_dir": "NE",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-21T19:00:00-06:00",
+        "temp_f": 62,
+        "wind_speed": 7,
+        "wind_dir": "NE",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-21T20:00:00-06:00",
+        "temp_f": 60,
+        "wind_speed": 6,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-21T21:00:00-06:00",
+        "temp_f": 58,
+        "wind_speed": 5,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-21T22:00:00-06:00",
+        "temp_f": 57,
+        "wind_speed": 5,
+        "wind_dir": "N",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-21T23:00:00-06:00",
+        "temp_f": 55,
+        "wind_speed": 3,
+        "wind_dir": "NNW",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-22T00:00:00-06:00",
+        "temp_f": 54,
+        "wind_speed": 3,
+        "wind_dir": "NW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T01:00:00-06:00",
+        "temp_f": 52,
+        "wind_speed": 3,
+        "wind_dir": "NW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T02:00:00-06:00",
+        "temp_f": 50,
+        "wind_speed": 2,
+        "wind_dir": "NW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T03:00:00-06:00",
+        "temp_f": 49,
+        "wind_speed": 2,
+        "wind_dir": "NW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T04:00:00-06:00",
+        "temp_f": 48,
+        "wind_speed": 2,
+        "wind_dir": "NW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T05:00:00-06:00",
+        "temp_f": 47,
+        "wind_speed": 2,
+        "wind_dir": "WNW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T06:00:00-06:00",
+        "temp_f": 47,
+        "wind_speed": 2,
+        "wind_dir": "WNW",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T07:00:00-06:00",
+        "temp_f": 49,
+        "wind_speed": 2,
+        "wind_dir": "NW",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T08:00:00-06:00",
+        "temp_f": 52,
+        "wind_speed": 2,
+        "wind_dir": "N",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T09:00:00-06:00",
+        "temp_f": 55,
+        "wind_speed": 3,
+        "wind_dir": "N",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T10:00:00-06:00",
+        "temp_f": 57,
+        "wind_speed": 5,
+        "wind_dir": "N",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T11:00:00-06:00",
+        "temp_f": 59,
+        "wind_speed": 6,
+        "wind_dir": "NNE",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T12:00:00-06:00",
+        "temp_f": 61,
+        "wind_speed": 7,
+        "wind_dir": "NNE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-22T13:00:00-06:00",
+        "temp_f": 63,
+        "wind_speed": 7,
+        "wind_dir": "NNE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-22T14:00:00-06:00",
+        "temp_f": 64,
+        "wind_speed": 7,
+        "wind_dir": "NNE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-22T15:00:00-06:00",
+        "temp_f": 65,
+        "wind_speed": 7,
+        "wind_dir": "NNE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-22T16:00:00-06:00",
+        "temp_f": 66,
+        "wind_speed": 7,
+        "wind_dir": "NE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-22T17:00:00-06:00",
+        "temp_f": 66,
+        "wind_speed": 7,
+        "wind_dir": "NE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-22T18:00:00-06:00",
+        "temp_f": 65,
+        "wind_speed": 7,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-22T19:00:00-06:00",
+        "temp_f": 63,
+        "wind_speed": 6,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-22T20:00:00-06:00",
+        "temp_f": 61,
+        "wind_speed": 6,
+        "wind_dir": "E",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-22T21:00:00-06:00",
+        "temp_f": 59,
+        "wind_speed": 5,
+        "wind_dir": "ESE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-22T22:00:00-06:00",
+        "temp_f": 57,
+        "wind_speed": 5,
+        "wind_dir": "SE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-22T23:00:00-06:00",
+        "temp_f": 56,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T00:00:00-06:00",
+        "temp_f": 54,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-23T01:00:00-06:00",
+        "temp_f": 52,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-23T02:00:00-06:00",
+        "temp_f": 51,
+        "wind_speed": 3,
+        "wind_dir": "SSW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-23T03:00:00-06:00",
+        "temp_f": 50,
+        "wind_speed": 3,
+        "wind_dir": "SSW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-23T04:00:00-06:00",
+        "temp_f": 48,
+        "wind_speed": 3,
+        "wind_dir": "SSW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-23T05:00:00-06:00",
+        "temp_f": 47,
+        "wind_speed": 2,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-23T06:00:00-06:00",
+        "temp_f": 48,
+        "wind_speed": 2,
+        "wind_dir": "SW",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-23T07:00:00-06:00",
+        "temp_f": 51,
+        "wind_speed": 1,
+        "wind_dir": "SW",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-23T08:00:00-06:00",
+        "temp_f": 55,
+        "wind_speed": 1,
+        "wind_dir": "SSW",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-23T09:00:00-06:00",
+        "temp_f": 60,
+        "wind_speed": 1,
+        "wind_dir": "S",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-23T10:00:00-06:00",
+        "temp_f": 64,
+        "wind_speed": 2,
+        "wind_dir": "SSE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-23T11:00:00-06:00",
+        "temp_f": 67,
+        "wind_speed": 3,
+        "wind_dir": "E",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-23T12:00:00-06:00",
+        "temp_f": 69,
+        "wind_speed": 5,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T13:00:00-06:00",
+        "temp_f": 71,
+        "wind_speed": 5,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T14:00:00-06:00",
+        "temp_f": 72,
+        "wind_speed": 6,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T15:00:00-06:00",
+        "temp_f": 72,
+        "wind_speed": 6,
+        "wind_dir": "NE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T16:00:00-06:00",
+        "temp_f": 72,
+        "wind_speed": 6,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T17:00:00-06:00",
+        "temp_f": 72,
+        "wind_speed": 7,
+        "wind_dir": "E",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T18:00:00-06:00",
+        "temp_f": 71,
+        "wind_speed": 7,
+        "wind_dir": "E",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-23T19:00:00-06:00",
+        "temp_f": 69,
+        "wind_speed": 6,
+        "wind_dir": "ESE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-23T20:00:00-06:00",
+        "temp_f": 67,
+        "wind_speed": 6,
+        "wind_dir": "SE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-23T21:00:00-06:00",
+        "temp_f": 64,
+        "wind_speed": 5,
+        "wind_dir": "SSE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-23T22:00:00-06:00",
+        "temp_f": 62,
+        "wind_speed": 5,
+        "wind_dir": "S",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-23T23:00:00-06:00",
+        "temp_f": 61,
+        "wind_speed": 5,
+        "wind_dir": "SSW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-24T00:00:00-06:00",
+        "temp_f": 59,
+        "wind_speed": 5,
+        "wind_dir": "SSW",
+        "short_forecast": "Mostly Clear"
+      },
+      {
+        "time": "2026-05-24T01:00:00-06:00",
+        "temp_f": 57,
+        "wind_speed": 5,
+        "wind_dir": "SSW",
+        "short_forecast": "Mostly Clear"
+      },
+      {
+        "time": "2026-05-24T02:00:00-06:00",
+        "temp_f": 55,
+        "wind_speed": 5,
+        "wind_dir": "SW",
+        "short_forecast": "Mostly Clear"
+      },
+      {
+        "time": "2026-05-24T03:00:00-06:00",
+        "temp_f": 53,
+        "wind_speed": 5,
+        "wind_dir": "SW",
+        "short_forecast": "Mostly Clear"
+      },
+      {
+        "time": "2026-05-24T04:00:00-06:00",
+        "temp_f": 51,
+        "wind_speed": 5,
+        "wind_dir": "SW",
+        "short_forecast": "Mostly Clear"
+      },
+      {
+        "time": "2026-05-24T05:00:00-06:00",
+        "temp_f": 49,
+        "wind_speed": 5,
+        "wind_dir": "SW",
+        "short_forecast": "Mostly Clear"
+      },
+      {
+        "time": "2026-05-24T06:00:00-06:00",
+        "temp_f": 50,
+        "wind_speed": 5,
+        "wind_dir": "SW",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T07:00:00-06:00",
+        "temp_f": 54,
+        "wind_speed": 5,
+        "wind_dir": "SW",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T08:00:00-06:00",
+        "temp_f": 59,
+        "wind_speed": 3,
+        "wind_dir": "SW",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T09:00:00-06:00",
+        "temp_f": 65,
+        "wind_speed": 3,
+        "wind_dir": "SW",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T10:00:00-06:00",
+        "temp_f": 70,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T11:00:00-06:00",
+        "temp_f": 75,
+        "wind_speed": 5,
+        "wind_dir": "ESE",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T12:00:00-06:00",
+        "temp_f": 78,
+        "wind_speed": 5,
+        "wind_dir": "ENE",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T13:00:00-06:00",
+        "temp_f": 80,
+        "wind_speed": 5,
+        "wind_dir": "ENE",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T14:00:00-06:00",
+        "temp_f": 81,
+        "wind_speed": 6,
+        "wind_dir": "ENE",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T15:00:00-06:00",
+        "temp_f": 81,
+        "wind_speed": 6,
+        "wind_dir": "ENE",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T16:00:00-06:00",
+        "temp_f": 81,
+        "wind_speed": 6,
+        "wind_dir": "NE",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T17:00:00-06:00",
+        "temp_f": 80,
+        "wind_speed": 7,
+        "wind_dir": "N",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-24T18:00:00-06:00",
+        "temp_f": 78,
+        "wind_speed": 7,
+        "wind_dir": "N",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-24T19:00:00-06:00",
+        "temp_f": 76,
+        "wind_speed": 6,
+        "wind_dir": "NW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-24T20:00:00-06:00",
+        "temp_f": 73,
+        "wind_speed": 6,
+        "wind_dir": "W",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-24T21:00:00-06:00",
+        "temp_f": 70,
+        "wind_speed": 5,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-24T22:00:00-06:00",
+        "temp_f": 68,
+        "wind_speed": 5,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-24T23:00:00-06:00",
+        "temp_f": 65,
+        "wind_speed": 6,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-25T00:00:00-06:00",
+        "temp_f": 63,
+        "wind_speed": 6,
+        "wind_dir": "SSW",
+        "short_forecast": "Mostly Clear"
+      },
+      {
+        "time": "2026-05-25T01:00:00-06:00",
+        "temp_f": 60,
+        "wind_speed": 6,
+        "wind_dir": "SSW",
+        "short_forecast": "Mostly Clear"
+      }
+    ]
+  },
+  "42.339_-83.049": {
+    "fetched_at": "2026-05-18T21:51:31.643942+00:00",
+    "periods": [
+      {
+        "time": "2026-05-18T17:00:00-04:00",
+        "temp_f": 88,
+        "wind_speed": 18,
+        "wind_dir": "SSW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-18T18:00:00-04:00",
+        "temp_f": 87,
+        "wind_speed": 17,
+        "wind_dir": "SW",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-18T19:00:00-04:00",
+        "temp_f": 84,
+        "wind_speed": 16,
+        "wind_dir": "SW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-18T20:00:00-04:00",
+        "temp_f": 80,
+        "wind_speed": 14,
+        "wind_dir": "SW",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-18T21:00:00-04:00",
+        "temp_f": 78,
+        "wind_speed": 13,
+        "wind_dir": "SSW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-18T22:00:00-04:00",
+        "temp_f": 76,
+        "wind_speed": 13,
+        "wind_dir": "SSW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-18T23:00:00-04:00",
+        "temp_f": 74,
+        "wind_speed": 12,
+        "wind_dir": "SSW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-19T00:00:00-04:00",
+        "temp_f": 73,
+        "wind_speed": 10,
+        "wind_dir": "SW",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-19T01:00:00-04:00",
+        "temp_f": 72,
+        "wind_speed": 10,
+        "wind_dir": "SW",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-19T02:00:00-04:00",
+        "temp_f": 71,
+        "wind_speed": 9,
+        "wind_dir": "SW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T03:00:00-04:00",
+        "temp_f": 71,
+        "wind_speed": 10,
+        "wind_dir": "SW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T04:00:00-04:00",
+        "temp_f": 70,
+        "wind_speed": 10,
+        "wind_dir": "SSW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T05:00:00-04:00",
+        "temp_f": 69,
+        "wind_speed": 12,
+        "wind_dir": "SSW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T06:00:00-04:00",
+        "temp_f": 70,
+        "wind_speed": 12,
+        "wind_dir": "SSW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T07:00:00-04:00",
+        "temp_f": 70,
+        "wind_speed": 13,
+        "wind_dir": "SSW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T08:00:00-04:00",
+        "temp_f": 71,
+        "wind_speed": 13,
+        "wind_dir": "SSW",
+        "short_forecast": "Slight Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T09:00:00-04:00",
+        "temp_f": 75,
+        "wind_speed": 15,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Sunny"
+      },
+      {
+        "time": "2026-05-19T10:00:00-04:00",
+        "temp_f": 79,
+        "wind_speed": 16,
+        "wind_dir": "SW",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-19T11:00:00-04:00",
+        "temp_f": 83,
+        "wind_speed": 17,
+        "wind_dir": "SW",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-19T12:00:00-04:00",
+        "temp_f": 85,
+        "wind_speed": 18,
+        "wind_dir": "SW",
+        "short_forecast": "Partly Sunny"
+      },
+      {
+        "time": "2026-05-19T13:00:00-04:00",
+        "temp_f": 87,
+        "wind_speed": 20,
+        "wind_dir": "SW",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-19T14:00:00-04:00",
+        "temp_f": 89,
+        "wind_speed": 20,
+        "wind_dir": "SW",
+        "short_forecast": "Slight Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T15:00:00-04:00",
+        "temp_f": 89,
+        "wind_speed": 20,
+        "wind_dir": "SW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T16:00:00-04:00",
+        "temp_f": 88,
+        "wind_speed": 20,
+        "wind_dir": "SW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T17:00:00-04:00",
+        "temp_f": 86,
+        "wind_speed": 18,
+        "wind_dir": "SW",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-19T18:00:00-04:00",
+        "temp_f": 84,
+        "wind_speed": 17,
+        "wind_dir": "SW",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-19T19:00:00-04:00",
+        "temp_f": 81,
+        "wind_speed": 16,
+        "wind_dir": "WSW",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-19T20:00:00-04:00",
+        "temp_f": 78,
+        "wind_speed": 14,
+        "wind_dir": "WSW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T21:00:00-04:00",
+        "temp_f": 76,
+        "wind_speed": 13,
+        "wind_dir": "WSW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T22:00:00-04:00",
+        "temp_f": 73,
+        "wind_speed": 12,
+        "wind_dir": "WSW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-19T23:00:00-04:00",
+        "temp_f": 72,
+        "wind_speed": 10,
+        "wind_dir": "W",
+        "short_forecast": "Slight Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-20T00:00:00-04:00",
+        "temp_f": 70,
+        "wind_speed": 10,
+        "wind_dir": "W",
+        "short_forecast": "Slight Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-20T01:00:00-04:00",
+        "temp_f": 68,
+        "wind_speed": 10,
+        "wind_dir": "WNW",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-20T02:00:00-04:00",
+        "temp_f": 66,
+        "wind_speed": 10,
+        "wind_dir": "NW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T03:00:00-04:00",
+        "temp_f": 65,
+        "wind_speed": 10,
+        "wind_dir": "NNW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T04:00:00-04:00",
+        "temp_f": 63,
+        "wind_speed": 10,
+        "wind_dir": "NNW",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T05:00:00-04:00",
+        "temp_f": 59,
+        "wind_speed": 10,
+        "wind_dir": "N",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T06:00:00-04:00",
+        "temp_f": 57,
+        "wind_speed": 10,
+        "wind_dir": "N",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T07:00:00-04:00",
+        "temp_f": 55,
+        "wind_speed": 10,
+        "wind_dir": "N",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-20T08:00:00-04:00",
+        "temp_f": 55,
+        "wind_speed": 10,
+        "wind_dir": "N",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-20T09:00:00-04:00",
+        "temp_f": 56,
+        "wind_speed": 9,
+        "wind_dir": "N",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-20T10:00:00-04:00",
+        "temp_f": 57,
+        "wind_speed": 9,
+        "wind_dir": "N",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-20T11:00:00-04:00",
+        "temp_f": 58,
+        "wind_speed": 9,
+        "wind_dir": "N",
+        "short_forecast": "Partly Sunny"
+      },
+      {
+        "time": "2026-05-20T12:00:00-04:00",
+        "temp_f": 60,
+        "wind_speed": 9,
+        "wind_dir": "N",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-20T13:00:00-04:00",
+        "temp_f": 62,
+        "wind_speed": 9,
+        "wind_dir": "N",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-20T14:00:00-04:00",
+        "temp_f": 63,
+        "wind_speed": 9,
+        "wind_dir": "N",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-20T15:00:00-04:00",
+        "temp_f": 64,
+        "wind_speed": 9,
+        "wind_dir": "N",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-20T16:00:00-04:00",
+        "temp_f": 64,
+        "wind_speed": 10,
+        "wind_dir": "NNE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-20T17:00:00-04:00",
+        "temp_f": 64,
+        "wind_speed": 10,
+        "wind_dir": "NNE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-20T18:00:00-04:00",
+        "temp_f": 62,
+        "wind_speed": 10,
+        "wind_dir": "NNE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-20T19:00:00-04:00",
+        "temp_f": 60,
+        "wind_speed": 12,
+        "wind_dir": "NE",
+        "short_forecast": "Mostly Cloudy"
+      },
+      {
+        "time": "2026-05-20T20:00:00-04:00",
+        "temp_f": 57,
+        "wind_speed": 12,
+        "wind_dir": "NE",
+        "short_forecast": "Mostly Cloudy"
+      },
+      {
+        "time": "2026-05-20T21:00:00-04:00",
+        "temp_f": 54,
+        "wind_speed": 12,
+        "wind_dir": "NE",
+        "short_forecast": "Mostly Cloudy"
+      },
+      {
+        "time": "2026-05-20T22:00:00-04:00",
+        "temp_f": 50,
+        "wind_speed": 10,
+        "wind_dir": "NE",
+        "short_forecast": "Mostly Cloudy"
+      },
+      {
+        "time": "2026-05-20T23:00:00-04:00",
+        "temp_f": 48,
+        "wind_speed": 10,
+        "wind_dir": "NE",
+        "short_forecast": "Mostly Cloudy"
+      },
+      {
+        "time": "2026-05-21T00:00:00-04:00",
+        "temp_f": 46,
+        "wind_speed": 10,
+        "wind_dir": "NE",
+        "short_forecast": "Mostly Cloudy"
+      },
+      {
+        "time": "2026-05-21T01:00:00-04:00",
+        "temp_f": 45,
+        "wind_speed": 9,
+        "wind_dir": "NNE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T02:00:00-04:00",
+        "temp_f": 44,
+        "wind_speed": 9,
+        "wind_dir": "NNE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T03:00:00-04:00",
+        "temp_f": 44,
+        "wind_speed": 9,
+        "wind_dir": "NNE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T04:00:00-04:00",
+        "temp_f": 43,
+        "wind_speed": 8,
+        "wind_dir": "NNE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T05:00:00-04:00",
+        "temp_f": 44,
+        "wind_speed": 8,
+        "wind_dir": "NNE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T06:00:00-04:00",
+        "temp_f": 44,
+        "wind_speed": 8,
+        "wind_dir": "NNE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T07:00:00-04:00",
+        "temp_f": 45,
+        "wind_speed": 9,
+        "wind_dir": "NE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T08:00:00-04:00",
+        "temp_f": 46,
+        "wind_speed": 9,
+        "wind_dir": "NE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T09:00:00-04:00",
+        "temp_f": 49,
+        "wind_speed": 9,
+        "wind_dir": "NE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T10:00:00-04:00",
+        "temp_f": 51,
+        "wind_speed": 9,
+        "wind_dir": "ENE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T11:00:00-04:00",
+        "temp_f": 54,
+        "wind_speed": 9,
+        "wind_dir": "ENE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T12:00:00-04:00",
+        "temp_f": 56,
+        "wind_speed": 9,
+        "wind_dir": "ENE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T13:00:00-04:00",
+        "temp_f": 58,
+        "wind_speed": 10,
+        "wind_dir": "ENE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T14:00:00-04:00",
+        "temp_f": 60,
+        "wind_speed": 10,
+        "wind_dir": "ENE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T15:00:00-04:00",
+        "temp_f": 61,
+        "wind_speed": 10,
+        "wind_dir": "ENE",
+        "short_forecast": "Mostly Sunny"
+      },
+      {
+        "time": "2026-05-21T16:00:00-04:00",
+        "temp_f": 62,
+        "wind_speed": 10,
+        "wind_dir": "ENE",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-21T17:00:00-04:00",
+        "temp_f": 62,
+        "wind_speed": 10,
+        "wind_dir": "ENE",
+        "short_forecast": "Sunny"
+      },
+      {
+        "time": "2026-05-21T18:00:00-04:00",
+        "temp_f": 62,
+        "wind_speed": 10,
+        "wind_dir": "ENE",
+        "short_forecast": "Mostly Clear"
+      },
+      {
+        "time": "2026-05-21T19:00:00-04:00",
+        "temp_f": 61,
+        "wind_speed": 10,
+        "wind_dir": "ENE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T20:00:00-04:00",
+        "temp_f": 59,
+        "wind_speed": 10,
+        "wind_dir": "ENE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T21:00:00-04:00",
+        "temp_f": 56,
+        "wind_speed": 10,
+        "wind_dir": "ENE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T22:00:00-04:00",
+        "temp_f": 53,
+        "wind_speed": 9,
+        "wind_dir": "ENE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-21T23:00:00-04:00",
+        "temp_f": 52,
+        "wind_speed": 9,
+        "wind_dir": "ENE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-22T00:00:00-04:00",
+        "temp_f": 50,
+        "wind_speed": 9,
+        "wind_dir": "ENE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-22T01:00:00-04:00",
+        "temp_f": 50,
+        "wind_speed": 8,
+        "wind_dir": "ENE",
+        "short_forecast": "Partly Cloudy"
+      },
+      {
+        "time": "2026-05-22T02:00:00-04:00",
+        "temp_f": 50,
+        "wind_speed": 8,
+        "wind_dir": "ENE",
+        "short_forecast": "Mostly Cloudy"
+      },
+      {
+        "time": "2026-05-22T03:00:00-04:00",
+        "temp_f": 49,
+        "wind_speed": 8,
+        "wind_dir": "ENE",
+        "short_forecast": "Mostly Cloudy"
+      },
+      {
+        "time": "2026-05-22T04:00:00-04:00",
+        "temp_f": 49,
+        "wind_speed": 9,
+        "wind_dir": "ENE",
+        "short_forecast": "Mostly Cloudy"
+      },
+      {
+        "time": "2026-05-22T05:00:00-04:00",
+        "temp_f": 49,
+        "wind_speed": 10,
+        "wind_dir": "ENE",
+        "short_forecast": "Mostly Cloudy"
+      },
+      {
+        "time": "2026-05-22T06:00:00-04:00",
+        "temp_f": 50,
+        "wind_speed": 12,
+        "wind_dir": "ENE",
+        "short_forecast": "Partly Sunny"
+      },
+      {
+        "time": "2026-05-22T07:00:00-04:00",
+        "temp_f": 51,
+        "wind_speed": 12,
+        "wind_dir": "ENE",
+        "short_forecast": "Partly Sunny"
+      },
+      {
+        "time": "2026-05-22T08:00:00-04:00",
+        "temp_f": 53,
+        "wind_speed": 13,
+        "wind_dir": "ENE",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T09:00:00-04:00",
+        "temp_f": 56,
+        "wind_speed": 13,
+        "wind_dir": "ENE",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T10:00:00-04:00",
+        "temp_f": 58,
+        "wind_speed": 14,
+        "wind_dir": "E",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T11:00:00-04:00",
+        "temp_f": 61,
+        "wind_speed": 14,
+        "wind_dir": "E",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T12:00:00-04:00",
+        "temp_f": 62,
+        "wind_speed": 14,
+        "wind_dir": "E",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T13:00:00-04:00",
+        "temp_f": 63,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T14:00:00-04:00",
+        "temp_f": 63,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T15:00:00-04:00",
+        "temp_f": 64,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T16:00:00-04:00",
+        "temp_f": 64,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T17:00:00-04:00",
+        "temp_f": 64,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T18:00:00-04:00",
+        "temp_f": 64,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T19:00:00-04:00",
+        "temp_f": 63,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-22T20:00:00-04:00",
+        "temp_f": 62,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-22T21:00:00-04:00",
+        "temp_f": 61,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-22T22:00:00-04:00",
+        "temp_f": 60,
+        "wind_speed": 16,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-22T23:00:00-04:00",
+        "temp_f": 59,
+        "wind_speed": 16,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-23T00:00:00-04:00",
+        "temp_f": 58,
+        "wind_speed": 16,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-23T01:00:00-04:00",
+        "temp_f": 57,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-23T02:00:00-04:00",
+        "temp_f": 57,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-23T03:00:00-04:00",
+        "temp_f": 57,
+        "wind_speed": 15,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-23T04:00:00-04:00",
+        "temp_f": 56,
+        "wind_speed": 14,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-23T05:00:00-04:00",
+        "temp_f": 57,
+        "wind_speed": 14,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-23T06:00:00-04:00",
+        "temp_f": 56,
+        "wind_speed": 14,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-23T07:00:00-04:00",
+        "temp_f": 57,
+        "wind_speed": 13,
+        "wind_dir": "E",
+        "short_forecast": "Showers And Thunderstorms Likely"
+      },
+      {
+        "time": "2026-05-23T08:00:00-04:00",
+        "temp_f": 58,
+        "wind_speed": 13,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-23T09:00:00-04:00",
+        "temp_f": 59,
+        "wind_speed": 13,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-23T10:00:00-04:00",
+        "temp_f": 61,
+        "wind_speed": 12,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-23T11:00:00-04:00",
+        "temp_f": 64,
+        "wind_speed": 12,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-23T12:00:00-04:00",
+        "temp_f": 65,
+        "wind_speed": 12,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-23T13:00:00-04:00",
+        "temp_f": 66,
+        "wind_speed": 12,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-23T14:00:00-04:00",
+        "temp_f": 68,
+        "wind_speed": 12,
+        "wind_dir": "E",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T15:00:00-04:00",
+        "temp_f": 69,
+        "wind_speed": 12,
+        "wind_dir": "E",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T16:00:00-04:00",
+        "temp_f": 70,
+        "wind_speed": 10,
+        "wind_dir": "E",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T17:00:00-04:00",
+        "temp_f": 70,
+        "wind_speed": 10,
+        "wind_dir": "E",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T18:00:00-04:00",
+        "temp_f": 70,
+        "wind_speed": 9,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T19:00:00-04:00",
+        "temp_f": 69,
+        "wind_speed": 9,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T20:00:00-04:00",
+        "temp_f": 68,
+        "wind_speed": 8,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T21:00:00-04:00",
+        "temp_f": 66,
+        "wind_speed": 7,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T22:00:00-04:00",
+        "temp_f": 63,
+        "wind_speed": 6,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-23T23:00:00-04:00",
+        "temp_f": 62,
+        "wind_speed": 5,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T00:00:00-04:00",
+        "temp_f": 60,
+        "wind_speed": 5,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T01:00:00-04:00",
+        "temp_f": 60,
+        "wind_speed": 5,
+        "wind_dir": "NE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T02:00:00-04:00",
+        "temp_f": 59,
+        "wind_speed": 5,
+        "wind_dir": "NE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T03:00:00-04:00",
+        "temp_f": 58,
+        "wind_speed": 5,
+        "wind_dir": "NE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T04:00:00-04:00",
+        "temp_f": 58,
+        "wind_speed": 5,
+        "wind_dir": "NNE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T05:00:00-04:00",
+        "temp_f": 58,
+        "wind_speed": 5,
+        "wind_dir": "NNE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T06:00:00-04:00",
+        "temp_f": 58,
+        "wind_speed": 5,
+        "wind_dir": "NNE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T07:00:00-04:00",
+        "temp_f": 58,
+        "wind_speed": 5,
+        "wind_dir": "NE",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T08:00:00-04:00",
+        "temp_f": 60,
+        "wind_speed": 5,
+        "wind_dir": "ENE",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-24T09:00:00-04:00",
+        "temp_f": 62,
+        "wind_speed": 5,
+        "wind_dir": "E",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-24T10:00:00-04:00",
+        "temp_f": 65,
+        "wind_speed": 6,
+        "wind_dir": "SE",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-24T11:00:00-04:00",
+        "temp_f": 68,
+        "wind_speed": 6,
+        "wind_dir": "SSE",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-24T12:00:00-04:00",
+        "temp_f": 70,
+        "wind_speed": 6,
+        "wind_dir": "SSE",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-24T13:00:00-04:00",
+        "temp_f": 72,
+        "wind_speed": 7,
+        "wind_dir": "S",
+        "short_forecast": "Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-24T14:00:00-04:00",
+        "temp_f": 73,
+        "wind_speed": 7,
+        "wind_dir": "S",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T15:00:00-04:00",
+        "temp_f": 74,
+        "wind_speed": 7,
+        "wind_dir": "S",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T16:00:00-04:00",
+        "temp_f": 75,
+        "wind_speed": 8,
+        "wind_dir": "S",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T17:00:00-04:00",
+        "temp_f": 75,
+        "wind_speed": 8,
+        "wind_dir": "S",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T18:00:00-04:00",
+        "temp_f": 74,
+        "wind_speed": 8,
+        "wind_dir": "S",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T19:00:00-04:00",
+        "temp_f": 73,
+        "wind_speed": 7,
+        "wind_dir": "S",
+        "short_forecast": "Chance Showers And Thunderstorms"
+      },
+      {
+        "time": "2026-05-24T20:00:00-04:00",
+        "temp_f": 71,
+        "wind_speed": 6,
+        "wind_dir": "SSE",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-24T21:00:00-04:00",
+        "temp_f": 69,
+        "wind_speed": 6,
+        "wind_dir": "SSE",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-24T22:00:00-04:00",
+        "temp_f": 66,
+        "wind_speed": 5,
+        "wind_dir": "SSE",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-24T23:00:00-04:00",
+        "temp_f": 64,
+        "wind_speed": 5,
+        "wind_dir": "SSE",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-25T00:00:00-04:00",
+        "temp_f": 62,
+        "wind_speed": 5,
+        "wind_dir": "SSE",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-25T01:00:00-04:00",
+        "temp_f": 61,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-25T02:00:00-04:00",
+        "temp_f": 60,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-25T03:00:00-04:00",
+        "temp_f": 60,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Slight Chance Rain Showers"
+      },
+      {
+        "time": "2026-05-25T04:00:00-04:00",
+        "temp_f": 60,
+        "wind_speed": 3,
+        "wind_dir": "S",
+        "short_forecast": "Slight Chance Rain Showers"
+      }
+    ]
+  }
+}

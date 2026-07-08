@@ -125,14 +125,52 @@ async def sync_weather_predictions():
     logger.info("Deduplicating signals by city, metric, and date to prevent Kalshi strike spam...")
     best_signals = {}
     for sig in signals:
-        if sig.get("suppressed_reason") or sig.get("edge", 0) <= 0 or sig.get("kelly_dollars", 0) <= 0:
+        # Skip suppressed signals (e.g. sanity_guard_5c_yes, too_far_out, etc.)
+        if sig.get("suppressed_reason"):
+            logger.debug(f"Skip suppressed signal {sig.get('ticker')}: {sig.get('suppressed_reason')}")
             continue
+        if sig.get("edge", 0) <= 0 or sig.get("kelly_dollars", 0) <= 0:
+            continue
+
+        # ── Hard quality gates ────────────────────────────────────────────
+        direction = sig.get("direction", "")
+        implied  = sig.get("implied_prob", 0)
+        model_p  = sig.get("model_prob", 0)
+        edge_val = sig.get("edge", 0)
+
+        # Gate 1: In-range bets at <5% implied are near-certain losers.
+        # The market is pricing these 1°F bands almost impossibly low for good reason.
+        if direction == "in_range" and implied < 0.05:
+            logger.info(
+                f"Skip {sig.get('ticker')}: in_range at {implied:.1%} implied — market too thin/certain"
+            )
+            continue
+
+        # Gate 2: In-range bets need model_prob >= 15%.
+        # A 1°F band near the Gaussian mean gets ~13-20% naturally; anything
+        # below 15% means we're betting a far-off bucket with high variance.
+        if direction == "in_range" and model_p < 0.15:
+            logger.info(
+                f"Skip {sig.get('ticker')}: in_range model_prob={model_p:.1%} < 15% minimum"
+            )
+            continue
+
+        # Gate 3: Absolute minimum edge regardless of direction.
+        # A 7% edge on a 1% market is noise, not alpha.
+        min_abs_edge = 0.10 if direction == "in_range" else 0.06
+        if abs(edge_val) < min_abs_edge:
+            logger.info(
+                f"Skip {sig.get('ticker')}: edge={edge_val:.1%} < {min_abs_edge:.0%} minimum for {direction}"
+            )
+            continue
+        # ── End quality gates ─────────────────────────────────────────────
+
         key = (sig["city"], sig["metric"], sig["market_date"])
         if key not in best_signals or sig["kelly_dollars"] > best_signals[key]["kelly_dollars"]:
             best_signals[key] = sig
             
     valid_signals = list(best_signals.values())
-    logger.info(f"Filtered down to {len(valid_signals)} top signals after deduplicating strikes and removing suppressed/0-edge.")
+    logger.info(f"Filtered down to {len(valid_signals)} top signals after quality gates and deduplication.")
     
     # Pre-fetch existing exposure for open weather bets
     exposure_tracker = {}
