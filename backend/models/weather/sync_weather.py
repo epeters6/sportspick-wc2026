@@ -168,6 +168,7 @@ async def sync_weather_predictions():
         if sport_tier in ("weather_near_tail", "weather_far_tail"):
             bet_mode = "paper"
             
+        # virtual_match_id is used for exposure tracking only (grouping by tier+date)
         virtual_match_id = f"{sport_tier}_{sig.get('market_date', '')}"
         
         # Enforce Event Exposure Cap
@@ -187,19 +188,19 @@ async def sync_weather_predictions():
         shares = round(stake / sig["implied_prob"], 2) if sig["implied_prob"] > 0 else 0
             
         record = {
-            "bet_subject": virtual_match_id,
+            "bet_subject": virtual_match_id,  # Tier+date key used for exposure tracking
             "market_id": market_id,
-            "market_slug": market_id,
+            "market_slug": market_id,  # slug for settlement lookup
             "question": f"Weather: {sig['city']} {sig['metric']} {outcome} {sig.get('threshold_f')}",
             "outcome_name": outcome_name,
             "token_id": token_id,
             "mode": bet_mode,
             "model_prob": sig["model_prob"],
             "market_prob": sig["implied_prob"],
-            "market_price": sig["implied_prob"], # We don't fetch order book depth here currently, assume implied
+            "market_price": sig["implied_prob"],
             "edge": sig["edge"],
             "raw_confidence": sig.get("raw_model_prob", sig["model_prob"]),
-            "sport": sport_tier,
+            "sport": "weather",  # Always 'weather' so the SportBadge renders correctly
             "kelly_fraction": sig.get("kelly_fraction", 0),
             "stake": stake,
             "bankroll_at_time": round(bankroll, 2),

@@ -28,7 +28,7 @@ export function SportBadge({ sport }: { sport?: string | null }) {
       </span>
     );
   }
-  if (sportLower === "weather") {
+  if (sportLower === "weather" || sportLower.startsWith("weather_")) {
     return (
       <span className="inline-flex items-center rounded border font-medium px-1.5 py-0.5 text-[10px] bg-sky-950 text-sky-300 border-sky-800">
         🌤️ Weather
