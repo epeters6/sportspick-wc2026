@@ -358,51 +358,57 @@ class PolymarketClient:
             logger.info(f"Polymarket US LIVE order placed: token={token_id} ${size_usdc} → {order_id}")
             return {"ok": True, "order_id": order_id, "error": None}
             
-        except Exception as exc:
-            import httpx
-            status = None
-            error_msg = str(exc)
-            
-            if isinstance(exc, httpx.HTTPStatusError):
-                status = exc.response.status_code
-                error_msg = exc.response.text
-            else:
-                # Fallback extraction for SDK-wrapped errors
-                status = getattr(exc, "status_code", getattr(getattr(exc, "response", None), "status_code", None))
-                error_msg = getattr(exc, "message", str(exc))
-            
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            error_msg = exc.response.text
+
             if status in (403, 451) or "compliance" in error_msg.lower() or "kyc" in error_msg.lower():
-                logger.error(f"🚨 POLYMARKET US COMPLIANCE/KYC HOLD DETECTED: {error_msg}. Guardian Circuit Breaker tripped.")
+                logger.error(
+                    f"🚨 POLYMARKET US COMPLIANCE/KYC HOLD DETECTED: {error_msg}. "
+                    f"Guardian Circuit Breaker tripped."
+                )
                 from scripts.guardian_health import HALT_FILE
-                import json, datetime, tempfile, os
-                
-                # Atomically append to HALT_FILE
-                state = {"halted": True, "reasons": [], "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+                import json as _json, datetime as _dt, tempfile as _tf
+
+                state = {
+                    "halted": True,
+                    "reasons": [],
+                    "updated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                }
                 if os.path.exists(HALT_FILE):
                     try:
                         with open(HALT_FILE, "r") as f:
-                            old_state = json.load(f)
+                            old_state = _json.load(f)
                             if isinstance(old_state.get("reasons"), list):
                                 state["reasons"] = old_state["reasons"]
                     except Exception:
                         pass
-                
+
                 new_reason = "Polymarket Compliance/KYC Hold"
                 if new_reason not in state["reasons"]:
                     state["reasons"].append(new_reason)
-                
-                # Write to temp file and atomically replace
-                fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(HALT_FILE))
-                with os.fdopen(fd, 'w') as f:
-                    json.dump(state, f)
+
+                fd, temp_path = _tf.mkstemp(dir=os.path.dirname(HALT_FILE))
+                with os.fdopen(fd, "w") as f:
+                    _json.dump(state, f)
                 os.replace(temp_path, HALT_FILE)
-                    
+
                 return {"ok": False, "order_id": None, "error": "KYC_HOLD"}
-                
-                
-            if status:
-                logger.error(f"Market rejected order HTTP {status}: {error_msg}")
-                return {"ok": False, "order_id": None, "error": f"HTTP_{status}"}
-            else:
-                logger.exception(f"Unexpected SDK exception during Polymarket US live order placement: {exc}")
-                return {"ok": False, "order_id": None, "error": error_msg}
+
+            logger.error(f"Market rejected order HTTP {status}: {error_msg}")
+            return {"ok": False, "order_id": None, "error": f"HTTP_{status}"}
+
+        except httpx.RequestError as exc:
+            # Network-level failure (timeout, connection drop) — retryable, not compliance.
+            logger.error(f"Network error placing Polymarket US order: {exc}")
+            return {"ok": False, "order_id": None, "error": "NETWORK_ERROR"}
+
+        except Exception as exc:
+            # Anything landing here is NOT a known rejection type — it's an unexpected
+            # bug. Don't swallow it silently as if it were a normal order failure;
+            # surface it loudly and stop so it doesn't hide behind routine rejections.
+            logger.critical(
+                f"UNEXPECTED exception in place_order (token={token_id}): {exc}",
+                exc_info=True,
+            )
+            raise

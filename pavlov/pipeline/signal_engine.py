@@ -948,21 +948,37 @@ def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True, num
     times_evaluated_today = 0
     eval_counts_file = os.path.join(os.path.dirname(__file__), ".eval_counts.json")
     try:
+        import tempfile
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        counts_data = {}
+        counts_data: dict = {}
         if os.path.exists(eval_counts_file):
-            with open(eval_counts_file, "r") as f:
-                counts_data = json.load(f)
+            try:
+                with open(eval_counts_file, "r") as f:
+                    counts_data = json.load(f)
+            except (json.JSONDecodeError, OSError) as read_exc:
+                # Corrupted or empty file — reset silently (don't crash evaluation)
+                logger.debug("SignalEngine: eval_counts.json unreadable (%s) — resetting.", read_exc)
+                counts_data = {}
         if counts_data.get("date") != today_str:
             counts_data = {"date": today_str, "counts": {}}
             
         ticker = market.get("ticker") or str(market.get("condition_id"))
         times_evaluated_today = counts_data["counts"].get(ticker, 0)
         
-        # Increment for next time
+        # Increment and write back atomically (same pattern as HALT_FILE)
         counts_data["counts"][ticker] = times_evaluated_today + 1
-        with open(eval_counts_file, "w") as f:
-            json.dump(counts_data, f)
+        _eval_dir = os.path.dirname(eval_counts_file) or "."
+        fd, temp_path = tempfile.mkstemp(dir=_eval_dir)
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(counts_data, f)
+            os.replace(temp_path, eval_counts_file)
+        except Exception:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
     except Exception as exc:
         logger.debug(f"Failed to track eval counts: {exc}")
         

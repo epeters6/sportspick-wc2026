@@ -167,12 +167,12 @@ def compute_tier_stats(db=None) -> dict[str, dict[str, Any]]:
         if resolved_str:
             from datetime import datetime, timezone, timedelta
             try:
-                # Handle ISO format strings
                 dt = datetime.fromisoformat(resolved_str.replace("Z", "+00:00"))
                 if datetime.now(timezone.utc) - dt <= timedelta(days=7):
                     b["recent_7d_pnl"] += pnl
             except Exception:
-                pass
+                b.setdefault("_parse_failures", 0)
+                b["_parse_failures"] = b.get("_parse_failures", 0) + 1
         
         # Track cluster-level data for absurdity backstop
         match_id = r.get("match_id") or f"unclustered_{r.get('id')}"
@@ -200,8 +200,25 @@ def compute_tier_stats(db=None) -> dict[str, dict[str, Any]]:
                 var = sum((x - mean_r) ** 2 for x in rets) / len(rets)
                 std = math.sqrt(var) if var > 0 else 0.0
                 b["sharpe"] = round(mean_r / std, 3) if std > 1e-9 else None
+            # Warn if timestamp parsing failed on >5% of rows — silent failures
+            # would make the 7-day loss hard-stop blind.
+            parse_failures = b.pop("_parse_failures", 0)
+            if parse_failures > 0:
+                fail_pct = parse_failures / n
+                if fail_pct > 0.05:
+                    logger.warning(
+                        "Autobet learning [%s]: %d/%d rows (%.0f%%) failed timestamp "
+                        "parse — 7-day loss hard-stop may be understated.",
+                        b.get("tier", "?"), parse_failures, n, fail_pct * 100,
+                    )
+                else:
+                    logger.debug(
+                        "Autobet learning [%s]: %d rows had unparseable timestamps.",
+                        b.get("tier", "?"), parse_failures,
+                    )
         else:
             b.pop("_returns", None)
+            b.pop("_parse_failures", None)
         _finalize_agg(b)
 
     return buckets
@@ -311,6 +328,25 @@ class TierGates:
     note: str = ""
 
 
+def _get_live_bankroll() -> float:
+    """Return the best available bankroll figure.
+
+    Attempts to fetch the actual live balance from the Treasury Watchdog
+    (Polymarket + Kalshi combined), which keeps pace with P&L as it accumulates.
+    Falls back to the static ``polymarket_bankroll`` config value if the live
+    fetch fails or returns zero, so the hard-stop math never silently breaks.
+    """
+    try:
+        from backend.trading.autobet import _current_bankroll
+        from backend.db import get_db
+        live = _current_bankroll(get_db())
+        if live and live > 0:
+            return live
+    except Exception as exc:
+        logger.debug("_get_live_bankroll: live fetch failed (%s) — using config.", exc)
+    return get_settings().polymarket_bankroll
+
+
 def _base_gates(tier: str, *, paper: bool) -> tuple[float, float]:
     s = get_settings()
     if paper:
@@ -357,6 +393,47 @@ def gates_for_price(
     notes: list[str] = []
     adjusted = False
     s = get_settings()
+
+    # ── Global account-level 7-day loss breaker ───────────────────────────────────
+    # Checks ALL tiers combined. A bad day across multiple tiers at once can
+    # add up to more than any single-tier 5% cap allows. Fires before per-tier
+    # checks so it cannot be bypassed by a tier that happens to look OK alone.
+    live_bankroll = _get_live_bankroll()
+    account_loss_7d_limit = live_bankroll * 0.12  # 12% of account in 7 days
+    all_settled = _fetch_settled_autobets()
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    total_7d_loss = 0.0
+    _ts_fail = 0
+    for r in all_settled:
+        resolved_str = r.get("resolved_at") or r.get("created_at") or ""
+        if not resolved_str:
+            continue
+        try:
+            dt = datetime.fromisoformat(resolved_str.replace("Z", "+00:00"))
+            if dt >= cutoff:
+                total_7d_loss -= r.get("pnl") or 0.0  # loss is negative pnl
+        except Exception:
+            _ts_fail += 1
+    if _ts_fail > max(5, len(all_settled) * 0.05):
+        logger.warning(
+            "gates_for_price: %d rows had unparseable timestamps in global 7-day loss check.",
+            _ts_fail,
+        )
+    if total_7d_loss > account_loss_7d_limit:
+        logger.error(
+            "GLOBAL 7-day account loss hard stop: lost $%.2f in 7d (limit $%.2f / 12%% of $%.2f). "
+            "ALL tiers halted.",
+            total_7d_loss, account_loss_7d_limit, live_bankroll,
+        )
+        return TierGates(
+            tier=tier,
+            min_edge=99.0,
+            min_model_prob=99.0,
+            adjusted=True,
+            note=f"GLOBAL 7-day account loss hard stop (${total_7d_loss:.2f} > ${account_loss_7d_limit:.2f})",
+        )
+    # ── End global breaker ──────────────────────────────────────────────────────
 
     if paper and s.polymarket_paper_loose_gates:
         min_edge = _PAPER_LOOSE_MIN_EDGE
@@ -412,12 +489,18 @@ def gates_for_price(
             else:
                 logger.debug(f"Longshot Absurdity check skipped: only {cluster_count}/8 required clusters.")
                 
-            # Independent Model-Free Hard Stop: 5% of bankroll in 7 days
+            # Independent Model-Free Hard Stop: 5% of bankroll in 7 days (per-tier).
+            # Uses live balance when available, falls back to static config.
+            # NOTE: polymarket_bankroll is a static config value by default;
+            # we attempt to get the live balance from the Treasury Watchdog first.
+            live_bankroll = _get_live_bankroll()
             recent_7d_loss = -tier_stats.get("recent_7d_pnl", 0.0)
-            max_allowed_loss = get_settings().polymarket_bankroll * 0.05
+            max_allowed_loss = live_bankroll * 0.05
             
             if recent_7d_loss > max_allowed_loss:
                 # Halt immediately regardless of probabilities or clusters
+                # TECH-DEBT: min_edge=99.0 is a sentinel to force an impossible gate.
+                # A future cleanup should add a hard_halted: bool field to TierGates.
                 notes.append(f"7-day dollar-loss hard stop (${recent_7d_loss:.2f} > ${max_allowed_loss:.2f})")
                 return TierGates(
                     tier=tier,
