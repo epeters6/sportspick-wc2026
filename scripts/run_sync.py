@@ -45,33 +45,40 @@ async def run_scrape_phase() -> dict[str, int]:
     mlb = await sync_mlb_matches()
     print(f"  {mlb} games upserted")
 
-    print("Scraping Covers.com...")
-    covers_picks = await CoversScraper().scrape_all()
-    print(f"  {covers_picks} picks saved")
+    async def _safe(name: str, coro) -> int:
+        """One broken scraper must not kill the whole scrape phase."""
+        print(f"Scraping {name}...")
+        try:
+            n = await coro
+            print(f"  {n} picks saved")
+            return n
+        except Exception as exc:
+            print(f"  {name} scraper failed (continuing): {exc}")
+            return 0
 
-    print("Scraping YouTube...")
-    yt_picks = await YouTubeScraper().scrape_all(skip_search=skip_yt_search)
-    print(f"  {yt_picks} picks saved")
-
-    print("Scraping ActionNetwork...")
-    an_picks = await ActionNetworkScraper().scrape_all(fast=fast)
-    print(f"  {an_picks} picks saved")
-
-    print("Scraping Pickswise MLB...")
-    pw_picks = await PickswiseScraper().scrape_all()
-    print(f"  {pw_picks} picks saved")
+    covers_picks = await _safe("Covers.com", CoversScraper().scrape_all())
+    yt_picks = await _safe("YouTube", YouTubeScraper().scrape_all(skip_search=skip_yt_search))
+    an_picks = await _safe("ActionNetwork", ActionNetworkScraper().scrape_all(fast=fast))
+    pw_picks = await _safe("Pickswise MLB", PickswiseScraper().scrape_all())
 
     print("Scraping Silver Bulletin (Politics)...")
-    pol_picks = sync_politics()
-    print(f"  {pol_picks} picks saved")
+    try:
+        pol_picks = sync_politics()
+        print(f"  {pol_picks} picks saved")
+    except Exception as exc:
+        pol_picks = 0
+        print(f"  Silver Bulletin scraper failed (continuing): {exc}")
 
     tw_picks = 0
     if settings.twitter_auth_token and settings.twitter_ct0:
         print("Scraping Twitter/X...")
-        from backend.scrapers.twitter_scraper import TwitterScraper, seed_twitter_influencers
-        await seed_twitter_influencers()
-        tw_picks = await TwitterScraper().scrape_all()
-        print(f"  {tw_picks} picks saved")
+        try:
+            from backend.scrapers.twitter_scraper import TwitterScraper, seed_twitter_influencers
+            await seed_twitter_influencers()
+            tw_picks = await TwitterScraper().scrape_all()
+            print(f"  {tw_picks} picks saved")
+        except Exception as exc:
+            print(f"  Twitter/X scraper failed (continuing): {exc}")
     else:
         print("Twitter/X skipped — add TWITTER_AUTH_TOKEN + TWITTER_CT0 to .env")
 
@@ -150,6 +157,16 @@ async def run_ml_phase() -> dict[str, int]:
     sync_influencer_pick_counts()
     deactivate_poor_performers()
     update_all_elo_scores()
+
+    print("Running WC quant model (team Elo + draw)...")
+    try:
+        from backend.ml.worldcup_quant import resolve_wc_quant_predictions, sync_wc_quant_predictions
+        wc_written = sync_wc_quant_predictions()
+        wc_resolved = resolve_wc_quant_predictions()
+        print(f"  wc_quant predictions={wc_written} resolved={wc_resolved}")
+    except Exception as exc:
+        print(f"  WC quant failed: {exc}")
+
     compute_all_consensus()
 
     print("Running calibration...")
@@ -172,12 +189,11 @@ async def run_ml_phase() -> dict[str, int]:
     try:
         from backend.ml.mlb_quant.orchestrator import setup_daily_slate
         setup_daily_slate()
-        
-        print("  Running MLB Shadow Execution...")
-        import subprocess
-        subprocess.run([sys.executable, "backend/models/sports/run_shadow_mlb.py"], check=True)
+        # NOTE: MLB shadow execution now runs once per ML cycle via
+        # scripts/run_sports_shadow_validation.py (sync_ml.yml step) —
+        # running it here too doubled the work and the Actions minutes.
     except Exception as exc:
-        print(f"  MLB Orchestrator/Shadow failed: {exc}")
+        print(f"  MLB Orchestrator failed: {exc}")
 
     print("Running Polymarket autobet...")
     autobet_summary: dict = {}
@@ -227,6 +243,13 @@ async def run_ml_phase() -> dict[str, int]:
         print(f"  weather bets resolved={w_resolved}")
     except Exception as exc:
         print(f"  Weather autobet resolution failed: {exc}")
+
+    try:
+        from backend.ml.weather_verification import backfill_actuals
+        wv_backfilled = backfill_actuals()
+        print(f"  weather verification backfilled={wv_backfilled}")
+    except Exception as exc:
+        print(f"  Weather verification backfill failed: {exc}")
     print("Sending Discord alerts...")
     alerts = await send_consensus_alerts()
     signal_sent = 0
@@ -287,7 +310,12 @@ async def main() -> None:
         except:
             pass
             
-    mode = "shadow" if args.scrape_only else "live"
+    # Mode reflects actual trading mode, not which pipeline phase ran.
+    try:
+        from backend.trading.live_toggle import is_live_mode
+        mode = "live" if is_live_mode() else "shadow"
+    except Exception:
+        mode = "shadow"
     write_status(mode=mode)
     
     try:

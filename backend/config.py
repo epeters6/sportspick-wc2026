@@ -134,5 +134,10 @@ def get_settings() -> Settings:
     import os
     if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
         if s.polymarket_live_enabled or os.environ.get("LIVE_TRADING_ENABLED", "").lower() == "true":
-            raise ValueError("GITHUB_ACTIONS_LIVE_TRADING_BLOCK")
+            # Live trading from CI requires a second, explicit opt-in so a
+            # single mis-set secret can never place real orders. Even with
+            # this override, autobet still requires the paper track record
+            # to pass assess_live_readiness() and the guardian to be clear.
+            if os.environ.get("ALLOW_LIVE_ON_GITHUB_ACTIONS", "").lower() != "true":
+                raise ValueError("GITHUB_ACTIONS_LIVE_TRADING_BLOCK")
     return s

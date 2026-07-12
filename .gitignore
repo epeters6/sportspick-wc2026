@@ -42,6 +42,14 @@ pavlov/_state/
 scratch/
 ml_sync_log.txt
 
+# Runtime artifacts (shadow ledgers, reports, caches) — regenerated every run
+/*.jsonl
+reports/
+.silver_bulletin_cache/
+backend/ml/mlb_quant/manifest.json
+sync_status.json
+.guardian_halt.json
+
 # OS
 .DS_Store
 Thumbs.db

@@ -4,7 +4,56 @@ from datetime import date, datetime
 import re
 import math
 from loguru import logger
-from pavlov.pipeline.station_mapper import get_city_for_market, STATION_MAP
+from pavlov.pipeline.station_mapper import get_city_for_market, get_tz_for_city, STATION_MAP
+
+_KALSHI_TICKER_DATE_RE = re.compile(r'-(\d{2})([A-Z]{3})(\d{2})(?:-|$)')
+_ISO_DATE_RE = re.compile(r'(\d{4}-\d{2}-\d{2})')
+_MONTH_ABBR = {
+    'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+    'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12,
+}
+
+
+def derive_market_date(market: dict, city: str | None = None) -> Optional[date]:
+    """Best-effort settlement date when the row lacks an explicit market_date.
+
+    Order: Kalshi ticker date code (26JUL06) → ISO date in slug/title →
+    close_time converted to the station-local calendar date.
+    """
+    ticker = str(market.get("ticker") or "")
+    m = _KALSHI_TICKER_DATE_RE.search(ticker)
+    if m:
+        mo = _MONTH_ABBR.get(m.group(2).upper())
+        if mo:
+            try:
+                return date(2000 + int(m.group(1)), mo, int(m.group(3)))
+            except ValueError:
+                pass
+
+    for text in (ticker, str(market.get("poly_market_slug") or ""), str(market.get("title") or "")):
+        m = _ISO_DATE_RE.search(text)
+        if m:
+            try:
+                return datetime.strptime(m.group(1), "%Y-%m-%d").date()
+            except ValueError:
+                continue
+
+    close_str = market.get("close_time") or ""
+    if close_str:
+        try:
+            close_dt = datetime.fromisoformat(str(close_str).replace("Z", "+00:00"))
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(get_tz_for_city(city)) if city else None
+            local_dt = close_dt.astimezone(tz) if tz else close_dt
+            # Daily temp markets close just after the measurement day ends;
+            # a close before ~10am local belongs to the previous day.
+            if local_dt.hour < 10:
+                from datetime import timedelta
+                return (local_dt - timedelta(days=1)).date()
+            return local_dt.date()
+        except (ValueError, TypeError):
+            pass
+    return None
 
 @dataclass
 class NormalizedWeatherEvent:
@@ -22,6 +71,24 @@ class NormalizedWeatherEvent:
     bucket_label: str
     contract_side: Literal["YES", "NO"]
     contract_url: Optional[str]
+    metric: Literal["high", "low"] = "high"
+
+
+def detect_metric(market: dict) -> str:
+    """Determine whether a market settles on the daily HIGH or LOW temperature.
+
+    Kalshi rows carry a ``metric_hint`` derived from the series ticker
+    (KXHIGHT*/KXLOWT*). Polymarket rows are classified from the title text.
+    """
+    hint = (market.get("metric_hint") or "").lower()
+    if hint in ("high", "low"):
+        return hint
+    title = (market.get("title") or "").lower()
+    if any(w in title for w in ("low temp", "lowest temp", "minimum temp", "min temp", "daily low", " low of")):
+        return "low"
+    if re.search(r"\blow\b", title) and "high" not in title:
+        return "low"
+    return "high"
 
 def parse_bucket_bounds(market: dict) -> Tuple[float, float, str]:
     """Parse the floor and ceiling of the weather bucket."""
@@ -135,17 +202,20 @@ def normalize_market(market: dict, platform: str) -> Optional[NormalizedWeatherE
 
         # 4. Parse Date
         market_date_str = market.get("market_date") or market.get("date")
-        if not market_date_str:
+        market_date = None
+        if market_date_str:
+            try:
+                if isinstance(market_date_str, date):
+                    market_date = market_date_str
+                else:
+                    market_date = datetime.strptime(market_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                logger.debug(f"Invalid date format '{market_date_str}', deriving from ticker/close_time")
+
+        if market_date is None:
+            market_date = derive_market_date(market, city)
+        if market_date is None:
             logger.debug(f"Normalization failed: Missing date for '{title}'")
-            return None
-            
-        try:
-            if isinstance(market_date_str, date):
-                market_date = market_date_str
-            else:
-                market_date = datetime.strptime(market_date_str, "%Y-%m-%d").date()
-        except ValueError:
-            logger.debug(f"Normalization failed: Invalid date format '{market_date_str}'")
             return None
 
         return NormalizedWeatherEvent(
@@ -162,7 +232,8 @@ def normalize_market(market: dict, platform: str) -> Optional[NormalizedWeatherE
             bucket_high_f=hi_f,
             bucket_label=bucket_label,
             contract_side="YES",
-            contract_url=market.get("url")
+            contract_url=market.get("url"),
+            metric=detect_metric(market)
         )
     except Exception as e:
         logger.error(f"Error normalizing market {market.get('title')}: {e}")

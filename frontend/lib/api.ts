@@ -392,3 +392,28 @@ export async function fetchReadiness() {
   const { data } = await api.get("/trading/readiness");
   return data;
 }
+
+export async function fetchLiveToggle() {
+  const { data } = await api.get("/trading/live-toggle");
+  return data;
+}
+
+export async function setLiveToggle(enabled: boolean) {
+  const { data } = await api.post("/trading/live-toggle", { enabled, by: "dashboard" });
+  return data;
+}
+
+export async function fetchWeatherVerification() {
+  const { data } = await api.get("/weather/verification");
+  return data;
+}
+
+export async function fetchModelsOverview() {
+  const { data } = await api.get("/models/overview");
+  return data;
+}
+
+export async function fetchModelsReadiness() {
+  const { data } = await api.get("/models/readiness");
+  return data;
+}

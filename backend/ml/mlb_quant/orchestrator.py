@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import unicodedata
 from datetime import datetime, timedelta
@@ -8,6 +9,8 @@ from typing import Any, Optional
 import pandas as pd
 import pybaseball as pyb
 import requests
+
+logger = logging.getLogger(__name__)
 
 pyb.cache.enable()
 
@@ -383,6 +386,37 @@ def build_pitch_baselines(data: pd.DataFrame) -> dict[str, dict[str, float]]:
         ):
             baselines[str(pitch_name)] = pitch_entry
     return baselines
+
+
+def fetch_today_starters(today_str: str) -> list[tuple[str, str]]:
+    """Probable starters from the MLB schedule API (replaces a hardcoded list
+    that went stale every slate). Falls back to TODAY_STARTERS on failure."""
+    url = (
+        "https://statsapi.mlb.com/api/v1/schedule"
+        f"?sportId=1&date={today_str}&hydrate=probablePitcher,team"
+    )
+    try:
+        payload = _safe_get_json(url)
+    except Exception:
+        logger.warning("Probable-pitcher fetch failed — falling back to static TODAY_STARTERS")
+        return list(TODAY_STARTERS)
+
+    starters: list[tuple[str, str]] = []
+    for date_block in payload.get("dates", []):
+        for game in date_block.get("games", []):
+            for side in ("home", "away"):
+                side_block = game.get("teams", {}).get(side, {})
+                team = normalize_team_code(
+                    side_block.get("team", {}).get("abbreviation", "")
+                )
+                pitcher = (side_block.get("probablePitcher") or {}).get("fullName")
+                if team and pitcher:
+                    starters.append((str(pitcher), team))
+
+    if not starters:
+        logger.warning("No probable pitchers announced yet — falling back to static TODAY_STARTERS")
+        return list(TODAY_STARTERS)
+    return starters
 
 
 def fetch_today_matchups(today_str: str) -> dict[str, dict[str, Any]]:
@@ -1100,7 +1134,8 @@ def setup_daily_slate() -> None:
     today = datetime.now()
     today_str = today.strftime("%Y-%m-%d")
 
-    print(f"Building manifest for {len(TODAY_STARTERS)} pitchers...")
+    today_starters = fetch_today_starters(today_str)
+    print(f"Building manifest for {len(today_starters)} pitchers...")
 
     matchup_map = fetch_today_matchups(today_str)
     offense_start = (today - timedelta(days=OFFENSE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
@@ -1124,7 +1159,7 @@ def setup_daily_slate() -> None:
     manifest: dict[str, Any] = {}
     tier_counts = {1: 0, 2: 0, 3: 0}
 
-    for pitcher_name, pitcher_team in TODAY_STARTERS:
+    for pitcher_name, pitcher_team in today_starters:
         try:
             pitcher_team = normalize_team_code(pitcher_team)
             baselines, pitcher_id, profile, advanced_context, pitch_hand = get_pitcher_baseline_profile_and_context(
@@ -1273,6 +1308,13 @@ def setup_daily_slate() -> None:
         "Advanced context added: manager_hook, TTTO proxy, command, workload, "
         "opponent profile, park/weather/altitude, and umpire K-zone."
     )
+
+    # Pull live pitcher-outs lines from sportsbooks when THE_ODDS_API_KEY is set.
+    try:
+        from backend.ml.mlb_quant.fetch_props import update_manifest_with_props
+        update_manifest_with_props()
+    except Exception as exc:
+        print(f"Prop line fetch skipped: {exc}")
 
 
 if __name__ == "__main__":

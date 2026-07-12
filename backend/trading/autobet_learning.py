@@ -34,6 +34,8 @@ TIER_LABELS = {
 
 MIN_TIER_SAMPLES = 5
 TIER_ROI_PENALTY_THRESHOLD = -0.10
+# Longshots expect long losing streaks; only penalize on severe drawdown.
+LONGSHOT_ROI_PENALTY_THRESHOLD = -0.50
 TIER_ROI_BONUS_THRESHOLD = 0.05
 
 # Paper loose gates — flat floors (ignore env tier maps and ROI penalties)
@@ -92,7 +94,7 @@ def _fetch_settled_autobets(db=None, *, use_cache: bool = True) -> list[dict]:
 
     db = db or get_db()
     base_cols = (
-        "id, status, stake, pnl, market_price, edge, model_prob, "
+        "id, status, stake, pnl, market_price, edge, model_prob, clv, "
         "resolved_at, created_at, mode, match_id, matches(sport)"
     )
     extended_cols = base_cols.replace(
@@ -164,6 +166,9 @@ def compute_tier_stats(db=None) -> dict[str, dict[str, Any]]:
         b["avg_market_price"] += r.get("market_price") or 0.0
         b["avg_edge"] += r.get("edge") or 0.0
         b["avg_model_prob"] += r.get("model_prob") or 0.0
+        if r.get("clv") is not None:
+            b["avg_clv"] += float(r["clv"])
+            b["clv_count"] += 1
         
         resolved_str = r.get("resolved_at") or r.get("created_at") or ""
         if resolved_str:
@@ -196,6 +201,8 @@ def compute_tier_stats(db=None) -> dict[str, dict[str, Any]]:
             b["avg_market_price"] = round(b["avg_market_price"] / n, 4)
             b["avg_edge"] = round(b["avg_edge"] / n, 4)
             b["avg_model_prob"] = round(b["avg_model_prob"] / n, 4)
+            if b["clv_count"] > 0:
+                b["avg_clv"] = round(b["avg_clv"] / b["clv_count"], 4)
             rets = b.pop("_returns")
             if len(rets) >= 3:
                 mean_r = sum(rets) / len(rets)
@@ -472,7 +479,7 @@ def gates_for_price(
                 penalties.append(f"Longshot ROI ({tier_stats['roi_pct']:.1f}%) <= {LONGSHOT_ROI_PENALTY_THRESHOLD*100:.1f}%")
                 
         # Now check CLV - this catches negative expected value before variance runs out
-        mean_clv = tier_stats.get("mean_clv", 0.0)
+        mean_clv = tier_stats.get("avg_clv", 0.0) or 0.0
         clv_count = tier_stats.get("clv_count", 0)
         # If we have at least 15 bets with CLV and it's worse than -0.02 (-2 probability points) # UNVALIDATED PLACEHOLDER
         if clv_count >= 15 and mean_clv < -0.02:

@@ -41,27 +41,26 @@ async def run_validation():
     write_status()
     
     try:
-    
-    # Ensure no live orders can be submitted by environment variables or hacks.
-    os.environ["MODE"] = "shadow"
-    
-    # 1. Run MLB shadow mode
-    logger.info("Phase 1: Running MLB Shadow Mode...")
-    await run_mlb_shadow_execution()
-    
-    # 2. Run CLV scheduler once
-    logger.info("Phase 2: Running CLV Scheduler (once)...")
-    await run_scheduler(once=True)
-    
-    # 3. Run analysis
-    logger.info("Phase 3: Running Shadow Analysis...")
-    report = run_analysis()
-    
-    # 4. Write timestamped report
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    report_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports", "sports_shadow")
-    os.makedirs(report_dir, exist_ok=True)
-    
+        # Ensure no live orders can be submitted by environment variables or hacks.
+        os.environ["MODE"] = "shadow"
+
+        # 1. Run MLB shadow mode
+        logger.info("Phase 1: Running MLB Shadow Mode...")
+        await run_mlb_shadow_execution()
+
+        # 2. Run CLV scheduler once
+        logger.info("Phase 2: Running CLV Scheduler (once)...")
+        await run_scheduler(once=True)
+
+        # 3. Run analysis
+        logger.info("Phase 3: Running Shadow Analysis...")
+        report = run_analysis()
+
+        # 4. Write timestamped report
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        report_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports", "sports_shadow")
+        os.makedirs(report_dir, exist_ok=True)
+
         report_path = os.path.join(report_dir, f"{today_str}_report.json")
         with open(report_path, "w") as f:
             json.dump(report, f, indent=2)

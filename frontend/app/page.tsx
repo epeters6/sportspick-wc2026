@@ -1,20 +1,15 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import {
-  fetchOverview, fetchLeaderboard, fetchMatches,
+  fetchOverview, fetchLeaderboard,
   fetchCalibration, fetchAutobets, fetchPlatformStats,
   fetchPropPicks, fetchRecentPicks, fetchWeatherPredictions,
   fetchTreasury, fetchGuardian, fetchArbScan,
 } from "@/lib/api";
-import BetTypeBadge from "@/components/BetTypeBadge";
-import OutcomeBadge from "@/components/OutcomeBadge";
-import { formatPickDisplay } from "@/lib/pickDisplay";
 import PlatformBadge from "@/components/PlatformBadge";
-import MatchInsightCard from "@/components/MatchInsightCard";
 import VibrantStatCard from "@/components/VibrantStatCard";
 import Link from "next/link";
-import { ArrowRight, Target, Radio, Layers, Activity, BrainCircuit, Users, CloudRain, AlertTriangle, Wallet, ArrowLeftRight, ShieldAlert, ShieldCheck } from "lucide-react";
-import { SYNC_SOURCES } from "@/lib/platforms";
+import { ArrowRight, Target, Radio, Layers, Activity, BrainCircuit, Users, CloudRain, AlertTriangle, Wallet, ArrowLeftRight, ShieldAlert, ShieldCheck, Shield } from "lucide-react";
 
 function fmt(n: number) { return n.toLocaleString(); }
 function pct(n: number) { return `${(n * 100).toFixed(1)}%`; }
@@ -33,9 +28,6 @@ export default function Dashboard() {
   });
   const { data: leaderData } = useQuery({
     queryKey: ["leaderboard", 5], queryFn: () => fetchLeaderboard({ limit: 5 }),
-  });
-  const { data: matchesData } = useQuery({
-    queryKey: ["matches-upcoming"], queryFn: () => fetchMatches({ upcoming_only: true, limit: 12 }), refetchInterval: 120_000,
   });
   const { data: calData } = useQuery({
     queryKey: ["calibration"], queryFn: fetchCalibration, refetchInterval: 300_000,
@@ -72,21 +64,19 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-gray-800/50 pb-6">
         <div>
-          <h1 className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 tracking-tight">
-            SportsPick Intelligence
+          <h1 className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-cyan-400 to-indigo-400 tracking-tight">
+            Quant Betting Command Center
           </h1>
           <p className="text-gray-400 text-sm mt-2 max-w-2xl">
-            Live Quantitative Prediction Engine. Aggregating crowd consensus, calibrating influencer edges, and blending with MLB fatigue models.
+            Shadow trading on Polymarket & Kalshi — MLB moneylines, weather buckets (high/low temp), and calibrated crowd edges.
           </p>
         </div>
         <Link
-          href="/sources"
-          className="group flex items-center gap-2 text-xs font-semibold text-indigo-300 hover:text-white bg-indigo-950/40 border border-indigo-500/30 px-4 py-2.5 rounded-xl transition-all hover:bg-indigo-600/40 hover:shadow-[0_0_20px_rgba(99,102,241,0.3)]"
+          href="/live"
+          className="group flex items-center gap-2 text-xs font-semibold text-emerald-300 hover:text-white bg-emerald-950/40 border border-emerald-500/30 px-4 py-2.5 rounded-xl transition-all hover:bg-emerald-600/30"
         >
-          <Activity className="w-4 h-4 animate-pulse text-indigo-400 group-hover:text-white" />
-          {platformStats
-            ? `${fmt(Object.values(platformStats.influencers_by_platform).reduce((a, b) => a + b, 0))} Verified Sources`
-            : "System Active"}
+          <Shield className="w-4 h-4" />
+          {ab?.mode === "live" ? "Live Active" : "Shadow Mode"} — View Gates
         </Link>
       </div>
 
@@ -254,22 +244,31 @@ export default function Dashboard() {
              )}
           </div>
           
-          {/* Matches Deep Dive (Original) */}
+          {/* MLB & Weather focus (WC excluded) */}
           <div className="flex items-center justify-between mb-2 mt-4">
             <div>
               <h2 className="text-lg font-bold flex items-center gap-2">
                 <BrainCircuit className="w-5 h-5 text-indigo-400" />
-                Live Match Analysis Deep Dive
+                Active Markets
               </h2>
             </div>
-            <Link href="/matches" className="text-xs font-semibold text-indigo-400 flex items-center gap-1 hover:text-indigo-300 transition-colors">
-              View Pipeline <ArrowRight className="w-4 h-4" />
+            <Link href="/trading" className="text-xs font-semibold text-indigo-400 flex items-center gap-1 hover:text-indigo-300 transition-colors">
+              Trading Hub <ArrowRight className="w-4 h-4" />
             </Link>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {matchesData?.matches.slice(0, 4).map((m: any) => (
-              <MatchInsightCard key={m.id} match={m} />
+            {mlbPickData?.picks?.slice(0, 2).map((p: any) => (
+              <div key={p.id} className="glass-card p-4 border-t-2 border-t-emerald-500">
+                <span className="text-xs text-emerald-400 uppercase font-semibold">MLB</span>
+                <p className="text-sm text-gray-200 mt-1 truncate">{p.raw_text?.slice(0, 80)}</p>
+              </div>
+            ))}
+            {weatherData?.predictions?.slice(0, 2).map((wp: any, i: number) => (
+              <div key={i} className="glass-card p-4 border-t-2 border-t-sky-500">
+                <span className="text-xs text-sky-400 uppercase font-semibold">Weather</span>
+                <p className="text-sm text-gray-200 mt-1">{wp.outcome}</p>
+              </div>
             ))}
           </div>
 

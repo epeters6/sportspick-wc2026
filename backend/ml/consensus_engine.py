@@ -260,8 +260,15 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
                 "consensus": away_probability
             })
             
+            # Blending home/away independently breaks the sum-to-one constraint;
+            # renormalize (MLB has no draws).
+            total = blended_home + blended_away
+            if total > 0:
+                blended_home /= total
+                blended_away /= total
             home_probability = round(blended_home, 4)
             away_probability = round(blended_away, 4)
+            draw_probability = 0.0
             if home_probability > away_probability:
                 best_team = home_team
                 confidence = home_probability
@@ -269,28 +276,78 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
                 best_team = away_team
                 confidence = away_probability
     else:
-        # 2. Other sports blend with generalized sports_ml predictions if they exist
-        ml_pred = (
-            db.table("model_predictions")
-            .select("outcome, prob")
-            .eq("source", "sports_ml")
-            .eq("event_key", match_id)
-            .execute()
-            .data or []
-        )
-        
+        # 2a. Football: blend the full 3-way WC quant distribution (team Elo + draw model)
+        wc_blended = False
+        if sport == "football":
+            try:
+                wc_pred = (
+                    db.table("model_predictions")
+                    .select("outcome, prob")
+                    .eq("source", "wc_quant")
+                    .eq("event_key", match_id)
+                    .execute()
+                    .data or []
+                )
+                if len(wc_pred) >= 3:
+                    quant = {str(p.get("outcome", "")).strip().lower(): float(p.get("prob") or 0.0) for p in wc_pred}
+                    q_home = quant.get(home_team.strip().lower())
+                    q_draw = quant.get("draw")
+                    q_away = quant.get(away_team.strip().lower())
+                    if None not in (q_home, q_draw, q_away):
+                        from backend.ml.model_blender import build_blender_from_db
+                        blender = build_blender_from_db()
+                        blended = []
+                        for crowd_p, quant_p in (
+                            (home_probability, q_home),
+                            (draw_probability, q_draw),
+                            (away_probability, q_away),
+                        ):
+                            # Blender operates in logit space; clamp zeros
+                            crowd_p = min(max(crowd_p, 0.01), 0.99)
+                            quant_p = min(max(quant_p, 0.01), 0.99)
+                            b, _ = blender.combine({"wc_quant": quant_p, "consensus": crowd_p})
+                            blended.append(b)
+                        total = sum(blended)
+                        if total > 0:
+                            home_probability = round(blended[0] / total, 4)
+                            draw_probability = round(blended[1] / total, 4)
+                            away_probability = round(blended[2] / total, 4)
+                            wc_blended = True
+            except Exception as e:
+                logger.error(f"Error blending WC quant probability: {e}")
+
+        # 2b. Fallback: blend with generalized sports_ml predictions if they exist
+        ml_pred = []
+        if not wc_blended:
+            ml_pred = (
+                db.table("model_predictions")
+                .select("outcome, prob")
+                .eq("source", "sports_ml")
+                .eq("event_key", match_id)
+                .execute()
+                .data or []
+            )
+
         if ml_pred:
             # Use a 50/50 blend between ML model and Crowd consensus
             ml_outcome = str(ml_pred[0].get("outcome", "")).strip().lower()
             ml_prob = float(ml_pred[0].get("prob", 0.0))
             
             if ml_outcome == home_team.strip().lower():
-                home_probability = round((home_probability + ml_prob) / 2.0, 4)
-                away_probability = round((away_probability + (1.0 - ml_prob)) / 2.0, 4)
+                home_probability = (home_probability + ml_prob) / 2.0
+                away_probability = (away_probability + (1.0 - ml_prob)) / 2.0
             elif ml_outcome == away_team.strip().lower():
-                away_probability = round((away_probability + ml_prob) / 2.0, 4)
-                home_probability = round((home_probability + (1.0 - ml_prob)) / 2.0, 4)
-                
+                away_probability = (away_probability + ml_prob) / 2.0
+                home_probability = (home_probability + (1.0 - ml_prob)) / 2.0
+
+            # Renormalize the full 3-way distribution (blend only touched home/away)
+            total = home_probability + draw_probability + away_probability
+            if total > 0:
+                home_probability = round(home_probability / total, 4)
+                draw_probability = round(draw_probability / total, 4)
+                away_probability = round(away_probability / total, 4)
+
+        if wc_blended or ml_pred:
             # Re-evaluate best_team and confidence based on blended probabilities
             if home_probability > away_probability and home_probability > draw_probability:
                 best_team = home_team

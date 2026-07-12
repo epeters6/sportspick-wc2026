@@ -1257,14 +1257,17 @@ def register_pending_prediction(
     try:
         from backend.db import get_db
         db = get_db()
+        # Dedicated source so match-level consensus blending never reads
+        # pitcher-prop rows by accident (schema: 013_model_predictions.sql).
         db.table("model_predictions").insert({
-            "source": "sports_ml",
+            "source": "mlb_pitcher_outs",
             "domain": "sports",
             "event_key": f"mlb_pitcher_outs_{pitcher_id}_{game_pk}",
             "outcome": f"{predicted_side} {prop_line}",
             "prob": round(float(pred_proba), 4),
-            "market_prob_at_pick": None, # Will be snapshotted later
-            "features_snapshot": {k: float(v) for k, v in (under_features if predicted_side == "UNDER" else over_features).items()},
+            "metadata": {
+                "features": {k: float(v) for k, v in (under_features if predicted_side == "UNDER" else over_features).items()},
+            },
         }).execute()
     except Exception as e:
         logger.warning(f"Failed to write prediction to model_predictions: {e}")

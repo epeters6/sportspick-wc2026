@@ -218,6 +218,35 @@ _ALIASES: dict[str, str] = {
     "oklahoma":     "Oklahoma City",
 }
 
+# IANA timezone per city — used for station-local lead-time / nowcast math.
+_CITY_TZ: dict[str, str] = {
+    "Washington DC": "America/New_York",
+    "San Francisco": "America/Los_Angeles",
+    "Las Vegas": "America/Los_Angeles",
+    "Chicago": "America/Chicago",
+    "Minneapolis": "America/Chicago",
+    "New York": "America/New_York",
+    "Los Angeles": "America/Los_Angeles",
+    "Miami": "America/New_York",
+    "Dallas": "America/Chicago",
+    "Seattle": "America/Los_Angeles",
+    "Denver": "America/Denver",
+    "Phoenix": "America/Phoenix",
+    "Boston": "America/New_York",
+    "Atlanta": "America/New_York",
+    "Philadelphia": "America/New_York",
+    "Austin": "America/Chicago",
+    "Houston": "America/Chicago",
+    "San Antonio": "America/Chicago",
+    "Oklahoma City": "America/Chicago",
+}
+
+
+def get_tz_for_city(city: str) -> str:
+    """IANA timezone for a STATION_MAP city (defaults to US Eastern)."""
+    return _CITY_TZ.get(city, "America/New_York")
+
+
 # Pre-build a sorted list of (canonical_lower, canonical_key) for substring
 # matching. Sort longest first so "Los Angeles" beats "Los".
 _CANONICAL_PAIRS: list[tuple[str, str]] = sorted(

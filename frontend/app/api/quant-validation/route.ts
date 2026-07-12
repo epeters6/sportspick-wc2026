@@ -29,7 +29,8 @@ function getLatestReport(dirPath: string) {
 }
 
 export async function GET() {
-    const rootDir = 'C:/Users/eepet/Scraper';
+    // Repo root: overridable via env; default = one level above the frontend/ dir
+    const rootDir = process.env.SCRAPER_ROOT_DIR || path.resolve(process.cwd(), '..');
     
     const sportsDecisions = readJsonl(path.join(rootDir, 'sports_shadow_decisions.jsonl'));
     const sportsFills = readJsonl(path.join(rootDir, 'sports_paper_fills.jsonl'));

@@ -1,17 +1,17 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  fetchCalibration, fetchAutobets, fetchPaperTrading, fetchTrackedPicks, fetchWeatherPredictions,
-  triggerAutobetRun, type Sport, type Pick, type AutobetRow,
+  fetchCalibration, fetchAutobets, fetchPaperTrading, fetchWeatherPredictions,
+  fetchWeatherVerification, triggerAutobetRun,
 } from "@/lib/api";
 import BetTypeBadge from "@/components/BetTypeBadge";
-import OutcomeBadge, { SportBadge, inferPickSport } from "@/components/OutcomeBadge";
-import { formatPickDisplay } from "@/lib/pickDisplay";
+import { SportBadge } from "@/components/OutcomeBadge";
 import VibrantStatCard from "@/components/VibrantStatCard";
 import {
   TrendingUp, Target, Activity, RefreshCw, CheckCircle,
-  Clock, AlertCircle, Banknote, Layers, CloudRain, Wind, Thermometer, BrainCircuit, ShieldAlert
+  Clock, Banknote, Layers, CloudRain, Thermometer, BrainCircuit, Shield, BookOpen,
 } from "lucide-react";
 
 function pct(n: number | null | undefined, decimals = 1) {
@@ -31,7 +31,8 @@ function edge(n: number | null | undefined) {
   return `${n >= 0 ? "+" : ""}${(n * 100).toFixed(1)}%`;
 }
 
-type Tab = "bets" | "calibration" | "paper" | "weather";
+type Tab = "basics" | "positions" | "calibration" | "weather";
+type SportFilter = "all" | "mlb" | "weather" | "football";
 
 function formatAutobetPick(b: { outcome_name: string; bet_type?: string; bet_line?: string | null; bet_subject?: string | null }) {
   if (b.bet_type && b.bet_type !== "moneyline") {
@@ -42,17 +43,12 @@ function formatAutobetPick(b: { outcome_name: string; bet_type?: string; bet_lin
 }
 
 export default function TradingPage() {
-  const [tab, setTab] = useState<Tab>("bets");
-  const [sportFilter, setSportFilter] = useState<Sport | "all">("all");
+  const [tab, setTab] = useState<Tab>("basics");
+  const [sportFilter, setSportFilter] = useState<SportFilter>("all");
   const qc = useQueryClient();
 
   const { data: abData, isLoading: abLoading } = useQuery({
     queryKey: ["autobets", 100], queryFn: () => fetchAutobets(100), refetchInterval: 60_000,
-  });
-  const { data: trackedData, isLoading: trackedLoading } = useQuery({
-    queryKey: ["tracked-picks", sportFilter],
-    queryFn: () => fetchTrackedPicks({ limit: 40, sport: sportFilter === "all" ? undefined : sportFilter }),
-    refetchInterval: 120_000,
   });
   const { data: calData, isLoading: calLoading } = useQuery({
     queryKey: ["calibration"], queryFn: fetchCalibration, refetchInterval: 300_000,
@@ -62,6 +58,9 @@ export default function TradingPage() {
   });
   const { data: weatherData, isLoading: weatherLoading } = useQuery({
     queryKey: ["weather-predictions", 100], queryFn: () => fetchWeatherPredictions(100), refetchInterval: 120_000,
+  });
+  const { data: wvData } = useQuery({
+    queryKey: ["weather-verification"], queryFn: fetchWeatherVerification, refetchInterval: 300_000,
   });
   const { mutate: runAutobet, isPending: runPending } = useMutation({
     mutationFn: triggerAutobetRun,
@@ -76,7 +75,6 @@ export default function TradingPage() {
   const filteredAutobets = sportFilter === "all" ? bets : bets.filter((b) => (b.sport ?? "football") === sportFilter);
   const openBets = filteredAutobets.filter((b) => b.status === "open");
   const historyBets = filteredAutobets.filter((b) => b.status !== "open" && b.status !== "rejected");
-  const trackedPicks = trackedData?.picks ?? [];
 
   return (
     <div className="space-y-8 pb-12">
@@ -88,22 +86,27 @@ export default function TradingPage() {
             Trading Hub
           </h1>
           <p className="text-gray-400 text-sm mt-2 max-w-2xl">
-            Polymarket Autobet Execution, Model Calibration, and Paper Trading Analytics.
+            Shadow paper trading on Polymarket & Kalshi. Basics below; advanced calibration in its own tab.
           </p>
         </div>
-        {ab && (
-          <div className="flex items-center gap-3 flex-wrap justify-end">
+        <div className="flex items-center gap-3 flex-wrap justify-end">
+          <Link href="/live" className="flex items-center gap-2 text-sm bg-emerald-900/40 hover:bg-emerald-800/50 border border-emerald-500/30 px-4 py-2 rounded-xl font-medium text-emerald-300 transition-all">
+            <Shield className="w-4 h-4" /> Live Readiness
+          </Link>
+          {ab && (
+            <>
             <span className={`text-xs font-bold px-3 py-1.5 rounded-full uppercase tracking-wider ${
               ab.mode === "live" ? "bg-red-500/20 text-red-400 border border-red-500/30 shadow-[0_0_15px_rgba(239,68,68,0.3)] animate-pulse" : "bg-gray-800 text-gray-300 border border-gray-700"
             }`}>
-              {ab.mode === "live" ? "Live Trading" : "Paper Mode"}
+              {ab.mode === "live" ? "Live Trading" : "Shadow Mode"}
             </span>
             <button onClick={() => runAutobet()} disabled={runPending} className="flex items-center gap-2 text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-50 px-4 py-2 rounded-xl font-medium transition-all hover:shadow-[0_0_20px_rgba(139,92,246,0.3)]">
               <RefreshCw className={`w-4 h-4 ${runPending ? "animate-spin" : ""}`} />
               {runPending ? "Running…" : "Force Evaluation"}
             </button>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Summary stat row using VibrantStatCard */}
@@ -116,99 +119,13 @@ export default function TradingPage() {
         </div>
       )}
 
-      {/* Autobet Learning (Redesigned) */}
-      {ab?.learning && (
-        <section className="glass-panel p-6 space-y-6">
-          <div className="flex items-center gap-2">
-            <BrainCircuit className="w-5 h-5 text-violet-400" />
-            <h2 className="font-bold text-lg">Autobet Dynamic Learning</h2>
-          </div>
-          
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Price Tiers */}
-            <div className="space-y-4">
-              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Performance by Odds Tier</h3>
-              <div className="space-y-3">
-                {Object.values(ab.learning.tier_stats).map((t) => {
-                  const gates = ab.learning!.active_gates[t.tier];
-                  const winRate = t.settled ? t.win_rate : 0;
-                  return (
-                    <div key={t.tier} className="bg-black/30 p-3 rounded-lg border border-white/5 relative overflow-hidden group">
-                      <div className="absolute inset-0 bg-gradient-to-r from-violet-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                      <div className="flex justify-between items-end relative z-10">
-                        <div>
-                          <p className="text-xs text-gray-400">{t.label}</p>
-                          <div className="flex items-baseline gap-2 mt-1">
-                            <span className="text-lg font-bold text-white">{t.settled ? pct(winRate, 0) : "—"}</span>
-                            <span className="text-[10px] text-gray-500">{t.settled} settled</span>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-[10px] text-gray-500 uppercase">ROI</p>
-                          <p className={`text-sm font-bold ${t.roi_pct >= 0 ? "text-emerald-400" : t.settled ? "text-red-400" : "text-gray-500"}`}>
-                            {t.settled ? roiPct(t.roi_pct, 1) : "—"}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-[10px] text-gray-500 uppercase">Min Edge Req</p>
-                          <p className="text-sm font-bold text-yellow-400">
-                            {gates ? edge(gates.min_edge) : "—"}
-                            {gates?.adjusted && <span className="text-amber-500 ml-1" title="Adjusted by learning engine">⚠️</span>}
-                          </p>
-                        </div>
-                      </div>
-                      {/* Visual Bar */}
-                      <div className="h-1 bg-gray-800 rounded-full mt-3 overflow-hidden">
-                        <div className={`h-full ${winRate >= 0.5 ? "bg-emerald-500" : "bg-red-500"}`} style={{ width: `${winRate * 100}%` }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Sport Stats & Traps */}
-            <div className="space-y-6">
-              {ab.learning.sport_stats && Object.keys(ab.learning.sport_stats).length > 0 && (
-                <div>
-                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">ROI By Domain</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    {Object.entries(ab.learning.sport_stats).map(([sport, s]) => (
-                      <div key={sport} className="glass-card p-3 border-t-2 border-t-indigo-500">
-                        <span className="capitalize text-gray-300 text-xs font-medium">{sport}</span>
-                        <div className="mt-1 flex items-end gap-2">
-                          <span className={`text-lg font-bold ${s.roi_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                            {s.settled ? roiPct(s.roi_pct, 1) : "—"}
-                          </span>
-                          <span className="text-[10px] text-gray-500 mb-1">({s.settled})</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {ab.live_readiness && !ab.live_readiness.live_ready && (
-                <div className="bg-amber-950/30 border border-amber-900/50 p-4 rounded-xl flex items-start gap-3">
-                  <ShieldAlert className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-                  <div>
-                    <h4 className="text-sm font-semibold text-amber-500">Live Execution Suspended</h4>
-                    <p className="text-xs text-amber-400/80 mt-1">{ab.live_readiness.message}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </section>
-      )}
-
       {/* Sport filter */}
       <div className="flex flex-wrap gap-2">
         {([
           { value: "all", label: "All domains" },
-          { value: "football", label: "⚽ Football" },
           { value: "mlb", label: "⚾ MLB" },
           { value: "weather", label: "🌤️ Weather" },
-          { value: "politics", label: "🏛️ Politics" },
+          { value: "football", label: "⚽ Football" },
         ] as const).map((s) => (
           <button
             key={s.value}
@@ -223,12 +140,12 @@ export default function TradingPage() {
       </div>
 
       {/* Tabs Menu */}
-      <div className="flex gap-2 p-1 bg-black/40 border border-white/5 rounded-xl w-fit backdrop-blur-md">
+      <div className="flex flex-wrap gap-2 p-1 bg-black/40 border border-white/5 rounded-xl w-fit backdrop-blur-md">
         {([
-          ["bets", "Active Trading", Target],
-          ["calibration", "Model Calibration", Activity],
-          ["paper", "Paper Analytics", Banknote],
-          ["weather", "Weather Markets", CloudRain]
+          ["basics", "Betting Basics", BookOpen],
+          ["positions", "Open Positions", Target],
+          ["calibration", "Model Calibration", BrainCircuit],
+          ["weather", "Weather Engine", CloudRain],
         ] as const).map(([t, label, Icon]) => (
           <button
             key={t}
@@ -243,9 +160,75 @@ export default function TradingPage() {
       </div>
 
       {/* ── TAB CONTENT ──────────────────────────────────────────────────────── */}
-      
-      {/* 1. BETS TAB */}
-      {tab === "bets" && (
+
+      {/* BASICS */}
+      {tab === "basics" && (
+        <div className="space-y-6">
+          <section className="glass-panel p-6 space-y-4">
+            <h2 className="font-bold text-lg flex items-center gap-2">
+              <BookOpen className="w-5 h-5 text-indigo-400" /> How shadow betting works
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-400">
+              <div className="bg-black/30 p-4 rounded-xl border border-white/5 space-y-2">
+                <h3 className="text-white font-semibold">1. Signal generation</h3>
+                <p>Models compute fair probability (MLB quant, weather ensemble+MOS, crowd consensus). Edge = model prob minus executable market price.</p>
+              </div>
+              <div className="bg-black/30 p-4 rounded-xl border border-white/5 space-y-2">
+                <h3 className="text-white font-semibold">2. Kelly sizing</h3>
+                <p>Stake sized by fractional Kelly with bankroll caps. Weather uses portfolio optimization across mutually-exclusive buckets.</p>
+              </div>
+              <div className="bg-black/30 p-4 rounded-xl border border-white/5 space-y-2">
+                <h3 className="text-white font-semibold">3. Paper execution</h3>
+                <p>Shadow mode simulates fills against live orderbooks. Every bet logs CLV at close for calibration.</p>
+              </div>
+              <div className="bg-black/30 p-4 rounded-xl border border-white/5 space-y-2">
+                <h3 className="text-white font-semibold">4. Live promotion</h3>
+                <p>When paper ROI and sample size pass gates, enable live on the <Link href="/live" className="text-emerald-400 hover:underline">Live Readiness</Link> page.</p>
+              </div>
+            </div>
+          </section>
+
+          {paperLoading ? (
+            <div className="glass-panel h-32 animate-pulse" />
+          ) : paperData && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+              <VibrantStatCard label="Paper Bankroll" value={money(paperData.bankroll)} icon={Banknote} color="cyan" />
+              <VibrantStatCard label="Paper P&L" value={`${(paperData.total_pnl ?? 0) >= 0 ? "+" : ""}${money(paperData.total_pnl)}`} sub={`${roiPct(paperData.roi_pct)} ROI`} icon={TrendingUp} color={(paperData.total_pnl ?? 0) >= 0 ? "emerald" : "red"} />
+              <VibrantStatCard label="Win Rate" value={pct(paperData.win_rate)} sub={`${paperData.total_bets} simulated bets`} icon={Target} color="purple" />
+              <VibrantStatCard label="Pending" value={String(paperData.pending_bets)} sub={`$${(paperData.total_wagered ?? 0).toFixed(0)} wagered`} icon={Layers} color="indigo" />
+            </div>
+          )}
+
+          {ab?.learning?.sport_stats && (
+            <section className="glass-panel p-6">
+              <h3 className="font-bold mb-4">ROI by domain</h3>
+              <div className="grid grid-cols-3 gap-4">
+                {["mlb", "weather", "football"].map((sport) => {
+                  const s = ab.learning!.sport_stats[sport];
+                  if (!s) return (
+                    <div key={sport} className="glass-card p-4 opacity-50">
+                      <span className="capitalize text-gray-500 text-sm">{sport}</span>
+                      <p className="text-gray-600 mt-1">No data</p>
+                    </div>
+                  );
+                  return (
+                    <div key={sport} className="glass-card p-4 border-t-2 border-t-indigo-500">
+                      <span className="capitalize text-gray-300 text-sm font-medium">{sport}</span>
+                      <p className={`text-2xl font-bold mt-1 ${s.roi_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                        {roiPct(s.roi_pct, 1)}
+                      </p>
+                      <p className="text-xs text-gray-500">{s.settled} settled · {pct(s.win_rate, 0)} WR</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
+
+      {/* POSITIONS */}
+      {tab === "positions" && (
         <div className="space-y-6">
           <section className="glass-panel p-6">
             <h2 className="font-bold text-lg mb-4 flex items-center gap-2">
@@ -348,9 +331,44 @@ export default function TradingPage() {
         </div>
       )}
 
-      {/* 2. CALIBRATION TAB */}
+      {/* CALIBRATION (advanced) */}
       {tab === "calibration" && (
         <div className="space-y-6">
+          {ab?.learning && (
+            <section className="glass-panel p-6 space-y-6">
+              <div className="flex items-center gap-2">
+                <BrainCircuit className="w-5 h-5 text-violet-400" />
+                <h2 className="font-bold text-lg">Dynamic edge gates (learning engine)</h2>
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="space-y-3">
+                  {Object.values(ab.learning.tier_stats).map((t) => {
+                    const gates = ab.learning!.active_gates[t.tier];
+                    const winRate = t.settled ? t.win_rate : 0;
+                    return (
+                      <div key={t.tier} className="bg-black/30 p-3 rounded-lg border border-white/5">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-400">{t.label}</span>
+                          <span className="font-bold text-white">{t.settled ? pct(winRate, 0) : "—"} WR</span>
+                        </div>
+                        <div className="flex justify-between text-xs text-gray-500 mt-1">
+                          <span>ROI {t.settled ? roiPct(t.roi_pct, 1) : "—"}</span>
+                          <span>Min edge {gates ? edge(gates.min_edge) : "—"}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {wvData && (
+                  <div className="bg-black/30 p-4 rounded-xl border border-sky-500/20">
+                    <h3 className="text-sm font-semibold text-sky-400 mb-2">Weather MOS calibration</h3>
+                    <p className="text-xs text-gray-400">Verification rows: {wvData.total} · High MAE: {wvData.high_mae_f ?? "—"}°F · Low MAE: {wvData.low_mae_f ?? "—"}°F</p>
+                    <p className="text-xs text-gray-500 mt-2">{wvData.mos_ready ? "MOS bias correction is active." : "Collecting forecast vs actual data for MOS training."}</p>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
           {calLoading ? (
             <div className="glass-panel p-8 animate-pulse h-48" />
           ) : calData && (calData.total_resolved ?? 0) > 0 ? (
@@ -460,28 +478,7 @@ export default function TradingPage() {
         </div>
       )}
 
-      {/* 3. PAPER TAB */}
-      {tab === "paper" && (
-        <div className="space-y-6">
-          {paperLoading ? (
-            <div className="glass-panel p-8 animate-pulse h-48" />
-          ) : paperData ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-              <VibrantStatCard label="Paper Bankroll" value={money(paperData.bankroll)} icon={Banknote} color="cyan" />
-              <VibrantStatCard label="Paper P&L" value={`${(paperData.total_pnl ?? 0) >= 0 ? "+" : ""}${money(paperData.total_pnl)}`} sub={`${roiPct(paperData.roi_pct)} ROI`} icon={TrendingUp} color={(paperData.total_pnl ?? 0) >= 0 ? "emerald" : "red"} />
-              <VibrantStatCard label="Win Rate" value={pct(paperData.win_rate)} sub={`${paperData.total_bets} simulated bets`} icon={Target} color="purple" />
-              <VibrantStatCard label="Total Wagered" value={money(paperData.total_wagered)} sub={`${paperData.pending_bets} pending`} icon={Layers} color="indigo" />
-            </div>
-          ) : (
-            <div className="glass-panel py-16 text-center">
-              <Banknote className="w-10 h-10 text-gray-600 mx-auto mb-3" />
-              <p className="text-gray-400">No paper trading data.</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 4. WEATHER TAB */}
+      {/* WEATHER */}
       {tab === "weather" && (
         <div className="glass-panel p-6">
           <div className="flex items-center justify-between mb-6">

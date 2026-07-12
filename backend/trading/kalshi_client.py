@@ -187,15 +187,17 @@ class KalshiClient:
         if not levels:
             return None, 0.0
 
-        # Kalshi returns levels as [price, quantity] pairs.
-        # Aggregate top 3 levels like Polymarket
-        total_size = 0.0
+        # Kalshi returns levels as [price_cents, quantity] pairs.
+        # Aggregate top 3 levels like Polymarket, in USDC notional
+        # (price in dollars x contracts) so risk liquidity gates compare
+        # like-for-like with Polymarket book depth.
+        total_size_usdc = 0.0
         best_price = None
         for i, level in enumerate(levels[:3]):
             price, qty = level[0], level[1]
             if i == 0:
                 best_price = price / 100.0
-            total_size += qty
+            total_size_usdc += (price / 100.0) * qty
 
-        return best_price, total_size
+        return best_price, total_size_usdc
 

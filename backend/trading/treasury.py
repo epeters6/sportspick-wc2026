@@ -11,16 +11,17 @@ def check_treasury_health():
     Pauses live execution if the treasury balance drops below 10x the max position size.
     """
     s = get_settings()
-    if not s.polymarket_live_enabled:
+    from backend.trading.live_toggle import is_live_mode
+    if not is_live_mode(s):
         return
         
     try:
-        # Run async client in sync context if needed
-        client = PolymarketClient()
-        # Mocking the balance fetch since PolymarketClient doesn't have a direct balance method yet
-        # Normally this would be: balance = asyncio.run(client.get_balance())
-        # For now, we simulate a check
-        balance = 5000.0 # Placeholder
+        # No direct exchange balance API wired yet — use the working bankroll
+        # (configured bankroll + realised P&L) so the breaker tracks reality
+        # instead of a hardcoded placeholder.
+        from backend.db import get_db
+        from backend.trading.autobet import _current_bankroll
+        balance = _current_bankroll(get_db())
         
         # We need a minimum amount of ammo to comfortably place bets
         # 10x the max position size is a reasonable minimum

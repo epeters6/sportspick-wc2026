@@ -7,10 +7,11 @@ Uses an Elo + accuracy ML model to rank them and surface the best consensus pick
 
 ## What it does
 
-- **Scrapes** picks from influencers on Twitter (twikit), TikTok (unofficial API), and Instagram (Instaloader) every 30 minutes
-- **Resolves** picks automatically when World Cup matches finish
-- **Ranks** influencers by Elo score (accuracy-weighted) — updated hourly
-- **Computes consensus** — Elo-weighted vote aggregation to surface the most confident picks
+- **Scrapes** picks from influencers (Covers, YouTube, ActionNetwork, Pickswise, optional Twitter/TikTok) 3× daily
+- **Resolves** picks automatically when World Cup / MLB matches finish
+- **Ranks** influencers by Elo score (accuracy-weighted) on each ML run
+- **Computes consensus** — Elo-weighted vote aggregation blended with quant models (MLB Pavlov engine, WC team-Elo model, weather portfolio optimizer)
+- **Shadow-bets** the edges on Polymarket/Kalshi (paper mode), reports daily results to Discord, and gates live promotion on a proven paper track record
 - **Dashboard** — a Next.js web app to visualise everything in real time
 
 ---
@@ -21,9 +22,11 @@ Uses an Elo + accuracy ML model to rank them and surface the best consensus pick
 ┌──────────────────────────────────────────────────────────────────────┐
 │  GitHub Actions (free cron scheduling)                               │
 │                                                                      │
-│  scrape.yml (every 30 min)   ──▶  Twitter / TikTok / Instagram      │
-│  worldcup_sync.yml (15 min)  ──▶  WC match results + resolve picks  │
-│  ml_sync.yml (every hour)    ──▶  Elo ranking + consensus + scoring  │
+│  sync_scrape.yml (3×/day)    ──▶  match sync + all pick scrapers    │
+│  sync_ml.yml (3×/day)        ──▶  Elo + consensus + quant + autobet │
+│  pavlov_mlb.yml (3×/day)     ──▶  Pavlov MLB cycle + resolution     │
+│  daily_report.yml (1×/day)   ──▶  shadow results → Discord          │
+│  worldcup_sync.yml (manual)  ──▶  WC match results + resolve picks  │
 └──────────────────────────┬───────────────────────────────────────────┘
                            │ reads/writes
                            ▼
@@ -140,9 +143,11 @@ Everything runs for free: GitHub Actions for cron jobs, Hugging Face Spaces for 
 | `WC_API_BASE` | `https://api.wc2026api.com/v1` |
 
 4. GitHub Actions workflows will start running automatically on their cron schedules:
-   - `.github/workflows/sync.yml` — every **30 minutes** (full scrape + ML pipeline)
-   - `.github/workflows/worldcup_sync.yml` — every **15 minutes** (WC results + resolve picks)
-   - `.github/workflows/ml_sync.yml` — every **hour** (Elo + consensus + scoring)
+   - `.github/workflows/sync_scrape.yml` — **09/15/21 UTC** (match sync + pick scrapers)
+   - `.github/workflows/sync_ml.yml` — **10/16/22 UTC** (Elo, consensus, quant models, autobet, shadow validation)
+   - `.github/workflows/pavlov_mlb.yml` — **14/20 UTC** pregame + **05 UTC** resolution
+   - `.github/workflows/daily_report.yml` — **12 UTC** (yesterday's shadow results → Discord)
+   - `.github/workflows/worldcup_sync.yml` — manual dispatch (WC results + resolve picks)
 
 > You can trigger any workflow manually via the **Actions** tab → select workflow → **Run workflow**.
 
@@ -250,9 +255,11 @@ To add a new sport:
 Scraper/
 ├── .github/
 │   └── workflows/
-│       ├── scrape.yml             Cron: scrape all platforms every 30 min
-│       ├── ml_sync.yml            Cron: Elo + consensus + scoring every hour
-│       └── worldcup_sync.yml      Cron: WC results + resolve picks every 15 min
+│       ├── sync_scrape.yml        Cron 3×/day: match sync + pick scrapers
+│       ├── sync_ml.yml            Cron 3×/day: ML + quant + autobet + shadow validation
+│       ├── pavlov_mlb.yml         Cron 3×/day: Pavlov MLB cycle + midnight resolution
+│       ├── daily_report.yml       Cron 1×/day: shadow results → Discord
+│       └── worldcup_sync.yml      Manual: WC results + resolve picks
 ├── backend/
 │   ├── scrapers/
 │   │   ├── twitter_scraper.py     Twitter/X via twikit (cookie auth)

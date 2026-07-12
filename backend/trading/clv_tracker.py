@@ -31,6 +31,7 @@ async def snapshot_closing_prices():
     client_us = PolymarketUS(key_id="dummy", secret_key="dummy") # public read
     
     updated = 0
+    total_pending = len(bets)
     
     for bet in bets:
         market_id = bet.get("market_id")

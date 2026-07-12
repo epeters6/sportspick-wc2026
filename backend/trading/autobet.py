@@ -320,6 +320,7 @@ def normalize_open_autobet_stakes() -> int:
         db.table("autobets")
         .select("id, stake, market_price, shares")
         .eq("status", "open")
+        .eq("mode", "paper")
         .execute()
         .data or []
     )
@@ -378,7 +379,8 @@ async def run_autobet() -> dict[str, Any]:
     s = get_settings()
     db = get_db()
     client = VenueRouter()
-    requested_mode = "live" if s.polymarket_live_enabled else "paper"
+    from backend.trading.live_toggle import is_live_mode
+    requested_mode = "live" if is_live_mode(s, db) else "paper"
     mode = requested_mode
     live_blocked = False
 
@@ -915,11 +917,13 @@ def get_autobet_summary() -> dict[str, Any]:
     open_count = sum(1 for b in bets if b.get("status") == "open")
     open_stake = sum(b.get("stake") or 0 for b in bets if b.get("status") == "open")
 
-    paper = not s.polymarket_live_enabled
+    from backend.trading.live_toggle import is_live_mode
+    live_now = is_live_mode(s, db)
+    paper = not live_now
     learn = learning_summary(paper=paper)
 
     return {
-        "mode": "live" if s.polymarket_live_enabled else "paper",
+        "mode": "live" if live_now else "paper",
         "starting_bankroll": s.polymarket_bankroll,
         "bankroll": round(s.polymarket_bankroll + total_pnl, 2),
         "total_pnl": round(total_pnl, 2),

@@ -52,7 +52,7 @@ def check_health():
         fourteen_days_ago = (datetime.utcnow() - timedelta(days=14)).isoformat()
         recent_bets = (
             db.table("autobets")
-            .select("sport, stake_size, placed_price, closing_price")
+            .select("sport, stake, market_price, closing_price")
             .gte("created_at", fourteen_days_ago)
             .not_.is_("closing_price", "null")
             .execute()
@@ -67,8 +67,8 @@ def check_health():
         
         for b in recent_bets:
             sport = b.get("sport") or "unknown"
-            stake = float(b.get("stake_size") or 0.0)
-            placed = float(b.get("placed_price") or 0.0)
+            stake = float(b.get("stake") or 0.0)
+            placed = float(b.get("market_price") or 0.0)
             closing = float(b.get("closing_price") or 0.0)
             
             if placed <= 0 or closing <= 0 or stake <= 0:

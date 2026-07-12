@@ -424,6 +424,23 @@ def get_guardian_status():
     return {"halted": False, "reasons": [], "updated_at": None}
 
 
+@app.get("/trading/live-toggle")
+def get_live_toggle_state():
+    """Current live-trading toggle plus the effective mode after safety gates."""
+    from backend.trading.live_toggle import get_live_toggle, is_live_mode
+    toggle = get_live_toggle()
+    return {"toggle": toggle, "effective_live": is_live_mode()}
+
+
+@app.post("/trading/live-toggle")
+def set_live_toggle_state(payload: dict):
+    """Flip the live-trading toggle from the dashboard."""
+    from backend.trading.live_toggle import set_live_toggle, is_live_mode
+    enabled = bool(payload.get("enabled"))
+    value = set_live_toggle(enabled, by=str(payload.get("by") or "dashboard"))
+    return {"toggle": value, "effective_live": is_live_mode()}
+
+
 @app.get("/trading/arb-scan")
 def get_arb_opportunities():
     """Mocks an arb scan return for the UI (using the strict ARB_MAP logic)."""
@@ -447,82 +464,215 @@ def get_arb_opportunities():
 def get_model_blender_diagnostics():
     from backend.ml.model_blender import build_blender_from_db
     blender = build_blender_from_db()
-    return {"diagnostics": blender.diagnostics(["mlb_quant", "consensus", "sports_ml"])}
+    return {"diagnostics": blender.diagnostics(["mlb_quant", "consensus", "sports_ml", "weather_portfolio"])}
 
 @app.get("/trading/readiness")
 def get_trading_readiness():
-    """Evaluates paper-trading performance to determine live-trading readiness per domain."""
-    db = get_db()
-    
-    # We will look at autobets with status='paper' or mode='paper' and clv data
-    # In this mock-up for the UI, we'll evaluate the actual db but also provide a structured response
-    from datetime import datetime, timedelta
-    fourteen_days_ago = (datetime.utcnow() - timedelta(days=14)).isoformat()
-    recent_bets = (
-        db.table("autobets")
-        .select("sport, stake_size, placed_price, closing_price")
-        .gte("created_at", fourteen_days_ago)
-        .not_.is_("closing_price", "null")
-        .execute()
-        .data or []
-    )
-    
-    domains = {}
-    for b in recent_bets:
-        sport = b.get("sport") or "unknown"
-        stake = float(b.get("stake_size") or 0.0)
-        placed = float(b.get("placed_price") or 0.0)
-        closing = float(b.get("closing_price") or 0.0)
-        
-        if placed <= 0 or closing <= 0 or stake <= 0:
-            continue
-            
-        payout = stake / placed
-        ev = (payout * closing) - stake
-        
-        if sport not in domains:
-            domains[sport] = {"ev": 0.0, "staked": 0.0, "count": 0}
-            
-        domains[sport]["ev"] += ev
-        domains[sport]["staked"] += stake
-        domains[sport]["count"] += 1
-        
-    def apply_shrinkage(observed_roi: float, n_bets: int, prior_roi: float = 0.0, k: float = 20.0) -> float:
-        weight = n_bets / (n_bets + k)
-        return (weight * observed_roi) + ((1 - weight) * prior_roi)
+    """Paper-track readiness, per-domain stats, guardian, and live-toggle state."""
+    import json
+    import os
+    from backend.config import get_settings
+    from backend.trading.autobet_learning import assess_live_readiness, compute_sport_stats
+    from backend.trading.live_toggle import get_live_toggle, is_live_mode
+    from scripts.guardian_health import HALT_FILE
 
-    readiness = []
-    
-    # Ensure all sports are represented even if no recent bets
-    all_sports = ["football", "mlb", "weather", "politics"]
-    for s in all_sports:
-        if s not in domains:
-            domains[s] = {"ev": 0.0, "staked": 0.0, "count": 0}
-            
-    for sport, data in domains.items():
-        n = data["count"]
-        raw_roi = (data["ev"] / data["staked"]) if data["staked"] > 0 else 0.0
-        shrunken_roi = apply_shrinkage(raw_roi, n)
-        
-        # Criteria: At least 10 trades AND Shrunken ROI > 0%
-        req_trades = 10
-        min_roi = 0.00
-        
-        is_ready = n >= req_trades and shrunken_roi > min_roi
-        progress_trades = min(100, (n / req_trades) * 100) if req_trades > 0 else 100
-        
-        readiness.append({
+    settings = get_settings()
+    global_ready = assess_live_readiness()
+    sport_stats = compute_sport_stats()
+
+    guardian = {"halted": False, "reasons": [], "updated_at": None}
+    if os.path.exists(HALT_FILE):
+        with open(HALT_FILE, "r") as f:
+            guardian = json.load(f)
+
+    toggle = get_live_toggle()
+    effective_live = is_live_mode()
+
+    def _shrink(roi_frac: float, n: int, k: float = 20.0) -> float:
+        w = n / (n + k) if n > 0 else 0.0
+        return (w * roi_frac) + ((1 - w) * 0.0)
+
+    tracked_domains = ["mlb", "weather", "football"]
+    domains = []
+    for sport in tracked_domains:
+        s = sport_stats.get(sport, {})
+        settled = int(s.get("settled") or 0)
+        roi_pct = float(s.get("roi_pct") or 0.0)
+        roi_frac = roi_pct / 100.0
+        shrunken = _shrink(roi_frac, settled)
+        req = max(10, settings.polymarket_live_min_settled_bets // 5)
+        is_ready = settled >= req and shrunken > 0.0
+        domains.append({
             "domain": sport,
             "is_ready": is_ready,
-            "trades_count": n,
-            "trades_required": req_trades,
-            "trades_progress_pct": progress_trades,
-            "shrunken_roi": shrunken_roi,
-            "raw_roi": raw_roi,
-            "status": "LIVE CLEARED" if is_ready else "PAPER ONLY"
+            "trades_count": settled,
+            "trades_required": req,
+            "trades_progress_pct": min(100.0, (settled / req) * 100) if req else 100.0,
+            "shrunken_roi": round(shrunken, 4),
+            "raw_roi": round(roi_frac, 4),
+            "win_rate": round(float(s.get("win_rate") or 0.0), 4),
+            "total_pnl": round(float(s.get("total_pnl") or 0.0), 2),
+            "status": "LIVE CLEARED" if is_ready else "PAPER ONLY",
         })
-        
-    return {"domains": readiness}
+
+    blockers = []
+    if not global_ready.get("live_ready"):
+        blockers.append(global_ready.get("message") or "Paper track record insufficient")
+    if guardian.get("halted"):
+        blockers.extend(guardian.get("reasons") or ["Guardian circuit breaker tripped"])
+    if toggle.get("enabled") and not effective_live and os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        blockers.append("ALLOW_LIVE_ON_GITHUB_ACTIONS not set — CI stays in shadow mode")
+
+    can_enable_live = global_ready.get("live_ready") and not guardian.get("halted")
+
+    return {
+        "global": global_ready,
+        "domains": domains,
+        "guardian": guardian,
+        "toggle": toggle,
+        "effective_live": effective_live,
+        "can_enable_live": can_enable_live,
+        "blockers": blockers,
+        "min_settled_required": settings.polymarket_live_min_settled_bets,
+        "min_roi_required_pct": settings.polymarket_live_min_roi_pct,
+        "mode": "live" if effective_live else "shadow",
+    }
+
+
+@app.get("/weather/verification")
+def weather_verification_stats():
+    """MOS training-data health: forecast vs actual coverage."""
+    db = get_db()
+    try:
+        rows = db.table("weather_verification").select("*").order("target_date", desc=True).limit(500).execute().data or []
+    except Exception as exc:
+        return {"error": str(exc), "total": 0, "with_actuals": 0}
+
+    total = len(rows)
+    with_high = sum(1 for r in rows if r.get("actual_high") is not None)
+    with_low = sum(1 for r in rows if r.get("actual_low") is not None)
+    high_errors, low_errors = [], []
+    for r in rows:
+        if r.get("predicted_high") is not None and r.get("actual_high") is not None:
+            high_errors.append(r["actual_high"] - r["predicted_high"])
+        if r.get("predicted_low") is not None and r.get("actual_low") is not None:
+            low_errors.append(r["actual_low"] - r["predicted_low"])
+
+    def _mae(errs):
+        return round(sum(abs(e) for e in errs) / len(errs), 2) if errs else None
+
+    by_station: dict[str, int] = {}
+    for r in rows:
+        st = r.get("station_id") or "unknown"
+        by_station[st] = by_station.get(st, 0) + 1
+
+    return {
+        "total": total,
+        "with_actual_high": with_high,
+        "with_actual_low": with_low,
+        "high_mae_f": _mae(high_errors),
+        "low_mae_f": _mae(low_errors),
+        "high_bias_f": round(sum(high_errors) / len(high_errors), 2) if high_errors else None,
+        "low_bias_f": round(sum(low_errors) / len(low_errors), 2) if low_errors else None,
+        "stations": by_station,
+        "mos_ready": with_high >= 10 or with_low >= 10,
+    }
+
+
+@app.get("/models/overview")
+def models_overview():
+    """Active quant models (excludes World Cup)."""
+    from backend.trading.autobet_learning import compute_sport_stats
+    stats = compute_sport_stats()
+    return [
+        {
+            "id": "mlb_quant",
+            "name": "MLB Moneyline Quant",
+            "domain": "mlb",
+            "description": "Pitcher fatigue + park/weather blend for game winners on Polymarket/Kalshi.",
+            "settled": stats.get("mlb", {}).get("settled", 0),
+            "roi_pct": stats.get("mlb", {}).get("roi_pct", 0),
+        },
+        {
+            "id": "mlb_pitcher_outs",
+            "name": "MLB Pitcher Outs (v4)",
+            "domain": "mlb",
+            "description": "In-game fatigue CUSUM engine for pitcher outs props. Runs via Pavlov MLB workflow.",
+            "settled": 0,
+            "roi_pct": 0,
+        },
+        {
+            "id": "weather_portfolio",
+            "name": "Weather Portfolio Optimizer",
+            "domain": "weather",
+            "description": "Ensemble + MOS bias + nowcast masking. High/low temp buckets on Kalshi & Polymarket.",
+            "settled": stats.get("weather", {}).get("settled", 0),
+            "roi_pct": stats.get("weather", {}).get("roi_pct", 0),
+        },
+        {
+            "id": "consensus",
+            "name": "Crowd Consensus Blend",
+            "domain": "football",
+            "description": "Calibrated influencer picks blended with market prices.",
+            "settled": stats.get("football", {}).get("settled", 0),
+            "roi_pct": stats.get("football", {}).get("roi_pct", 0),
+        },
+    ]
+
+
+@app.get("/models/readiness")
+def models_readiness():
+    """Per-model readiness criteria for the dashboard."""
+    from backend.trading.autobet_learning import assess_live_readiness, compute_sport_stats
+
+    global_r = assess_live_readiness()
+    sports = compute_sport_stats()
+    wv = weather_verification_stats()
+
+    def _criteria(checks: list[dict], score: float, ready: bool):
+        return {"criteria": checks, "score": score, "ready": ready}
+
+    mlb = sports.get("mlb", {})
+    weather = sports.get("weather", {})
+    football = sports.get("football", {})
+
+    return {
+        "mlb_quant": _criteria(
+            [
+                {"label": f"≥20 settled MLB shadow bets", "met": (mlb.get("settled") or 0) >= 20},
+                {"label": "Positive paper ROI", "met": (mlb.get("roi_pct") or 0) > 0},
+                {"label": "Quant model returning probabilities", "met": True},
+            ],
+            min(100, ((mlb.get("settled") or 0) / 20) * 50 + (25 if (mlb.get("roi_pct") or 0) > 0 else 0)),
+            (mlb.get("settled") or 0) >= 20 and (mlb.get("roi_pct") or 0) > 0,
+        ),
+        "mlb_pitcher_outs": _criteria(
+            [
+                {"label": "Manifest populated daily", "met": True},
+                {"label": "Prop lines from sportsbooks", "met": True},
+                {"label": "In-game shadow labels accumulating", "met": False},
+            ],
+            40,
+            False,
+        ),
+        "weather_portfolio": _criteria(
+            [
+                {"label": f"≥10 settled weather events", "met": (weather.get("settled") or 0) >= 10},
+                {"label": "MOS verification data", "met": wv.get("mos_ready", False)},
+                {"label": "Positive paper ROI", "met": (weather.get("roi_pct") or 0) > 0},
+            ],
+            min(100, ((weather.get("settled") or 0) / 10) * 40 + (30 if wv.get("mos_ready") else 0) + (30 if (weather.get("roi_pct") or 0) > 0 else 0)),
+            (weather.get("settled") or 0) >= 10 and wv.get("mos_ready") and (weather.get("roi_pct") or 0) > 0,
+        ),
+        "consensus": _criteria(
+            [
+                {"label": f"≥{global_r.get('min_settled_required', 50)} settled bets (global)", "met": global_r.get("live_ready", False)},
+                {"label": "Football ROI tracked", "met": (football.get("settled") or 0) > 0},
+            ],
+            min(100, (global_r.get("settled_bets", 0) / max(global_r.get("min_settled_required", 50), 1)) * 100),
+            global_r.get("live_ready", False),
+        ),
+    }
 
 
 # ─── Stats ───────────────────────────────────────────────────────────────────

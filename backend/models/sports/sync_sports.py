@@ -199,10 +199,19 @@ def _log_decision(
         "winning_side": None
     }
     
-    # We must explicitly convert SizedOrder's inner TradeCandidate to dict
+    # We must explicitly convert SizedOrder's inner TradeCandidate to dict.
+    # Serialize ALL datetime fields (timestamp, received_timestamp,
+    # orderbook_timestamp, ...) — missing one crashes the whole decision log.
     if log_entry["sized_order"]:
-        log_entry["sized_order"]["candidate"] = log_entry["sized_order"]["candidate"].__dict__
-        log_entry["sized_order"]["candidate"]["timestamp"] = log_entry["sized_order"]["candidate"]["timestamp"].isoformat()
+        candidate = dict(log_entry["sized_order"]["candidate"].__dict__)
+        for k, v in candidate.items():
+            if isinstance(v, datetime):
+                candidate[k] = v.isoformat()
+        log_entry["sized_order"] = dict(log_entry["sized_order"])
+        log_entry["sized_order"]["candidate"] = candidate
+        for k, v in log_entry["sized_order"].items():
+            if isinstance(v, datetime):
+                log_entry["sized_order"][k] = v.isoformat()
         
     # Serialize datetimes in feature_snapshot
     if log_entry["feature_snapshot"]:

@@ -15,13 +15,23 @@ from backend.trading.autobet import _current_bankroll
 
 async def run_mlb_shadow_execution():
     logger.info("Running MLB shadow execution...")
-    manifest_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "ml", "mlb_quant", "manifest.json")
-    if not os.path.exists(manifest_path):
-        logger.warning(f"Manifest not found at {manifest_path}")
-        return
-        
-    with open(manifest_path, "r") as f:
-        manifest = json.load(f)
+    # Prefer the DB-stored manifest (written by the orchestrator each ML run) —
+    # the local manifest.json only exists when the orchestrator ran in this
+    # same checkout, which is never true across fresh CI runs.
+    manifest = None
+    try:
+        from backend.ml.mlb_quant.orchestrator import load_existing_manifest
+        manifest = load_existing_manifest()
+    except Exception as exc:
+        logger.warning(f"Could not load manifest from DB: {exc}")
+
+    if not manifest:
+        manifest_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "ml", "mlb_quant", "manifest.json")
+        if not os.path.exists(manifest_path):
+            logger.warning(f"Manifest not found in DB or at {manifest_path}")
+            return
+        with open(manifest_path, "r") as f:
+            manifest = json.load(f)
         
     router = VenueRouter()
     db = get_db()

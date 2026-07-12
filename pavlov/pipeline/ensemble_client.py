@@ -411,8 +411,9 @@ def get_ensemble_prob(
     
     # ── Intraday Nowcasting Shift ──
     # If this is a same-day market (lead_time_days == 0), aggressively adjust the forecast
-    # based on live METAR station observations.
-    if lead_time_days == 0:
+    # based on live METAR station observations. Only valid for daily HIGHS — the
+    # diurnal-curve shift model assumes the extreme is still ahead in the afternoon.
+    if lead_time_days == 0 and metric == "high":
         try:
             import sys
             import os

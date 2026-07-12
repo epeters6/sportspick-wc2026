@@ -7,8 +7,8 @@ import Sidebar from "@/components/Sidebar";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "SportsPick Tracker | World Cup 2026 + MLB",
-  description: "Track top sports pick influencers across 𝕏, TikTok, Covers, YouTube & ActionNetwork — powered by AI consensus.",
+  title: "QuantBet | MLB + Weather Shadow Trading",
+  description: "Polymarket/Kalshi quant betting — shadow trading, model calibration, and live promotion gates for MLB and weather markets.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

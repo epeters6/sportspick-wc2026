@@ -312,10 +312,12 @@ class PolymarketClient:
 
     def _live_ready(self) -> tuple[bool, str]:
         s = self.settings
-        if not s.polymarket_live_enabled:
-            return False, "live trading disabled (POLYMARKET_LIVE_ENABLED=false)"
-        if not (s.polymarket_api_key and s.polymarket_api_secret and s.polymarket_api_passphrase):
-            return False, "missing US API credentials"
+        from backend.trading.live_toggle import is_live_mode
+        if not is_live_mode(s):
+            return False, "live trading disabled (env + dashboard toggle both OFF)"
+        # Must match the fields actually used at order time (PolymarketUS SDK).
+        if not (s.polymarket_key_id and s.polymarket_secret_key):
+            return False, "missing US API credentials (POLYMARKET_KEY_ID / POLYMARKET_SECRET_KEY)"
         return True, ""
 
     def place_order(

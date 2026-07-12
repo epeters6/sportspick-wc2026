@@ -54,40 +54,6 @@ async def sync_weather_predictions():
         
         try:
             from pipeline import kalshi_client
-            # Paper Fill wrapper
-            def _simulate_paper_fill_wrapper(order, orderbook_timestamp, received_timestamp):
-                from pavlov.pipeline.order_simulator import simulate_paper_fill, validate_orderbook_freshness
-                
-                # If we're not live, we explicitly allow the system to assume freshness if timestamps are missing
-                allow_assumed = (mode != "live")
-                
-                try:
-                    validate_orderbook_freshness(
-                        orderbook_timestamp=orderbook_timestamp,
-                        received_timestamp=received_timestamp,
-                        mode=mode,
-                        allow_assumed_fresh_orderbook_for_shadow=allow_assumed
-                    )
-                except ValueError as e:
-                    from pavlov.pipeline.order_simulator import PaperFill
-                    return PaperFill(
-                        market_id=order.candidate.market_id,
-                        outcome_id=order.candidate.outcome_id,
-                        side=order.candidate.side,
-                        requested_shares=order.target_shares,
-                        filled_shares=0.0,
-                        limit_price=order.limit_price,
-                        simulated_fill_price=0.0,
-                        fees=0.0,
-                        slippage=0.0,
-                        visible_depth_used=0.0,
-                        rejection_reason=str(e)
-                    )
-                    
-                # We do a direct inner call if validation passes, but simulate_paper_fill does validation again. 
-                # Let's adjust simulate_paper_fill directly above instead of wrapping it perfectly.
-                # Actually, I can just patch simulate_paper_fill to accept mode and allow_assumed_fresh_orderbook_for_shadow.
-                pass
             kalshi_markets = kalshi_client.get_weather_markets()
             for m in kalshi_markets:
                 m["_platform"] = "kalshi"
@@ -111,13 +77,16 @@ async def sync_weather_predictions():
         if not normalized:
             continue
             
-        # Group by strict settlement identity, NOT just city/date
+        # Group by strict settlement identity, NOT just city/date.
+        # metric matters: HIGH and LOW buckets for the same station/date are
+        # separate mutually-exclusive event spaces.
         group_key = (
             normalized.settlement_station, 
             normalized.settlement_source, 
             normalized.date, 
             normalized.observation_window, 
-            platform
+            platform,
+            normalized.metric
         )
         events_by_group[group_key].append(normalized)
         raw_by_group[group_key].append(m)
@@ -133,13 +102,14 @@ async def sync_weather_predictions():
         
     paper_max_dollars = bankroll * s.polymarket_paper_max_position_pct
     live_max_dollars = bankroll * s.polymarket_max_position_pct
-    mode = "live" if s.polymarket_live_enabled else "paper"
+    from backend.trading.live_toggle import is_live_mode
+    mode = "live" if is_live_mode(s, db) else "paper"
     
     bets_placed = 0
 
     # 3. Process each event vector
     for group_key, events in events_by_group.items():
-        station, source, event_date, obs_window, platform = group_key
+        station, source, event_date, obs_window, platform, metric = group_key
         raw_markets = raw_by_group[group_key]
         
         # Canonical bucket ordering
@@ -194,42 +164,72 @@ async def sync_weather_predictions():
         city = events[0].city
         date_str = event_date.isoformat()
         
-        # Lead time
-        now = datetime.now(timezone.utc).date()
-        lead_days = (event_date - now).days
-        hour = datetime.now(timezone.utc).hour
+        # Lead time in STATION-LOCAL time — UTC date/hour is wrong for US
+        # evening settlement (e.g. 01:00 UTC is still "today" in Phoenix).
+        from zoneinfo import ZoneInfo
+        from pavlov.pipeline.station_mapper import get_tz_for_city
+        local_now = datetime.now(ZoneInfo(get_tz_for_city(city)))
+        lead_days = (event_date - local_now.date()).days
+        hour = local_now.hour
         
-        # Get raw ensemble stats using a dummy threshold call
-        ens_result = ensemble_client.get_ensemble_prob(city, date_str, 0.0, "above")
+        # Get raw ensemble stats using a dummy threshold call (metric-aware:
+        # LOW markets need the daily-minimum ensemble members, not the maximum)
+        ens_result = ensemble_client.get_ensemble_prob(city, date_str, 0.0, "above", metric=metric)
         if not ens_result:
-            logger.debug(f"Skipping {city} {date_str}: No ensemble data.")
+            logger.debug(f"Skipping {city} {date_str} ({metric}): No ensemble data.")
             continue
             
         mean_f = ens_result["mean_f"]
         spread_f = ens_result["spread_f"]
         
-        # A. Probability Model (Sigma calibration)
+        # Record the raw (pre-MOS) forecast so the verification loop can grade it later
         try:
-            _, P_model = generate_event_probability_vector(events, mean_f, spread_f, lead_days, hour)
+            from backend.ml.weather_verification import record_prediction
+            record_prediction(
+                events[0].settlement_station, max(lead_days, 0), date_str,
+                mean_f, metric=metric, model_name="ensemble",
+            )
+        except Exception as exc:
+            logger.debug(f"Verification record failed for {city} {date_str}: {exc}")
+        
+        # A. Probability Model (Sigma calibration + MOS bias correction)
+        mos_bias = 0.0
+        try:
+            from backend.ml.weather_mos import mos_engine
+            mos_bias = mos_engine.calculate_bias(
+                events[0].settlement_station, "ensemble", max(lead_days, 0), metric
+            )
+        except Exception as exc:
+            logger.debug(f"MOS bias unavailable for {city} (using 0.0): {exc}")
+        try:
+            _, P_model = generate_event_probability_vector(events, mean_f, spread_f, lead_days, hour, bias_correction=mos_bias)
             
             # B. Market Probability
             P_market = generate_market_implied_vector(raw_markets)
             
             # C. Nowcast Constraints BEFORE Shrinkage
-            high_so_far = -999.0
+            # For HIGH markets the running max rules out low buckets; for LOW
+            # markets the running min rules out high buckets.
+            observed_extreme = -999.0 if metric == "high" else 999.0
+            nowcast_active = False
             if lead_days == 0:
                 obs = get_current_obs(city)
-                high_so_far = obs.get("high_so_far", -999.0)
-                if high_so_far > -999.0:
-                    P_model = mask_impossible_buckets(events, P_model, high_so_far)
-                    P_market = mask_impossible_buckets(events, P_market, high_so_far)
+                if metric == "high":
+                    observed_extreme = obs.get("high_so_far", -999.0)
+                    nowcast_active = observed_extreme > -999.0
+                else:
+                    observed_extreme = obs.get("low_so_far", 999.0)
+                    nowcast_active = observed_extreme < 999.0
+                if nowcast_active:
+                    P_model = mask_impossible_buckets(events, P_model, observed_extreme, metric=metric)
+                    P_market = mask_impossible_buckets(events, P_market, observed_extreme, metric=metric)
             
             # D. Bayesian Shrinkage
             P_adj = shrink_probability_vector(P_model, P_market, lead_days)
             
             # D2. Final Nowcast Masking & Assertion
-            if high_so_far > -999.0:
-                P_adj = mask_impossible_buckets(events, P_adj, high_so_far)
+            if nowcast_active:
+                P_adj = mask_impossible_buckets(events, P_adj, observed_extreme, metric=metric)
                 from pipeline.probability_model import validate_probability_vector
                 validate_probability_vector("P_adj_after_nowcast", P_adj)
             
@@ -240,9 +240,14 @@ async def sync_weather_predictions():
             x_opt = optimize_portfolio(P_adj, Q_exec, depth_caps, bankroll)
             
             # G. Final Safety Assertions
-            if high_so_far > -999.0:
+            if nowcast_active:
                 for i, event in enumerate(events):
-                    if event.bucket_high_f < high_so_far:
+                    impossible = (
+                        event.bucket_high_f < observed_extreme
+                        if metric == "high"
+                        else event.bucket_low_f > observed_extreme
+                    )
+                    if impossible:
                         if P_adj[i] != 0.0 or x_opt[i] != 0.0:
                             raise ValueError(f"NOWCAST_IMPOSSIBLE_BUCKET_LEAK: Bucket {event.bucket_label} has prob {P_adj[i]} or shares {x_opt[i]}")
             
@@ -264,7 +269,8 @@ async def sync_weather_predictions():
         import os
         
         # G. Shadow Mode Logging & Execution
-        virtual_match_id = f"weather_{city.replace(' ', '')}_{date_str}_{platform}"
+        metric_tag = "" if metric == "high" else "_low"
+        virtual_match_id = f"weather_{city.replace(' ', '')}_{date_str}{metric_tag}_{platform}"
         max_allowed = live_max_dollars if mode == "live" else paper_max_dollars
         
         shadow_record = {
@@ -280,7 +286,8 @@ async def sync_weather_predictions():
             "P_market": P_market,
             "P_adj": P_adj,
             "lambda_confidence": None, # Kept for schema compatibility if needed
-            "high_so_far": high_so_far,
+            "metric": metric,
+            "observed_extreme_so_far": observed_extreme if nowcast_active else None,
             "Q_exec": Q_exec,
             "depth_caps": depth_caps,
             "x_opt_raw": None, # res.x not returned by optimizer currently, but we can just use x_opt_rounded
@@ -416,7 +423,7 @@ async def sync_weather_predictions():
                 "bet_subject": virtual_match_id,
                 "market_id": event.market_id,
                 "market_slug": event.market_id,
-                "question": f"Weather: {city} High {event.bucket_label} {date_str} ({platform})",
+                "question": f"Weather: {city} {'High' if metric == 'high' else 'Low'} {event.bucket_label} {date_str} ({platform})",
                 "outcome_name": "yes",
                 "token_id": raw_m.get("yes_token", "unknown"),
                 "mode": mode,
@@ -426,7 +433,8 @@ async def sync_weather_predictions():
                 "edge": P_adj[i] - q_i,
                 "raw_confidence": P_adj[i],
                 "sport": "weather",
-                "kelly_fraction": 0.0,
+                # Effective fraction implied by the portfolio optimizer's sizing
+                "kelly_fraction": round(stake / bankroll, 4) if bankroll > 0 else 0.0,
                 "stake": stake,
                 "bankroll_at_time": round(bankroll, 2),
                 "shares": shares,
@@ -436,7 +444,17 @@ async def sync_weather_predictions():
                     "p_adj": P_adj[i],
                     "q_exec": q_i,
                     "mean_f": mean_f,
-                    "spread_f": spread_f
+                    "spread_f": spread_f,
+                    # Everything settlement needs to grade this bet against
+                    # observed temps if the exchange never reports resolution
+                    "metric": metric,
+                    "station": events[0].settlement_station,
+                    "city": city,
+                    "target_date": date_str,
+                    "bucket_low_f": event.bucket_low_f if event.bucket_low_f != float("-inf") else None,
+                    "bucket_high_f": event.bucket_high_f if event.bucket_high_f != float("inf") else None,
+                    "bucket_label": event.bucket_label,
+                    "mos_bias": mos_bias
                 }
             }
             

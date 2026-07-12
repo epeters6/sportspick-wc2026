@@ -52,6 +52,89 @@ def _kalshi_ticker_date(market_id: str) -> datetime | None:
 
 
 
+def _grade_bet_against_actual(bet: dict, market_date: datetime) -> tuple[str, float] | None:
+    """Grade an unresolved weather bet against the observed station temperature.
+
+    Returns (status, pnl) — ('won'|'lost', pnl) — or None if the actual
+    temperature can't be determined (METAR archive only reaches back ~4 days).
+    """
+    meta = bet.get("metadata") or {}
+    if isinstance(meta, str):
+        try:
+            import json
+            meta = json.loads(meta)
+        except (ValueError, TypeError):
+            meta = {}
+
+    station = meta.get("station")
+    metric = meta.get("metric") or "high"
+    target_date = meta.get("target_date")
+    lo = meta.get("bucket_low_f")
+    hi = meta.get("bucket_high_f")
+
+    # Legacy bets (before metadata enrichment): recover from question text
+    # "Weather: {city} High {label} {date} ({platform})"
+    question = bet.get("question") or ""
+    if not target_date:
+        m = re.search(r'(\d{4}-\d{2}-\d{2})', question)
+        target_date = m.group(1) if m else None
+    if station is None or (lo is None and hi is None):
+        m = re.match(r'Weather:\s+(.+?)\s+(High|Low)\s+(\S+)\s+\d{4}-\d{2}-\d{2}', question)
+        if m:
+            city_name, metric_word, label = m.group(1), m.group(2), m.group(3)
+            metric = metric_word.lower()
+            try:
+                from pipeline.station_mapper import STATION_MAP
+                station = station or (STATION_MAP.get(city_name) or {}).get("station")
+            except Exception:
+                pass
+            # Parse label: ">73", "<70", "71-72", "71" — same half-degree
+            # conventions as settlement_resolver.parse_bucket_bounds
+            gm = re.match(r'^>(\d+(?:\.\d+)?)$', label)
+            lm = re.match(r'^<(\d+(?:\.\d+)?)$', label)
+            bm = re.match(r'^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$', label)
+            sm = re.match(r'^(\d+(?:\.\d+)?)$', label)
+            if gm:
+                lo, hi = float(gm.group(1)) - 0.5, None
+            elif lm:
+                lo, hi = None, float(lm.group(1)) + 0.5
+            elif bm:
+                lo, hi = float(bm.group(1)) - 0.5, float(bm.group(2)) + 0.5
+            elif sm:
+                lo, hi = float(sm.group(1)) - 0.5, float(sm.group(1)) + 0.5
+
+    if not station or not target_date or (lo is None and hi is None):
+        return None
+
+    try:
+        from backend.ml.weather_verification import fetch_actual_extremes
+        actual = fetch_actual_extremes(station, str(target_date)[:10])
+    except Exception as e:
+        logger.warning(f"Actual-temp fetch failed for {station} {target_date}: {e}")
+        return None
+
+    observed = actual.get(metric)
+    if observed is None:
+        return None
+
+    lo_v = float(lo) if lo is not None else float("-inf")
+    hi_v = float(hi) if hi is not None else float("inf")
+    in_bucket = lo_v <= observed <= hi_v
+
+    backed_yes = str(bet.get("outcome_name") or "yes").lower() == "yes"
+    won = in_bucket if backed_yes else not in_bucket
+
+    stake = bet.get("stake") or 0.0
+    shares = bet.get("shares") or 0.0
+    price = bet.get("market_price") or 0.0
+    pnl = round(shares * (1 - price), 2) if won else round(-stake, 2)
+    logger.info(
+        f"Graded weather bet {bet['id'][:8]} vs actual {metric}={observed}°F "
+        f"(bucket [{lo_v}, {hi_v}]) -> {'won' if won else 'lost'}"
+    )
+    return ("won" if won else "lost", pnl)
+
+
 def _ensure_poly_configured():
     """Ensure poly_client can make unauthenticated requests for settlement checks."""
     if not poly_client.poly_configured():
@@ -213,17 +296,27 @@ async def resolve_weather_autobets() -> int:
                     pass
 
         if expiry_triggered:
-            stake = bet.get("stake") or 0.0
+            # Never blind-mark as lost: grade against the observed station
+            # temperature. If the actual can't be determined (METAR archive
+            # only reaches ~4 days back), void the bet at $0 PnL so the ledger
+            # isn't polluted with phantom losses.
+            graded = _grade_bet_against_actual(bet, now)
+            if graded is not None:
+                new_status, new_pnl = graded
+                grade_note = "graded vs observed temp"
+            else:
+                new_status, new_pnl = "void", 0.0
+                grade_note = "unresolvable, voided"
             try:
                 db.table("autobets").update({
-                    "status": "lost",
-                    "pnl": round(-stake, 2),
+                    "status": new_status,
+                    "pnl": new_pnl,
                     "resolved_at": now.isoformat()
                 }).eq("id", bet["id"]).execute()
                 resolved_count += 1
                 logger.info(
                     f"Expired stale weather bet {bet['id'][:8]} [{market_id}] "
-                    f"-> lost ({reason})"
+                    f"-> {new_status} ({reason}; {grade_note})"
                 )
             except Exception as e:
                 logger.error(f"Failed to expire stale weather bet {bet['id']}: {e}")

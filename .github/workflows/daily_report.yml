@@ -1,0 +1,42 @@
+name: Daily Shadow Report
+
+on:
+  schedule:
+    # 12:00 UTC ≈ 08:00 ET — after overnight settlement (05:00 resolve, 10:00 ML)
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: quant-validation-${{ github.workflow }}
+      cancel-in-progress: false
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      GITHUB_ACTIONS: "true"
+      LIVE_TRADING_ENABLED: "false"
+      POLYMARKET_LIVE_ENABLED: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: scripts/requirements-worldcup.txt
+
+      # Slim install — the report only needs Supabase + httpx, not the full ML stack
+      - name: Install dependencies
+        run: pip install -r scripts/requirements-worldcup.txt
+
+      - name: Send daily shadow report to Discord
+        run: python scripts/daily_shadow_report.py

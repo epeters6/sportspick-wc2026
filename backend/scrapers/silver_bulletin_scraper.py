@@ -415,10 +415,14 @@ def sync_politics() -> int:
                 # Store the latest row as a pick
                 latest_data = snap.raw_dataframe.iloc[0].to_dict()
                 
-                # Check for existing pick for this topic
-                existing = db.table("picks").select("id").eq("influencer_id", inf_id).eq("match_id", match_id).eq("post_id", topic_name).execute().data
+                # Check for existing pick by (platform, post_id) — the DB
+                # unique constraint — so a stale row under an old match or
+                # influencer id updates instead of crashing the insert.
+                existing = db.table("picks").select("id").eq("platform", "twitter").eq("post_id", topic_name).execute().data
                 if existing:
                     db.table("picks").update({
+                        "influencer_id": inf_id,
+                        "match_id": match_id,
                         "raw_text": str(latest_data),
                         "scraped_at": datetime.now(timezone.utc).isoformat()
                     }).eq("id", existing[0]["id"]).execute()

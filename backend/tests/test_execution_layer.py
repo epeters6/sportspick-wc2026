@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from datetime import datetime, timezone, timedelta
 from pavlov.pipeline.trade_candidate import TradeCandidate, SizedOrder
@@ -234,10 +235,10 @@ class TestExecutionLayer(unittest.TestCase):
         rec = init_clv_record("t1", "m1", "o1", "YES", 0.4, now - timedelta(minutes=16))
         log_clv_record(rec, "test_clv.jsonl")
         
-        def mock_fetch(market_id, outcome_id, side):
+        async def mock_fetch(market_id, outcome_id, side):
             return 0.6
             
-        update_clv_checkpoints(mock_fetch, "test_clv.jsonl")
+        asyncio.run(update_clv_checkpoints(mock_fetch, "test_clv.jsonl"))
         
         from pavlov.pipeline.clv_updater import load_clv_records
         records = load_clv_records("test_clv.jsonl")
@@ -256,10 +257,10 @@ class TestExecutionLayer(unittest.TestCase):
         rec.price_after_15m = 0.5
         log_clv_record(rec, "test_clv.jsonl")
         
-        def mock_fetch(market_id, outcome_id, side):
+        async def mock_fetch(market_id, outcome_id, side):
             return 0.6
             
-        update_clv_checkpoints(mock_fetch, "test_clv.jsonl")
+        asyncio.run(update_clv_checkpoints(mock_fetch, "test_clv.jsonl"))
         
         from pavlov.pipeline.clv_updater import load_clv_records
         records = load_clv_records("test_clv.jsonl")
@@ -276,10 +277,10 @@ class TestExecutionLayer(unittest.TestCase):
         rec = init_clv_record("t1", "m1", "o1", "YES", 0.4, now - timedelta(minutes=16))
         log_clv_record(rec, "test_clv.jsonl")
         
-        def mock_fetch(market_id, outcome_id, side):
+        async def mock_fetch(market_id, outcome_id, side):
             return None # missing price
             
-        update_clv_checkpoints(mock_fetch, "test_clv.jsonl")
+        asyncio.run(update_clv_checkpoints(mock_fetch, "test_clv.jsonl"))
         
         from pavlov.pipeline.clv_updater import load_clv_records
         records = load_clv_records("test_clv.jsonl")

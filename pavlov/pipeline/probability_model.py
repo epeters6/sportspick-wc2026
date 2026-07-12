@@ -50,7 +50,8 @@ def generate_event_probability_vector(
     ensemble_mu: float,
     ensemble_sigma: float,
     lead_days: int,
-    hour: int = 0
+    hour: int = 0,
+    bias_correction: float = 0.0
 ) -> Tuple[List[NormalizedWeatherEvent], List[float]]:
     """
     Given a list of mutually exclusive weather events (buckets) for a single station/date,
@@ -74,9 +75,8 @@ def generate_event_probability_vector(
     sigma_final = math.sqrt(sigma_final_squared)
     sigma_final = max(sigma_final, 1.5)  # Enforce sigma floor
     
-    # 2. Add station-level residual correction (bias)
-    bias_station_lead_season = 0.0
-    mu_corrected = ensemble_mu + bias_station_lead_season
+    # 2. Add station-level residual correction (MOS bias from verification history)
+    mu_corrected = ensemble_mu + bias_correction
     
     logger.debug(f"Event Prob Vector: Raw Mu={ensemble_mu:.2f}, Raw Sig={ensemble_sigma:.2f} -> "
                  f"Corr Mu={mu_corrected:.2f}, Final Sig={sigma_final:.2f}")
