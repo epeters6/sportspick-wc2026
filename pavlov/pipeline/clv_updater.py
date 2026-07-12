@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone, timedelta
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 from loguru import logger
 from pavlov.pipeline.clv_tracker import CLVRecord
 
