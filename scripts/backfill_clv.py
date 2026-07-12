@@ -4,32 +4,21 @@ import tempfile
 import os
 from loguru import logger
 from backend.db import get_db
-
-# Import the exact same CLV calculation used for live bets so backfilled and
-# live numbers are guaranteed to be computed identically.
-# CLV = closing_price - market_price (positive = you beat the closing line = good)
-def _compute_clv(market_price: float, closing_price: float) -> float:
-    """CLV as a probability-point improvement over the closing line.
-    
-    Positive CLV means we bought cheaper than the market settled at —
-    we beat the closing line. This matches what clv_tracker.py computes
-    for live bets (closing_price - entry_price).
-    """
-    return round(closing_price - market_price, 4)
-
+from backend.trading.clv_tracker import calculate_clv
 
 async def backfill_clv():
     db = get_db()
     
-    # Fetch all resolved bets missing a closing price
-    response = db.table("autobets").select("*").eq("status", "won").is_("closing_price", "null").execute()
+    # Fetch all resolved bets missing a closing price OR that were previously backfilled with bad data
+    response = db.table("autobets").select("*").in_("status", ["won", "lost"]).is_("closing_price", "null").execute()
     bets = response.data or []
     
-    # Also get lost bets
-    response_lost = db.table("autobets").select("*").eq("status", "lost").is_("closing_price", "null").execute()
-    bets.extend(response_lost.data or [])
+    # Also grab rows that were previously backfilled, to overwrite the poisoned hourly data
+    response_bad = db.table("autobets").select("*").eq("clv_source", "backfilled").execute()
+    existing_ids = {b["id"] for b in bets}
+    bets.extend([b for b in (response_bad.data or []) if b["id"] not in existing_ids])
     
-    logger.info(f"Found {len(bets)} resolved bets missing CLV.")
+    logger.info(f"Found {len(bets)} resolved bets to backfill CLV.")
     
     updated = 0
     skipped_no_token = 0
@@ -52,12 +41,12 @@ async def backfill_clv():
                 continue
                 
             try:
-                # Fetch actual 1-minute price history from Polymarket CLOB.
-                # Uses token_id when available (more precise), falls back to market_id.
+                # Fetch true 1-minute price history from Polymarket CLOB.
+                # fidelity=1 (1 minute buckets), interval=max (all time)
                 lookup_id = token_id or market_id
                 url = (
                     f"https://clob.polymarket.com/prices-history"
-                    f"?market={lookup_id}&interval=1m&fidelity=60"
+                    f"?market={lookup_id}&interval=max&fidelity=1"
                 )
                 resp = await client.get(url)
                 
@@ -69,20 +58,13 @@ async def backfill_clv():
                 data = resp.json()
                 history = data.get("history", [])
                 if not history:
-                    logger.debug(f"No price history for {market_id}")
+                    logger.warning(f"No price history returned for {market_id} (API empty response). Skipping.")
                     skipped_no_history += 1
                     continue
                 
-                # The last candle before market close is the true closing price.
-                # This is the real price the market settled at, fetched from the
-                # Polymarket CLOB API at 1-minute fidelity.
                 actual_closing_price = float(history[-1].get("p", 0.50))
                 
-                # CLV = closing_price - market_price (our entry price).
-                # Positive = we bought cheaper than the market settled = we beat
-                # the closing line. This is the standard CLV definition and matches
-                # how live bets are tracked in clv_tracker.py.
-                clv = _compute_clv(float(market_price), actual_closing_price)
+                clv = calculate_clv(float(market_price), actual_closing_price)
                 
                 db.table("autobets").update({
                     "closing_price": actual_closing_price,

@@ -17,11 +17,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any
+import os
+import sys
 
 import httpx
 from pydantic import BaseModel
-import sys
-import os
+from datetime import datetime, timezone
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -68,6 +69,8 @@ class PolyMarket:
     accepting_orders: bool = False
     closed: bool = False
     venue: str = "polymarket"
+    received_timestamp: datetime | None = None
+    exchange_timestamp: datetime | None = None
 
     def outcome_by_name(self, name: str) -> Outcome | None:
         target = name.strip().lower()
@@ -129,9 +132,11 @@ class PolymarketClient:
             except Exception as exc:
                 logger.warning(f"Polymarket fetch_markets failed: {exc}")
                 return []
+            
+            received_at = datetime.now(timezone.utc)
 
             for raw in raw_markets or []:
-                pm = self._parse_market(raw)
+                pm = self._parse_market(raw, received_at)
                 if pm and pm.accepting_orders and not pm.closed:
                     markets.append(pm)
 
@@ -139,7 +144,7 @@ class PolymarketClient:
         return markets
 
     @staticmethod
-    def _parse_market(raw: dict) -> PolyMarket | None:
+    def _parse_market(raw: dict, received_at: datetime | None = None) -> PolyMarket | None:
         try:
             outcomes_raw = raw.get("outcomes", "[]")
             prices_raw = raw.get("outcomePrices", "[]")
@@ -178,6 +183,8 @@ class PolymarketClient:
                 end_date=raw.get("endDate"),
                 accepting_orders=bool(raw.get("acceptingOrders", raw.get("enableOrderBook", False))),
                 closed=bool(raw.get("closed", False)),
+                received_timestamp=received_at or datetime.now(timezone.utc),
+                exchange_timestamp=datetime.fromisoformat(raw["updatedAt"].replace("Z", "+00:00")) if raw.get("updatedAt") else None,
             )
         except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
             logger.debug(f"Could not parse Polymarket market: {exc}")

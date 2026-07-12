@@ -821,13 +821,13 @@ def resolve_autobets() -> int:
     return resolved
 
 
-def update_closing_prices() -> int:
+async def update_closing_prices() -> int:
     """
     Fetch all open autobets and simulated bets and update their closing_price and clv to the latest market price.
     Since this runs periodically (e.g. via run_sync), the last update before the bet resolves
     will naturally be the true closing line.
     """
-    from backend.trading.polymarket_client import get_active_markets
+    from backend.trading.venue_router import VenueRouter
     from collections import defaultdict
     
     db = get_db()
@@ -862,8 +862,11 @@ def update_closing_prices() -> int:
         for b in bets:
             bets_by_sport[b.get("sport") or "football"].append(b)
             
+        import asyncio
+        router = VenueRouter()
+        
         for sport, sport_bets in bets_by_sport.items():
-            markets = get_active_markets(sport)
+            markets = await router.fetch_markets(search=sport, limit=100)
             market_map = {m.market_id: m for m in markets}
             
             for bet in sport_bets:
@@ -879,7 +882,8 @@ def update_closing_prices() -> int:
                         
                 if current_price is not None:
                     original_price = float(bet.get("market_price") or 0.0)
-                    clv = current_price - original_price
+                    from backend.trading.clv_tracker import calculate_clv
+                    clv = calculate_clv(original_price, current_price)
                     
                     try:
                         db.table(table_name).update({

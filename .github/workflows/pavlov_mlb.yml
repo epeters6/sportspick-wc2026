@@ -17,6 +17,9 @@ jobs:
   mlb:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    concurrency:
+      group: quant-validation-${{ github.workflow }}
+      cancel-in-progress: false
 
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -38,6 +41,10 @@ jobs:
       KELLY_FRACTION: "0.25"
       DISCORD_BOT_TOKEN: "dummy_token"
       DISCORD_CHANNEL_ID: "0"
+      GITHUB_ACTIONS: "true"
+      MODE: shadow
+      LIVE_TRADING_ENABLED: "false"
+      POLYMARKET_LIVE_ENABLED: "false"
 
     steps:
       - uses: actions/checkout@v4

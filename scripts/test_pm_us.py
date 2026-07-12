@@ -22,41 +22,33 @@ async def run_test():
         logger.error(f"Failed to initialize client: {exc}")
         return
 
-    # 1. Read-only test
-    logger.info("Running read-only test...")
+    # 1. Authenticated balance/portfolio fetch
+    logger.info("Test 1: Authenticated Portfolio Fetch...")
     try:
         res = client_us.portfolio.positions()
-        logger.info(f"Read-only test passed. Fetched portfolio positions.")
+        logger.info(f"Read-only portfolio test passed. Fetched {len(res) if hasattr(res, '__len__') else 'positions'}.")
     except Exception as read_exc:
         logger.error(f"Read portfolio failed: {read_exc}")
             
-    # 2. Live-fire test
-    logger.info("Running live-fire test...")
+    # 2. Public order book fetch
+    logger.info("Test 2: Public Order Book Fetch...")
     try:
-        events = client_us.events.list(params={"active": True, "closed": False, "limit": 1})
-        if events and getattr(events, 'data', None) and len(events.data) > 0:
-            event = events.data[0]
-            markets = event.get("markets", [])
-            if markets:
-                market = markets[0]
-                token_id = market.get("tokens", [{}])[0].get("token_id")
-                
-                if token_id:
-                    price = 0.05
-                    size = 10 # $0.50
-                    logger.info(f"Placing test order: token={token_id}, price={price}, size={size}")
-                    order = client_us.orders.create(token_id=token_id, price=price, size=size, side="BUY")
-                    logger.info(f"Order created successfully: {order}")
-                    
-                    # Immediately try to cancel it
-                    order_id = order.get("id") or order.get("orderID")
-                    if order_id:
-                        client_us.orders.cancel(order_id)
-                        logger.info("Test order cancelled successfully.")
-                else:
-                    logger.warning("No token ID found in market.")
+        from backend.trading.polymarket_client import PolymarketClient
+        pm = PolymarketClient()
+        markets = await pm.fetch_markets(limit=5)
+        success = False
+        for market in markets:
+            if market.outcomes:
+                token_id = market.outcomes[0].token_id
+                best_price, depth = await pm.get_book_depth(token_id)
+                if best_price is not None:
+                    logger.info(f"Public book test passed! Token={token_id}, best_price={best_price}, depth={depth}")
+                    success = True
+                    break
+        if not success:
+            logger.warning("Failed to find any book depth across multiple markets. (API may be fine, just empty books)")
     except Exception as exc:
-        logger.error(f"Live-fire test failed: {exc}")
+        logger.error(f"Public book test failed: {exc}")
 
     logger.info("All tests completed.")
 

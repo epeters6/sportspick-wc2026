@@ -186,9 +186,14 @@ def _validate(df: pd.DataFrame, topic: str) -> None:
             "page structure may have changed"
         )
     numeric_cols = df.select_dtypes(include="number")
-    if numeric_cols.empty:
-        raise SilverBulletinScrapeError(f"[{topic}] no numeric columns found in scraped data")
-    out_of_range = numeric_cols.apply(lambda col: ((col < -100) | (col > 100)).any())
+    # Drop known non-percentage/margin columns from the range check
+    ignore_cols = ["samplesize", "poll_id", "question_id", "sponsor_id", "pollster_id", "cycle", "year"]
+    check_cols = [c for c in numeric_cols.columns if c.lower() not in ignore_cols]
+    
+    if not check_cols:
+        raise SilverBulletinScrapeError(f"[{topic}] no percentage/margin numeric columns found to validate")
+        
+    out_of_range = df[check_cols].apply(lambda col: ((col < -100) | (col > 100)).any())
     if out_of_range.any():
         bad_cols = list(out_of_range[out_of_range].index)
         raise SilverBulletinScrapeError(
@@ -369,8 +374,8 @@ def sync_politics() -> int:
     """
     db = get_db()
     
-    # 1. Ensure Silver Bulletin influencer exists
-    inf_res = db.table("influencers").select("id").eq("display_name", "Silver Bulletin").eq("platform", "twitter").execute().data
+    # 1. Ensure Silver Bulletin influencer exists by handle
+    inf_res = db.table("influencers").select("id").eq("handle", "NateSilver538").eq("platform", "twitter").execute().data
     if not inf_res:
         inf_res = db.table("influencers").insert({
             "display_name": "Silver Bulletin",
@@ -387,25 +392,26 @@ def sync_politics() -> int:
         
     inf_id = inf_res[0]["id"]
 
-    # 2. Ensure mock match exists
-    match_query = db.table("matches").select("id").eq("sport", "stocks").eq("home_team", "Donald Trump").execute().data
-    if not match_query:
-        match_res = db.table("matches").insert({
-            "sport": "stocks",
-            "home_team": "Donald Trump",
-            "away_team": "Kamala Harris",
-            "scheduled_at": "2028-11-07T00:00:00Z",
-            "tournament": "US Election"
-        }).execute()
-        match_id = match_res.data[0]["id"]
-    else:
-        match_id = match_query[0]["id"]
-
     total = 0
     for topic_name in TRACKER_PAGES:
         try:
             snap = scrape_topic_with_fallback(topic_name)
             if snap.raw_dataframe is not None and not snap.raw_dataframe.empty:
+                # 2. Ensure mock match exists for this topic
+                home_team = f"Donald Trump ({topic_name})"
+                match_query = db.table("matches").select("id").eq("sport", "stocks").eq("home_team", home_team).execute().data
+                if not match_query:
+                    match_res = db.table("matches").insert({
+                        "sport": "stocks",
+                        "home_team": home_team,
+                        "away_team": "Kamala Harris",
+                        "scheduled_at": "2028-11-07T00:00:00Z",
+                        "tournament": "US Election"
+                    }).execute()
+                    match_id = match_res.data[0]["id"]
+                else:
+                    match_id = match_query[0]["id"]
+
                 # Store the latest row as a pick
                 latest_data = snap.raw_dataframe.iloc[0].to_dict()
                 

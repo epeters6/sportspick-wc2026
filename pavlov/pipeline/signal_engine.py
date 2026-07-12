@@ -957,7 +957,7 @@ def calculate_edge(market: dict, bankroll: float, trading_mode: bool = True, num
                     counts_data = json.load(f)
             except (json.JSONDecodeError, OSError) as read_exc:
                 # Corrupted or empty file — reset silently (don't crash evaluation)
-                logger.debug("SignalEngine: eval_counts.json unreadable (%s) — resetting.", read_exc)
+                logger.warning("SignalEngine: eval_counts.json unreadable (%s) — resetting.", read_exc)
                 counts_data = {}
         if counts_data.get("date") != today_str:
             counts_data = {"date": today_str, "counts": {}}

@@ -172,8 +172,12 @@ async def run_ml_phase() -> dict[str, int]:
     try:
         from backend.ml.mlb_quant.orchestrator import setup_daily_slate
         setup_daily_slate()
+        
+        print("  Running MLB Shadow Execution...")
+        import subprocess
+        subprocess.run([sys.executable, "backend/models/sports/run_shadow_mlb.py"], check=True)
     except Exception as exc:
-        print(f"  MLB Orchestrator failed: {exc}")
+        print(f"  MLB Orchestrator/Shadow failed: {exc}")
 
     print("Running Polymarket autobet...")
     autobet_summary: dict = {}
@@ -209,7 +213,7 @@ async def run_ml_phase() -> dict[str, int]:
     try:
         from backend.trading.autobet import resolve_autobets, update_closing_prices
         
-        clv_updated = update_closing_prices()
+        clv_updated = await update_closing_prices()
         print(f"  clv updated={clv_updated} open bets")
         
         ab_resolved = resolve_autobets()
@@ -257,28 +261,57 @@ async def main() -> None:
         sys.exit(1)
 
     print("=== SportsPick Sync ===")
-    scrape_stats: dict[str, int] = {}
-    ml_stats: dict[str, int] = {}
+    from datetime import datetime
+    start_time = datetime.now()
+    import json
+    status_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sync_status.json")
+    
+    def write_status(exit_code=0, error_msg=None, completed=False, mode="live"):
+        duration = (datetime.now() - start_time).total_seconds()
+        status_data = {
+            "last_started_at": start_time.isoformat(),
+            "last_finished_at": datetime.now().isoformat() if completed or error_msg else None,
+            "last_duration_seconds": duration,
+            "last_exit_code": exit_code,
+            "last_status": "success" if exit_code == 0 and not error_msg else "failed" if error_msg else "running",
+            "last_error": error_msg,
+            "mode": mode,
+            "mlb_shadow_started": False,
+            "mlb_shadow_completed": False,
+            "clv_scheduler_once_completed": False,
+            "report_written": None
+        }
+        try:
+            with open(status_file, "w") as f:
+                json.dump(status_data, f, indent=2)
+        except:
+            pass
+            
+    mode = "shadow" if args.scrape_only else "live"
+    write_status(mode=mode)
+    
+    try:
+        scrape_stats: dict[str, int] = {}
+        ml_stats: dict[str, int] = {}
 
-    if not args.ml_only:
-        scrape_stats = await run_scrape_phase()
-    if not args.scrape_only:
-        ml_stats = await run_ml_phase()
+        if not args.ml_only:
+            scrape_stats = await run_scrape_phase()
+        if not args.scrape_only:
+            ml_stats = await run_ml_phase()
 
-    if args.scrape_only:
-        print(
-            f"=== Scrape done: WC={scrape_stats.get('wc', 0)} "
-            f"MLB={scrape_stats.get('mlb', 0)} "
-            f"Covers={scrape_stats.get('covers', 0)} YT={scrape_stats.get('yt', 0)} "
-            f"AN={scrape_stats.get('an', 0)} PW={scrape_stats.get('pw', 0)} ==="
-        )
-    elif args.ml_only:
-        print(
-            f"=== ML done: linked={ml_stats.get('linked', 0)} "
-            f"resolved={ml_stats.get('resolved', 0)} "
-            f"autobet={ml_stats.get('autobet', 0)} ==="
-        )
-    else:
+        if args.scrape_only:
+            print(
+                f"=== Scrape done: WC={scrape_stats.get('wc', 0)} "
+                f"MLB={scrape_stats.get('mlb', 0)} "
+                f"Covers={scrape_stats.get('covers', 0)} YT={scrape_stats.get('yt', 0)} "
+                f"AN={scrape_stats.get('an', 0)} PW={scrape_stats.get('pw', 0)} ==="
+            )
+        elif args.ml_only:
+            print(
+                f"=== ML done: linked={ml_stats.get('linked', 0)} "
+                f"resolved={ml_stats.get('resolved', 0)} "
+                f"autobet={ml_stats.get('autobet', 0)} ==="
+            )
         print(
             f"=== Done: WC={scrape_stats.get('wc', 0)} MLB={scrape_stats.get('mlb', 0)} "
             f"Covers={scrape_stats.get('covers', 0)} YT={scrape_stats.get('yt', 0)} "
@@ -286,6 +319,10 @@ async def main() -> None:
             f"linked={ml_stats.get('linked', 0)} resolved={ml_stats.get('resolved', 0)} "
             f"autobet={ml_stats.get('autobet', 0)} ==="
         )
+        write_status(completed=True, mode=mode)
+    except Exception as e:
+        write_status(exit_code=1, error_msg=str(e), completed=False, mode=mode)
+        raise
 
 
 if __name__ == "__main__":

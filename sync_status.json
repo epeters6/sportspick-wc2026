@@ -1,0 +1,13 @@
+{
+  "last_started_at": "2026-07-09T21:09:48.767257",
+  "last_finished_at": "2026-07-09T21:23:47.257145",
+  "last_duration_seconds": 838.489856,
+  "last_exit_code": 1,
+  "last_status": "failed",
+  "last_error": "[Errno 22] Invalid argument",
+  "mode": "shadow",
+  "mlb_shadow_started": false,
+  "mlb_shadow_completed": false,
+  "clv_scheduler_once_completed": false,
+  "report_written": null
+}

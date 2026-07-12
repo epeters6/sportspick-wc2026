@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
+from datetime import datetime, timezone
 
 from config import CONFIG
 
@@ -158,6 +159,7 @@ def _build_price_bbo(client, m: dict, slug: str) -> dict[str, Any]:
         except Exception as exc:
             logger.debug("PolyClient: book(%s) failed — %s", slug, exc)
 
+    merged["orderbook_timestamp"] = datetime.now(timezone.utc)
     return merged
 
 
@@ -385,6 +387,8 @@ def _normalize_market_row(
         "poly_event_slug":  event_slug,
         "poly_market_slug": slug,
         "venue":            "poly_us",
+        "received_timestamp": m.get("received_timestamp") or datetime.now(timezone.utc),
+        "orderbook_timestamp": m.get("orderbook_timestamp")
     }
     return row
 
@@ -539,14 +543,19 @@ def get_weather_markets() -> list[dict]:
     client = get_client()
     out: list[dict] = []
 
+    received_at = datetime.now(timezone.utc)
     try:
         flat = _fetch_paginated_market_list(client)
+        for m in flat:
+            m["received_timestamp"] = received_at
     except Exception as exc:
         logger.error("PolyClient: markets.list failed — %s", exc)
         flat = []
 
     try:
         event_rows = _fetch_paginated_event_market_rows(client)
+        for m in event_rows:
+            m["received_timestamp"] = received_at
     except Exception as exc:
         logger.warning("PolyClient: events.list flatten failed — %s", exc)
         event_rows = []

@@ -259,6 +259,10 @@ def _load_config() -> dict:
         if rvm:
             config["STATE_DIRECTORY"] = rvm
 
+    if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        if truthy_config_int(config.get("AUTO_BET_ENABLED")) or truthy_config_int(config.get("POLY_AUTO_BET_ENABLED")):
+            raise ValueError("GITHUB_ACTIONS_LIVE_TRADING_BLOCK")
+            
     return config
 
 

@@ -141,6 +141,8 @@ def compute_tier_stats(db=None) -> dict[str, dict[str, Any]]:
             "avg_market_price": 0.0,
             "avg_edge": 0.0,
             "avg_model_prob": 0.0,
+            "avg_clv": 0.0,
+            "clv_count": 0,
             "recent_7d_pnl": 0.0,
             "sharpe": None,
             "_returns": [],
@@ -456,13 +458,28 @@ def gates_for_price(
         
         # Determine if we should penalize
         should_penalize = False
-        penalize_reason = ""
+        penalties = []
         
+        # ── Guardian Primary Checks ──
+        # Check ROI first
         if tier != "longshot":
             if roi_frac <= TIER_ROI_PENALTY_THRESHOLD:
                 should_penalize = True
-                penalize_reason = f"ROI {tier_stats['roi_pct']:.1f}%"
+                penalties.append(f"ROI ({tier_stats['roi_pct']:.1f}%) <= {TIER_ROI_PENALTY_THRESHOLD*100:.1f}%")
         else:
+            if roi_frac <= LONGSHOT_ROI_PENALTY_THRESHOLD:
+                should_penalize = True
+                penalties.append(f"Longshot ROI ({tier_stats['roi_pct']:.1f}%) <= {LONGSHOT_ROI_PENALTY_THRESHOLD*100:.1f}%")
+                
+        # Now check CLV - this catches negative expected value before variance runs out
+        mean_clv = tier_stats.get("mean_clv", 0.0)
+        clv_count = tier_stats.get("clv_count", 0)
+        # If we have at least 15 bets with CLV and it's worse than -0.02 (-2 probability points) # UNVALIDATED PLACEHOLDER
+        if clv_count >= 15 and mean_clv < -0.02:
+            should_penalize = True
+            penalties.append(f"CLV ({mean_clv:+.4f} over {clv_count} bets) indicates structural loss")
+
+        if tier == "longshot":
             # Longshot Statistical Absurdity Backstop
             # Calculate probability of observing exactly ZERO wins across all clusters
             clusters = tier_stats.get("_clusters", {})
@@ -483,7 +500,7 @@ def gates_for_price(
                 
                 if total_cluster_wins == 0 and streak_probability < 0.01:
                     should_penalize = True
-                    penalize_reason = f"Absurdity Trip (P={streak_probability:.4f}, 0/{cluster_count} clusters won)"
+                    penalties.append(f"Absurdity Trip (P={streak_probability:.4f}, 0/{cluster_count} clusters won)")
                 else:
                     logger.debug(f"Longshot Absurdity check: {total_cluster_wins}/{cluster_count} clusters won, P(streak)={streak_probability:.4f}")
             else:
@@ -514,7 +531,7 @@ def gates_for_price(
             min_edge = min(0.15, min_edge + 0.015)
             min_prob = min(0.65, min_prob + 0.05)
             adjusted = True
-            notes.append(f"{tier} {penalize_reason}")
+            notes.append(f"{tier} penalty: {'; '.join(penalties)}")
         elif roi_frac >= TIER_ROI_BONUS_THRESHOLD and settled_count >= MIN_TIER_SAMPLES * 2:
             floor = get_settings().polymarket_paper_min_edge if paper else get_settings().polymarket_min_edge
             min_edge = max(min_edge - 0.005, floor)

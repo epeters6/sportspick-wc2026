@@ -237,8 +237,12 @@ def compute_consensus_for_match(match_id: str) -> dict | None:
     # ── Meta-Model Blending Layer ──
     if sport == "mlb":
         # 1. MLB uses the specialized Pavlov Quant Engine (Weather, Pitcher metrics, etc)
-        from backend.ml.mlb_quant import get_mlb_quant_probability
-        quant_probs = get_mlb_quant_probability(home_team, away_team)
+        try:
+            from backend.ml.mlb_quant_legacy import get_mlb_quant_probability
+            quant_probs = get_mlb_quant_probability(home_team, away_team)
+        except Exception as e:
+            logger.error(f"Error fetching MLB quant probability: {e}")
+            quant_probs = None
         if quant_probs:
             quant_home = quant_probs["home_prob"]
             quant_away = quant_probs["away_prob"]

@@ -121,9 +121,11 @@ class KalshiClient:
             except Exception as exc:
                 logger.warning(f"Kalshi fetch_markets failed: {exc}")
                 return []
+            
+            received_at = datetime.now(timezone.utc)
 
             for raw in raw_markets:
-                pm = self._parse_market(raw)
+                pm = self._parse_market(raw, received_at)
                 if pm and pm.accepting_orders and not pm.closed:
                     markets.append(pm)
 
@@ -131,7 +133,7 @@ class KalshiClient:
         return markets
 
     @staticmethod
-    def _parse_market(raw: dict) -> PolyMarket | None:
+    def _parse_market(raw: dict, received_at: datetime | None = None) -> PolyMarket | None:
         try:
             # Kalshi returns yes/no markets usually.
             yes_ask = raw.get("yes_ask", 0)
@@ -159,6 +161,8 @@ class KalshiClient:
                 end_date=raw.get("close_time"),
                 accepting_orders=True, # status=open implies accepting orders
                 closed=False,
+                received_timestamp=received_at or datetime.now(timezone.utc),
+                exchange_timestamp=None, # Kalshi GET /markets doesn't have a reliable last updated at
             )
         except Exception as exc:
             logger.debug(f"Could not parse Kalshi market: {exc}")

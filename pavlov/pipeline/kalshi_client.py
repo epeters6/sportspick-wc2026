@@ -511,9 +511,10 @@ def _parse_market(raw: dict, series_ticker: str = "") -> dict:
         "volume":        raw.get("volume_fp", raw.get("volume", 0)),
         "open_interest": raw.get("open_interest_fp", raw.get("open_interest", 0)),
         # Series-derived hints for KXHIGHT*/KXLOWT* markets (title has no city).
-        "series_ticker": series_ticker,
         "city_hint":     _SERIES_CITY_MAP.get(series_ticker, ""),
         "metric_hint":   _SERIES_METRIC_MAP.get(series_ticker, ""),
+        "received_timestamp": raw.get("received_timestamp") or datetime.now(timezone.utc),
+        "orderbook_timestamp": raw.get("orderbook_timestamp")
     }
 
 
@@ -573,7 +574,9 @@ def get_weather_markets() -> list[dict]:
             )
             continue
 
+        received_at = datetime.now(timezone.utc)
         for raw in data.get("markets", []):
+            raw["received_timestamp"] = received_at
             m = _parse_market(raw, series_ticker=series_ticker)
             if m["ticker"] not in seen_tickers:
                 seen_tickers.add(m["ticker"])

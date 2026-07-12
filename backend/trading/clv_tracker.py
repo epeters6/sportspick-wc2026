@@ -85,6 +85,14 @@ async def snapshot_closing_prices():
             
     return updated
 
+def calculate_clv(entry_price: float, closing_price: float) -> float:
+    """
+    Computes Closing Line Value (CLV).
+    Positive CLV means the bet beat the closing line (we bought cheaper than it closed).
+    """
+    return round(closing_price - entry_price, 4)
+
 if __name__ == "__main__":
     import asyncio
     asyncio.run(snapshot_closing_prices())
+

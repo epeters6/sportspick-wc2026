@@ -130,4 +130,9 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    s = Settings()
+    import os
+    if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        if s.polymarket_live_enabled or os.environ.get("LIVE_TRADING_ENABLED", "").lower() == "true":
+            raise ValueError("GITHUB_ACTIONS_LIVE_TRADING_BLOCK")
+    return s

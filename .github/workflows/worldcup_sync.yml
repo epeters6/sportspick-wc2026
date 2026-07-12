@@ -1,9 +1,6 @@
 name: World Cup Sync
 
 on:
-  schedule:
-    # Every 15 minutes — fast enough to catch match results shortly after final whistle
-    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -20,6 +17,12 @@ jobs:
       WC_API_BASE: ${{ secrets.WC_API_BASE }}
       APP_ENV: production
       LOG_LEVEL: INFO
+      GITHUB_ACTIONS: "true"
+      MODE: shadow
+      LIVE_TRADING_ENABLED: "false"
+      POLYMARKET_LIVE_ENABLED: "false"
+      AUTO_BET_ENABLED: "0"
+      POLY_MLB_AUTO_BET_ENABLED: "0"
 
     steps:
       - name: Checkout repository
