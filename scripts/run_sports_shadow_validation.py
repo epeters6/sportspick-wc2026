@@ -16,6 +16,15 @@ async def run_validation():
     logger.info("Running Daily Sports Shadow Validation...")
     start_time = datetime.now()
     status_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sync_status.json")
+
+    # Fresh artifact files each run — avoids stale test rows polluting CI reports.
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for name in ("sports_shadow_decisions.jsonl", "sports_paper_fills.jsonl", "sports_clv_tracking.jsonl"):
+        path = os.path.join(repo_root, name)
+        try:
+            open(path, "w").close()
+        except OSError as exc:
+            logger.warning(f"Could not reset {name}: {exc}")
     
     def write_status(exit_code=0, error_msg=None, completed=False):
         duration = (datetime.now() - start_time).total_seconds()

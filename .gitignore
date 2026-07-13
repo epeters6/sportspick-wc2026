@@ -43,7 +43,8 @@ scratch/
 ml_sync_log.txt
 
 # Runtime artifacts (shadow ledgers, reports, caches) — regenerated every run
-/*.jsonl
+*.jsonl
+/**/*.jsonl
 reports/
 .silver_bulletin_cache/
 backend/ml/mlb_quant/manifest.json
