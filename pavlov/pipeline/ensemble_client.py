@@ -356,13 +356,15 @@ def get_ensemble_prob(
         )
         return None
         
-    # Lead-Time Aware Blending
+    # Lead-Time Aware Blending — use station-local calendar date.
+    # UTC midnight turns "tomorrow" markets into lead=0 and wrongly triggers
+    # same-day nowcast while US cities are still on the prior evening.
     try:
-        target_dt = datetime.fromisoformat(date_str)
-        if target_dt.tzinfo is None:
-            target_dt = target_dt.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        lead_time_days = (target_dt.date() - now.date()).days
+        from zoneinfo import ZoneInfo
+        from pipeline.station_mapper import get_tz_for_city
+        local_today = datetime.now(ZoneInfo(get_tz_for_city(city))).date()
+        target_date = datetime.fromisoformat(date_str).date()
+        lead_time_days = (target_date - local_today).days
     except Exception:
         lead_time_days = 3
         

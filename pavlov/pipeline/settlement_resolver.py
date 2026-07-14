@@ -106,25 +106,36 @@ def parse_bucket_bounds(market: dict) -> Tuple[float, float, str]:
             threshold = float(m.group(1)) if m else None
         if threshold is None:
             raise ValueError(f"Could not parse 'greater' threshold from {title}")
-        # "73 or above" means integer 73, 74... CDF is [72.5, inf)
-        # ">73" might mean strictly greater than 73 (74, 75...), but Polymarket usually means >=. We assume inclusive "or above"
-        return float(threshold) - 0.5, float("inf"), f">{threshold}"
+        threshold = float(threshold)
+        # Polymarket "73 or above" = ints 73+ → [72.5, inf).
+        # Kalshi/Poly strict ">97" abuts the 96-97 bucket → [97.5, inf).
+        if re.search(r'(\d+)\s*or\s*above', title_lower) or re.search(r'\bor\s+above\b', title_lower):
+            return threshold - 0.5, float("inf"), f">{threshold}"
+        if re.search(r'>\s*\d+', title) or re.search(r'\babove\s+\d+', title_lower):
+            return threshold + 0.5, float("inf"), f">{threshold}"
+        return threshold - 0.5, float("inf"), f">{threshold}"
 
     if strike_type == "less":
+        # Prefer explicit inclusive "or below" language when present.
+        m_or_below = re.search(r'(\d+)\s*or\s*below', title_lower)
+        if m_or_below:
+            cap = float(m_or_below.group(1))
+            return float("-inf"), cap + 0.5, f"<{cap}"
+
         cap = market.get("ceiling_strike")
         if cap is not None:
-            # "70 or below" means integer 70, 69... CDF is (-inf, 70.5)
-            return float("-inf"), float(cap) + 0.5, f"<{cap}"
+            cap = float(cap)
+            # Strict "<N" titles should abut the next integer bucket:
+            # <90 next to 90-91 → (-inf, 89.5). Inclusive "or below" handled above.
+            if re.search(r'<\s*\d+', title) or re.search(r'\bbelow\s+\d+', title_lower):
+                return float("-inf"), cap - 0.5, f"<{cap}"
+            return float("-inf"), cap + 0.5, f"<{cap}"
             
         m = re.search(r'<\s*(\d+)', title) or re.search(r'below\s*(\d+)', title_lower)
         if m:
             cap = float(m.group(1))
-            return float("-inf"), cap + 0.5, f"<{cap}"
-            
-        m = re.search(r'(\d+)\s*or\s*below', title_lower)
-        if m:
-            cap = float(m.group(1))
-            return float("-inf"), cap + 0.5, f"<{cap}"
+            # Kalshi: "<90°" means ≤89, contiguous with "90-91°"
+            return float("-inf"), cap - 0.5, f"<{cap}"
             
         raise ValueError(f"Could not parse 'less' threshold from {title}")
 

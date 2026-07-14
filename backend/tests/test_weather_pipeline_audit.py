@@ -173,6 +173,42 @@ class TestWeatherPipelineAudit(unittest.TestCase):
         self.assertEqual(lo, 72.5)
         self.assertEqual(hi, float('inf'))
 
+    def test_kalshi_strict_less_abuts_between_bucket(self):
+        from pavlov.pipeline.settlement_resolver import parse_bucket_bounds
+        market = {"strike_type": "less", "title": "Will the high temp in NYC be <90° on Jul 14, 2026?"}
+        lo, hi, label = parse_bucket_bounds(market)
+        self.assertEqual(lo, float('-inf'))
+        self.assertEqual(hi, 89.5)
+
+    def test_kalshi_strict_greater_abuts_between_bucket(self):
+        from pavlov.pipeline.settlement_resolver import parse_bucket_bounds
+        market = {"strike_type": "greater", "floor_strike": 97, "title": "Will the high temp in NYC be >97° on Jul 14, 2026?"}
+        lo, hi, label = parse_bucket_bounds(market)
+        self.assertEqual(lo, 97.5)
+        self.assertEqual(hi, float('inf'))
+
+    def test_kalshi_ladder_covers_without_gap_or_overlap(self):
+        from pavlov.pipeline.settlement_resolver import parse_bucket_bounds
+        lo1, hi1, _ = parse_bucket_bounds({"strike_type": "less", "title": "Will high be <90°?"})
+        lo2, hi2, _ = parse_bucket_bounds({"strike_type": "between", "title": "Will high be 90-91°?"})
+        lo3, hi3, _ = parse_bucket_bounds({"strike_type": "between", "title": "Will high be 96-97°?"})
+        lo4, hi4, _ = parse_bucket_bounds({"strike_type": "greater", "floor_strike": 97, "title": "Will high be >97°?"})
+        self.assertEqual(hi1, lo2)
+        self.assertEqual(hi3, lo4)
+
+    def test_execution_cost_converts_cents_quotes(self):
+        raw_markets = [{"yes_ask": 40, "ask_size": 25}]  # 40¢
+        q_exec, depth = generate_executable_cost_vector(raw_markets, "kalshi")
+        self.assertAlmostEqual(q_exec[0], 0.40 + 0.07 * 0.40 * 0.60 + 0.005, places=5)
+        self.assertEqual(depth[0], 25.0)
+
+    def test_execution_cost_shadow_default_depth_when_missing(self):
+        raw_markets = [{"yes_ask": 0.35}]
+        q_exec, depth = generate_executable_cost_vector(raw_markets, "polymarket")
+        self.assertGreater(q_exec[0], 0.35)
+        self.assertLess(q_exec[0], 1.0)
+        self.assertEqual(depth[0], 50.0)
+
     def test_single_degree_bucket_bounds(self):
         from pavlov.pipeline.settlement_resolver import parse_bucket_bounds
         market = {"strike_type": "between", "title": "71"}

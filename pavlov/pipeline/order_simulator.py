@@ -23,6 +23,23 @@ class PaperFill:
     unfilled_shares: float = 0.0
     partial_fill_reason: Optional[str] = None
 
+def _coerce_utc_timestamp(value) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        ts = value
+    elif isinstance(value, str):
+        try:
+            ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
 def validate_orderbook_freshness(
     orderbook_timestamp: Optional[datetime],
     received_timestamp: Optional[datetime],
@@ -31,6 +48,8 @@ def validate_orderbook_freshness(
     max_orderbook_age_ms: int = 2000
 ) -> None:
     now = datetime.now(timezone.utc)
+    received_timestamp = _coerce_utc_timestamp(received_timestamp)
+    orderbook_timestamp = _coerce_utc_timestamp(orderbook_timestamp)
     
     if received_timestamp is None:
         if mode == "live":
@@ -41,19 +60,17 @@ def validate_orderbook_freshness(
             logger.info("ORDERBOOK_TIMESTAMP_ASSUMED_FOR_SHADOW")
             return
             
-    if received_timestamp.tzinfo is None:
-        raise ValueError("received_timestamp must be timezone-aware")
-        
     use_timestamp = orderbook_timestamp if orderbook_timestamp else received_timestamp
-        
-    if use_timestamp.tzinfo is None:
-        raise ValueError("orderbook_timestamp must be timezone-aware")
     
     age_ms = (now - use_timestamp).total_seconds() * 1000.0
     
     if age_ms > max_orderbook_age_ms:
         logger.warning(f"STALE_ORDERBOOK: age is {age_ms:.0f}ms (max {max_orderbook_age_ms}ms)")
-        raise ValueError("STALE_ORDERBOOK")
+        # Paper/shadow runs scan many markets; by fill time the snapshot is often older
+        # than 2s. Live must fail closed; paper may proceed when explicitly allowed.
+        if mode == "live" or not allow_assumed_fresh_orderbook_for_shadow:
+            raise ValueError("STALE_ORDERBOOK")
+        logger.info("STALE_ORDERBOOK_ALLOWED_FOR_SHADOW")
 
 def reprice_and_validate(
     original_order: SizedOrder,

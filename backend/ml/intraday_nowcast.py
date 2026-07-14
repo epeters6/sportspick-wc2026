@@ -66,49 +66,36 @@ def get_current_obs(city: str) -> dict:
 
 def apply_hrrr_nowcast_shift(city: str, station_id: str, base_mean: float, base_spread: float) -> tuple[float, float]:
     """
-    Intraday Nowcasting Engine.
-    For same-day contracts, this pulls the live METAR observation and 
-    applies a HRRR-style intraday shift to the ensemble forecast.
-    
-    If the current station temperature is running hotter than expected for this hour, 
-    the mean_f is shifted upwards, and the spread is tightened (since we are closer to close).
+    Intraday nowcast helper for same-day daily-high markets.
+
+    Historically this compared live METAR to ``base_mean`` (the daily-high
+    forecast) and applied that full deviation after the diurnal peak hour —
+    which collapses a ~95°F high forecast to the evening observation (~76°F).
+    That is wrong: ``forecast_temp_at_this_hour`` must be an hourly forecast,
+    not the daily max.
+
+    Until we have a real hourly forecast path, only tighten spread as the
+    local day progresses near/after the usual peak, and leave the mean alone.
+    Impossible low buckets are already zeroed via ``mask_impossible_buckets``
+    using ``high_so_far``.
     """
     try:
-        current_temp = get_current_temp(station_id)
-    except Exception as exc:
-        logger.warning(f"Nowcast failed to fetch METAR for {station_id}: {exc}")
-        return base_mean, base_spread
+        from zoneinfo import ZoneInfo
+        from pipeline.station_mapper import get_tz_for_city
+        from backend.ml.diurnal_curve import elapsed_warming_fraction
 
-    if current_temp is None:
+        local_hour = datetime.now(ZoneInfo(get_tz_for_city(city))).hour
+        confidence = elapsed_warming_fraction(float(local_hour))
+        max_spread_tightening = 0.6
+        min_spread_floor = 1.5
+        new_spread = max(base_spread * (1 - max_spread_tightening * confidence), min_spread_floor)
+        if abs(new_spread - base_spread) > 1e-6:
+            logger.info(
+                "NOWCAST SPREAD ONLY [%s - %s]: local_hour=%s confidence=%.2f "
+                "spread %.1f -> %.1f (mean unchanged at %.1f)",
+                city, station_id, local_hour, confidence, base_spread, new_spread, base_mean,
+            )
+        return base_mean, new_spread
+    except Exception as exc:
+        logger.warning(f"Nowcast spread tighten failed for {station_id}: {exc}")
         return base_mean, base_spread
-        
-    now = datetime.now(timezone.utc)
-    
-    # Diurnal Curve adjustment
-    from backend.ml.diurnal_curve import nowcast_adjustment
-    
-    # Normally we would fetch the station's climatology or forecast model's t_min/t_max.
-    # For now, we use the symmetric fallback with typical t_min/t_max.
-    # In a full production system, we'd pull `climatology` for the station.
-    
-    # We must convert current time to local standard time for the station. 
-    # For simplicity, we'll use UTC hour offset by an approximate -5 (EST) or pass it directly.
-    # Since we don't have timezone data here, we'll assume a generic daytime curve.
-    current_hour_local = (now.hour - 5) % 24  # rough approximation for EST
-    
-    shift, new_spread = nowcast_adjustment(
-        observed_temp=current_temp,
-        forecast_temp_at_this_hour=base_mean,
-        current_hour=current_hour_local,
-        forecast_spread=base_spread,
-    )
-    
-    new_mean = base_mean + shift
-    
-    if shift != 0.0:
-        logger.info(
-            f"🌩️ NOWCAST SHIFT [{city} - {station_id}]: "
-            f"Observed {current_temp}°F. Shifting mean {base_mean}°F -> {new_mean}°F, spread {base_spread:.1f} -> {new_spread:.1f}"
-        )
-        
-    return new_mean, new_spread

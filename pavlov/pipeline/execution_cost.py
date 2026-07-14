@@ -1,5 +1,6 @@
-from typing import List
+from typing import List, Optional, Tuple
 from dataclasses import dataclass
+from loguru import logger
 
 @dataclass
 class AskLevel:
@@ -16,10 +17,44 @@ class ExecutableBucket:
 
 from pavlov.pipeline.fee_model import estimate_fee_per_share
 
+# Paper/shadow fill depth when list endpoints omit book size (common for Kalshi/Poly).
+_DEFAULT_SHADOW_ASK_DEPTH = 50.0
+
+
+def _as_probability(price) -> float:
+    """Normalize venue quotes to [0, 1]. Clients often store cents (1–100)."""
+    if price is None:
+        return 0.0
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        return 0.0
+    if p > 1.0:
+        p = p / 100.0
+    return p
+
+
+def _extract_ask_size(m: dict, default_depth_if_missing: Optional[float]) -> float:
+    for key in ("ask_size", "yes_ask_size", "yes_ask_qty", "ask_qty"):
+        raw = m.get(key)
+        if raw is None:
+            continue
+        try:
+            size = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if size > 0:
+            return size
+    if default_depth_if_missing is not None and default_depth_if_missing > 0:
+        return float(default_depth_if_missing)
+    return 0.0
+
+
 def generate_executable_cost_vector(
     raw_markets: List[dict],
     platform: str,
-    slippage_buffer: float = 0.005
+    slippage_buffer: float = 0.005,
+    default_depth_if_missing: Optional[float] = _DEFAULT_SHADOW_ASK_DEPTH,
 ) -> Tuple[List[float], List[float]]:
     """
     Given a list of raw markets (mutually exclusive buckets), calculate the 
@@ -31,8 +66,8 @@ def generate_executable_cost_vector(
     depth_caps = []
     
     for m in raw_markets:
-        ask = m.get("best_ask", m.get("yes_ask", 0.0))
-        ask_size = m.get("ask_size", m.get("yes_ask_size", 0.0))
+        ask = _as_probability(m.get("best_ask", m.get("yes_ask", 0.0)))
+        ask_size = _extract_ask_size(m, default_depth_if_missing)
         
         # Explicit guard against midpoint usage (Audit #6)
         if m.get("execution_price_source") in {"mid", "last_trade", "mark"}:
@@ -50,6 +85,14 @@ def generate_executable_cost_vector(
         if effective_cost >= 1.0:
             raise ValueError(f"EFFECTIVE_COST_NOT_TRADABLE: Bucket ask={ask} plus fee/slippage yields cost {effective_cost} >= 1.0")
         
+        if ask_size <= 0 and default_depth_if_missing:
+            logger.debug(
+                "Missing ask depth for %s — using shadow default %.1f",
+                m.get("ticker") or m.get("id") or "unknown",
+                default_depth_if_missing,
+            )
+            ask_size = float(default_depth_if_missing)
+
         Q_exec.append(effective_cost)
         depth_caps.append(ask_size)
         

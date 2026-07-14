@@ -24,7 +24,7 @@ from pipeline import ensemble_client
 from pipeline.settlement_resolver import normalize_market
 from pipeline.probability_model import generate_event_probability_vector
 from pipeline.market_probability import generate_market_implied_vector, shrink_probability_vector
-from pipeline.execution_cost import generate_executable_cost_vector
+from pipeline.execution_cost import generate_executable_cost_vector, _as_probability
 from pipeline.portfolio_optimizer import optimize_portfolio
 from pipeline.nowcast_features import mask_impossible_buckets
 from backend.ml.intraday_nowcast import get_current_obs # Hypothetical or existing NWS fetcher
@@ -331,6 +331,7 @@ async def sync_weather_predictions():
             exposure_tracker[virtual_match_id] = current_exposure + stake
             
             # Convert to shared Execution schema
+            best_ask_p = _as_probability(raw_m.get("best_ask", raw_m.get("yes_ask", q_i))) or q_i
             candidate = TradeCandidate(
                 strategy="weather_portfolio",
                 platform=platform,
@@ -342,10 +343,10 @@ async def sync_weather_predictions():
                 market_prob=P_market[i],
                 executable_cost=q_i,
                 best_bid=None,
-                best_ask=raw_m.get("best_ask", q_i),
+                best_ask=best_ask_p,
                 spread=None,
                 visible_depth=depth_caps[i],
-                fee_per_share=q_i - raw_m.get("best_ask", q_i) - 0.005,
+                fee_per_share=max(0.0, q_i - best_ask_p - 0.005),
                 slippage_buffer=0.005,
                 max_shares_by_depth=depth_caps[i],
                 max_shares_by_risk=1e9, # handled by portfolio optimizer
@@ -429,7 +430,7 @@ async def sync_weather_predictions():
                 "mode": mode,
                 "model_prob": P_model[i],
                 "market_prob": P_market[i],
-                "market_price": raw_m.get("best_ask", q_i),
+                "market_price": best_ask_p,
                 "edge": P_adj[i] - q_i,
                 "raw_confidence": P_adj[i],
                 "sport": "weather",

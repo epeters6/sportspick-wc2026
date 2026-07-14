@@ -23,6 +23,19 @@ def get_event_lambda(lead_days: int) -> float:
     else:
         return LAMBDA_DEFAULTS["three_to_five_day"]
 
+def _as_probability(price) -> float:
+    """Normalize venue quotes to [0, 1]. Clients often store cents (1–100)."""
+    if price is None:
+        return 0.0
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        return 0.0
+    if p > 1.0:
+        p = p / 100.0
+    return max(0.0, min(1.0, p))
+
+
 def generate_market_implied_vector(raw_markets: List[dict]) -> List[float]:
     """
     Given a list of raw markets (representing mutually exclusive buckets for an event),
@@ -36,19 +49,19 @@ def generate_market_implied_vector(raw_markets: List[dict]) -> List[float]:
     
     for m in raw_markets:
         # Polymarket usually has 'best_bid', 'best_ask'. Kalshi might have 'yes_bid', 'yes_ask'.
-        # We standardise this extraction.
-        bid = m.get("best_bid", m.get("yes_bid", 0.0))
-        ask = m.get("best_ask", m.get("yes_ask", 0.0))
+        # Quotes may be fractions or cents — normalize before blending.
+        bid = _as_probability(m.get("best_bid", m.get("yes_bid", 0.0)))
+        ask = _as_probability(m.get("best_ask", m.get("yes_ask", 0.0)))
         
         if bid > 0 and ask > 0 and ask > bid:
             mid = (bid + ask) / 2.0
         elif ask > 0:
-            mid = ask - 0.01
+            mid = max(0.0, ask - 0.01)
         elif bid > 0:
-            mid = bid + 0.01
+            mid = min(1.0, bid + 0.01)
         else:
             # Fallback to last trade price for probability shrinkage ONLY
-            mid = m.get("last_trade_price", m.get("last_price", 0.0))
+            mid = _as_probability(m.get("last_trade_price", m.get("last_price", 0.0)))
             
         P_market_raw.append(max(0.0, float(mid)))
         
@@ -62,6 +75,7 @@ def generate_market_implied_vector(raw_markets: List[dict]) -> List[float]:
         
     validate_probability_vector("P_market", P_market)
     return P_market
+
 
 def shrink_probability_vector(
     P_model: List[float], 
