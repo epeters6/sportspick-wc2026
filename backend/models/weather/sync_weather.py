@@ -464,7 +464,18 @@ async def sync_weather_predictions():
                     db.table("autobets").insert(record).execute()
                     bets_placed += 1
                 except Exception as e:
-                    logger.error(f"Failed to record weather autobet: {e}")
+                    # Retry without optional columns when migrations are pending
+                    msg = str(e)
+                    slim = dict(record)
+                    for col in ("metadata", "raw_confidence", "bet_type", "sport"):
+                        if col in msg or "PGRST204" in msg or "schema cache" in msg:
+                            slim.pop(col, None)
+                    try:
+                        db.table("autobets").insert(slim).execute()
+                        bets_placed += 1
+                        logger.warning(f"Weather autobet recorded with slim schema ({e})")
+                    except Exception as e2:
+                        logger.error(f"Failed to record weather autobet: {e2}")
                     
         # Write Shadow Record
         shadow_file = "weather_shadow_decisions.jsonl"

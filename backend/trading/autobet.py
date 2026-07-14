@@ -289,9 +289,11 @@ async def _evaluate_autobet_candidate(
             return "rejected", None
         clob_order_id = result["order_id"]
 
-    _record_autobet(db, match, market, outcome, winner, edge_res,
+    _recorded = _record_autobet(db, match, market, outcome, winner, edge_res,
                     sizing, mode, bankroll, clob_order_id=clob_order_id,
                     bet_type=bet_type, bet_line=bet_line, sport_label=sport_label)
+    if not _recorded:
+        return "rejected", None
 
     pick_label = winner
     if bet_type == "total_goals" and bet_line:
@@ -449,6 +451,30 @@ async def run_autobet() -> dict[str, Any]:
             else min_moneyline_conf
         )
     ]
+    # Drop matches whose scheduled start is already in the past (stale is_final=false rows).
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    fresh: list[dict] = []
+    for c in consensus:
+        match = c.get("matches") or {}
+        sched_raw = match.get("scheduled_at")
+        if not sched_raw:
+            fresh.append(c)
+            continue
+        try:
+            sched = datetime.fromisoformat(str(sched_raw).replace("Z", "+00:00"))
+        except Exception:
+            fresh.append(c)
+            continue
+        # Allow a small grace window after first pitch for late shadow fills.
+        if sched >= now - timedelta(hours=1):
+            fresh.append(c)
+        else:
+            logger.debug(
+                f"Autobet: skip stale match {match.get('away_team')} @ {match.get('home_team')} "
+                f"(scheduled {sched_raw})"
+            )
+    consensus = fresh
     if not consensus:
         logger.info("Autobet: no upcoming consensus picks")
         return {"mode": mode, "evaluated": 0, "placed": 0, "rejected": 0}
@@ -587,13 +613,19 @@ def _record_autobet(
     bet_type: str = "moneyline",
     bet_line: str | None = None,
     sport_label: str = "football",
-) -> None:
-    """Upsert an OPEN autobets row (unique per market+outcome+mode)."""
+) -> bool:
+    """Upsert an OPEN autobets row (unique per market+outcome+mode).
+
+    Returns True when the row was persisted. Unknown/optional schema columns
+    (``venue``, ``metadata``, etc.) are retried without so paper trades are
+    never silently dropped when a migration hasn't landed yet.
+    """
     shares = round(sizing.stake / edge_res.market_price, 2) if edge_res.market_price > 0 else 0
+    venue = getattr(market, "venue", None) or "polymarket"
     record = {
         "match_id": match["id"],
         "market_id": market.market_id,
-        "venue": getattr(market, 'venue', 'polymarket'),
+        "venue": venue,
         "market_slug": market.slug,
         "question": market.question[:500],
         "outcome_name": winner,
@@ -613,46 +645,49 @@ def _record_autobet(
         "clob_order_id": clob_order_id,
         "bet_type": bet_type,
         "bet_line": bet_line,
+        "metadata": {"venue": venue},
     }
     # Drop optional columns if migration not applied yet
-    optional = ("raw_confidence", "sport", "bet_type", "bet_line")
-    try:
+    optional = ("raw_confidence", "sport", "bet_type", "bet_line", "venue", "metadata")
+
+    def _upsert(payload: dict) -> None:
         existing = (
             db.table("autobets")
             .select("id")
-            .eq("market_id", record["market_id"])
-            .eq("outcome_name", record["outcome_name"])
+            .eq("market_id", payload["market_id"])
+            .eq("outcome_name", payload["outcome_name"])
             .eq("mode", mode)
             .eq("status", "open")
             .limit(1)
             .execute()
         )
         if existing.data:
-            db.table("autobets").update(record).eq("id", existing.data[0]["id"]).execute()
+            db.table("autobets").update(payload).eq("id", existing.data[0]["id"]).execute()
         else:
-            db.table("autobets").insert(record).execute()
+            db.table("autobets").insert(payload).execute()
+
+    try:
+        _upsert(record)
+        return True
     except Exception as exc:
-        if "raw_confidence" in str(exc) or "sport" in str(exc) or "bet_type" in str(exc):
-            slim = {k: v for k, v in record.items() if k not in optional}
+        msg = str(exc)
+        drop = [col for col in optional if col in msg]
+        if not drop and ("PGRST204" in msg or "schema cache" in msg):
+            drop = list(optional)
+        if drop:
+            slim = {k: v for k, v in record.items() if k not in drop}
             try:
-                existing = (
-                    db.table("autobets")
-                    .select("id")
-                    .eq("market_id", slim["market_id"])
-                    .eq("outcome_name", slim["outcome_name"])
-                    .eq("mode", mode)
-                    .eq("status", "open")
-                    .limit(1)
-                    .execute()
+                _upsert(slim)
+                logger.warning(
+                    f"Autobet recorded without columns {drop} "
+                    f"(apply supabase migration for full schema)"
                 )
-                if existing.data:
-                    db.table("autobets").update(slim).eq("id", existing.data[0]["id"]).execute()
-                else:
-                    db.table("autobets").insert(slim).execute()
+                return True
             except Exception as exc2:
                 logger.warning(f"Autobet record failed: {exc2}")
-        else:
-            logger.warning(f"Autobet record failed: {exc}")
+                return False
+        logger.warning(f"Autobet record failed: {exc}")
+        return False
 
 
 def resolve_autobets() -> int:

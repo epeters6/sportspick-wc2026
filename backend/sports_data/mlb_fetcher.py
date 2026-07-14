@@ -224,6 +224,26 @@ async def sync_mlb_matches() -> int:
     result = db.table("matches").upsert(all_records, on_conflict="external_id").execute()
     count = len(result.data or [])
     logger.info(f"MLB: upserted {count} game records")
+
+    # Belt-and-suspenders: anything still open whose start was >12h ago is done.
+    # ESPN status misses happen; without this autobet keeps hunting dead markets.
+    from datetime import timezone as _tz
+    cutoff = (datetime.now(_tz.utc) - timedelta(hours=12)).isoformat()
+    try:
+        stale = (
+            db.table("matches")
+            .update({"is_final": True})
+            .eq("sport", "mlb")
+            .eq("is_final", False)
+            .lt("scheduled_at", cutoff)
+            .execute()
+        )
+        n_stale = len(stale.data or [])
+        if n_stale:
+            logger.info(f"MLB: finalized {n_stale} stale open matches")
+    except Exception as exc:
+        logger.warning(f"MLB stale-finalization failed: {exc}")
+
     return count
 
 
