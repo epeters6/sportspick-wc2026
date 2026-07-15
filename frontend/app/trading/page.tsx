@@ -43,7 +43,7 @@ function formatAutobetPick(b: { outcome_name: string; bet_type?: string; bet_lin
 }
 
 export default function TradingPage() {
-  const [tab, setTab] = useState<Tab>("basics");
+  const [tab, setTab] = useState<Tab>("positions");
   const [sportFilter, setSportFilter] = useState<SportFilter>("all");
   const qc = useQueryClient();
 
@@ -75,6 +75,7 @@ export default function TradingPage() {
   const filteredAutobets = sportFilter === "all" ? bets : bets.filter((b) => (b.sport ?? "football") === sportFilter);
   const openBets = filteredAutobets.filter((b) => b.status === "open");
   const historyBets = filteredAutobets.filter((b) => b.status !== "open" && b.status !== "rejected");
+  const openCountLabel = abLoading ? "…" : String(openBets.length);
 
   return (
     <div className="space-y-8 pb-12">
@@ -86,7 +87,7 @@ export default function TradingPage() {
             Trading Hub
           </h1>
           <p className="text-gray-400 text-sm mt-2 max-w-2xl">
-            Shadow paper trading on Polymarket & Kalshi. Basics below; advanced calibration in its own tab.
+            Shadow paper trading on Polymarket & Kalshi. Open positions first; Basics and calibration in the other tabs.
           </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap justify-end">
@@ -142,8 +143,8 @@ export default function TradingPage() {
       {/* Tabs Menu */}
       <div className="flex flex-wrap gap-2 p-1 bg-black/40 border border-white/5 rounded-xl w-fit backdrop-blur-md">
         {([
+          ["positions", `Open Positions (${openCountLabel})`, Target],
           ["basics", "Betting Basics", BookOpen],
-          ["positions", "Open Positions", Target],
           ["calibration", "Model Calibration", BrainCircuit],
           ["weather", "Weather Engine", CloudRain],
         ] as const).map(([t, label, Icon]) => (
@@ -244,6 +245,9 @@ export default function TradingPage() {
                       <div>
                         <div className="flex items-center gap-2 mb-1.5">
                           <SportBadge sport={b.sport ?? "football"} />
+                          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700">
+                            {b.mode === "live" ? "live" : "paper"}
+                          </span>
                           {b.bet_type && b.bet_type !== "moneyline" && <BetTypeBadge betType={b.bet_type} betLine={b.bet_line} size="sm" />}
                         </div>
                         <h3 className="text-gray-200 text-sm font-medium line-clamp-2 leading-snug">{b.question}</h3>

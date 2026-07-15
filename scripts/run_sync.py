@@ -181,7 +181,14 @@ async def run_ml_phase() -> dict[str, int]:
     print("Running weather prediction model (Phase 1)...")
     try:
         import subprocess
-        subprocess.run([sys.executable, "backend/models/weather/sync_weather.py"], check=True)
+        weather_proc = subprocess.run(
+            [sys.executable, "backend/models/weather/sync_weather.py"],
+            check=False,
+        )
+        if weather_proc.returncode != 0:
+            print(f"  Weather sync failed with exit code {weather_proc.returncode}")
+        else:
+            print("  Weather sync completed")
     except Exception as exc:
         print(f"  Weather sync failed: {exc}")
 

@@ -57,8 +57,28 @@ _MODELS: dict[str, float] = {
     "gem_global":     0.75,  # 21 members
 }
 
+# GitHub Actions has a cold cache and many cities; fetching all four models
+# hammers Open-Meteo into 429s and zeros out weather trading for the whole run.
+_MODELS_CI: dict[str, float] = {
+    "gfs025":         2.0,
+    "icon_seamless":  2.0,
+}
+
 # Minimum inter-request gap for Open-Meteo (generous free tier, but be polite).
 _OM_REQUEST_GAP = 0.3   # seconds
+_OM_REQUEST_GAP_CI = 1.0
+
+
+def _active_models() -> dict[str, float]:
+    if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        return dict(_MODELS_CI)
+    return dict(_MODELS)
+
+
+def _om_gap() -> float:
+    if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        return _OM_REQUEST_GAP_CI
+    return _OM_REQUEST_GAP
 
 
 # ---------------------------------------------------------------------------
@@ -161,9 +181,10 @@ _last_om_request: float = 0.0
 
 def _om_rate_limit() -> None:
     global _last_om_request
+    gap = _om_gap()
     elapsed = time.monotonic() - _last_om_request
-    if elapsed < _OM_REQUEST_GAP:
-        time.sleep(_OM_REQUEST_GAP - elapsed)
+    if elapsed < gap:
+        time.sleep(gap - elapsed)
     _last_om_request = time.monotonic()
 
 
@@ -186,23 +207,25 @@ def _fetch_model(
         f"&models={model}"
     )
     data: dict | None = None
-    for attempt in range(3):
+    max_attempts = 5 if os.environ.get("GITHUB_ACTIONS", "").lower() == "true" else 3
+    for attempt in range(max_attempts):
         _om_rate_limit()
         try:
             resp = requests.get(url, timeout=20)
             if resp.status_code == 429:
-                wait = 2.0 * (attempt + 1)
+                wait = min(30.0, 3.0 * (2 ** attempt))
                 ra = resp.headers.get("Retry-After")
                 if ra:
                     try:
-                        wait = float(ra)
+                        wait = max(wait, float(ra))
                     except (TypeError, ValueError):
                         pass
                 logger.warning(
-                    "EnsembleClient: %s rate limited (429) — sleeping %.1fs (attempt %d/3)",
+                    "EnsembleClient: %s rate limited (429) — sleeping %.1fs (attempt %d/%d)",
                     model,
                     wait,
                     attempt + 1,
+                    max_attempts,
                 )
                 time.sleep(wait)
                 continue
@@ -274,7 +297,8 @@ def _fetch_members(
     combined: dict[str, dict[str, list[float]]] = {}
     total_members = 0
 
-    for model in _MODELS:
+    models = _active_models()
+    for model in models:
         by_date = _fetch_model(lat, lon, daily_var, model, bias)
         if not by_date:
             continue
@@ -368,17 +392,18 @@ def get_ensemble_prob(
     except Exception:
         lead_time_days = 3
         
-    dynamic_weights = dict(_MODELS)
-    if lead_time_days <= 2:
-        # Day 0-2: High-resolution models dominate
-        dynamic_weights["gfs025"] = 2.0
-        dynamic_weights["icon_seamless"] = 2.0
-    elif lead_time_days <= 8:
-        # Day 3-8: ECMWF ensemble is gold standard
-        dynamic_weights["ecmwf_ifs04"] = 3.0
-    else:
-        # Long-range degrades
-        dynamic_weights["ecmwf_ifs04"] = 1.0
+    dynamic_weights = _active_models()
+    if "ecmwf_ifs04" in dynamic_weights:
+        if lead_time_days <= 2:
+            # Day 0-2: High-resolution models dominate
+            dynamic_weights["gfs025"] = 2.0
+            dynamic_weights["icon_seamless"] = 2.0
+        elif lead_time_days <= 8:
+            # Day 3-8: ECMWF ensemble is gold standard
+            dynamic_weights["ecmwf_ifs04"] = 3.0
+        else:
+            # Long-range degrades
+            dynamic_weights["ecmwf_ifs04"] = 1.0
 
     # 1. Calculate weighted mean
     weighted_sum = 0.0

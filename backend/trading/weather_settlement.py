@@ -182,6 +182,111 @@ async def check_kalshi_resolution(ticker: str) -> dict | None:
     return None
 
 
+def _bet_meta(bet: dict) -> dict:
+    meta = bet.get("metadata") or {}
+    if isinstance(meta, str):
+        try:
+            import json
+            meta = json.loads(meta)
+        except (ValueError, TypeError):
+            meta = {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def _target_date_for_bet(bet: dict) -> datetime | None:
+    """Return target local settlement date as UTC-midnight datetime when known."""
+    meta = _bet_meta(bet)
+    target = meta.get("target_date")
+    if target:
+        try:
+            d = datetime.strptime(str(target)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            return d
+        except ValueError:
+            pass
+    market_id = bet.get("market_id") or ""
+    kd = _kalshi_ticker_date(market_id)
+    if kd is not None:
+        return kd
+    question = bet.get("question") or ""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", question)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _city_and_metric_for_bet(bet: dict) -> tuple[str | None, str]:
+    """City + metric for readiness checks; recover from question for legacy rows."""
+    meta = _bet_meta(bet)
+    city = meta.get("city")
+    metric = (meta.get("metric") or "").lower()
+    if city and metric in ("high", "low"):
+        return city, metric
+
+    question = bet.get("question") or ""
+    m = re.match(r"Weather:\s+(.+?)\s+(High|Low)\s+", question)
+    if m:
+        city = city or m.group(1).strip()
+        metric = metric or m.group(2).lower()
+    if metric not in ("high", "low"):
+        metric = "high"
+    return city, metric
+
+
+def _actuals_ready_to_grade(bet: dict, now: datetime) -> bool:
+    """True when station-local time is late enough that daily extremes are usable.
+
+    Exchange settlement often lags a day; we can grade from METAR/CLI-style
+    actuals once the local calendar day is effectively over.
+    """
+    city, metric = _city_and_metric_for_bet(bet)
+    target_dt = _target_date_for_bet(bet)
+    if target_dt is None:
+        return False
+    target_date = target_dt.date()
+
+    try:
+        from zoneinfo import ZoneInfo
+        from pipeline.station_mapper import get_tz_for_city
+        if city:
+            local_now = now.astimezone(ZoneInfo(get_tz_for_city(city)))
+        else:
+            # US weather markets default Eastern when city metadata is missing.
+            local_now = now.astimezone(ZoneInfo("America/New_York"))
+    except Exception:
+        local_now = now.astimezone(timezone.utc)
+
+    if local_now.date() > target_date:
+        return True
+    if local_now.date() < target_date:
+        return False
+
+    # Same local calendar day as the market: highs finalize late evening;
+    # lows (overnight/morning extreme) are usable by mid-afternoon.
+    if metric == "low":
+        return local_now.hour >= 14
+    return local_now.hour >= 21
+
+
+def _apply_resolution(db, bet: dict, new_status: str, new_pnl: float, now: datetime, note: str) -> bool:
+    try:
+        db.table("autobets").update({
+            "status": new_status,
+            "pnl": new_pnl,
+            "resolved_at": now.isoformat(),
+        }).eq("id", bet["id"]).execute()
+        logger.info(
+            f"Resolved weather bet {bet['id'][:8]} [{bet.get('market_id')}] "
+            f"-> {new_status} (PnL: {new_pnl}; {note})"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update weather bet {bet['id']}: {e}")
+        return False
+
+
 async def resolve_weather_autobets() -> int:
     logger.info("Starting weather autobet resolution...")
     db = get_db()
@@ -218,48 +323,52 @@ async def resolve_weather_autobets() -> int:
             # Polymarket (slug-based)
             status_data = await check_polymarket_resolution(market_id)
 
-        # If the exchange says it's settled, process it
-        if status_data and (status_data.get("resolved") or status_data.get("closed")):
-            winner = status_data.get("winner")
-            if winner is not None:
-                backed = str(bet.get("outcome_name") or "yes").lower()
-                winner_str = str(winner).lower()
-
-                won = False
-                if winner_str in ("yes", "1", "true") and backed == "yes":
-                    won = True
-                elif winner_str in ("no", "0", "false") and backed == "no":
-                    won = True
-
-                stake = bet.get("stake") or 0.0
-                shares = bet.get("shares") or 0.0
-                price = bet.get("market_price") or 0.0
-
-                new_status = "won" if won else "lost"
-                new_pnl = round(shares * (1 - price), 2) if won else round(-stake, 2)
-
-                try:
-                    db.table("autobets").update({
-                        "status": new_status,
-                        "pnl": new_pnl,
-                        "resolved_at": now.isoformat()
-                    }).eq("id", bet["id"]).execute()
+        # Prefer station actuals once the local day is done. Never grade weather
+        # from Kalshi/Poly early — exchange results can precede or disagree with
+        # the METAR/CLI extrema this strategy targets.
+        actuals_ready = _actuals_ready_to_grade(bet, now)
+        if actuals_ready:
+            graded = _grade_bet_against_actual(bet, now)
+            if graded is not None:
+                new_status, new_pnl = graded
+                if _apply_resolution(db, bet, new_status, new_pnl, now, "graded vs observed temp"):
                     resolved_count += 1
-                    logger.info(
-                        f"Resolved weather bet {bet['id'][:8]} [{venue}:{market_id}] "
-                        f"-> {new_status} (PnL: {new_pnl})"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to update weather bet {bet['id']}: {e}")
+                continue
+            # Day is done but observation fetch failed — wait; do not trust exchange.
+
+        # Exchange only when we can never grade (no target date) and venue resolved.
+        if (
+            not actuals_ready
+            and _target_date_for_bet(bet) is None
+            and status_data
+            and status_data.get("winner") is not None
+        ):
+            winner = status_data.get("winner")
+            backed = str(bet.get("outcome_name") or "yes").lower()
+            winner_str = str(winner).lower()
+
+            won = False
+            if winner_str in ("yes", "1", "true") and backed == "yes":
+                won = True
+            elif winner_str in ("no", "0", "false") and backed == "no":
+                won = True
+
+            stake = bet.get("stake") or 0.0
+            shares = bet.get("shares") or 0.0
+            price = bet.get("market_price") or 0.0
+
+            new_status = "won" if won else "lost"
+            new_pnl = round(shares * (1 - price), 2) if won else round(-stake, 2)
+
+            if _apply_resolution(db, bet, new_status, new_pnl, now, f"exchange:{venue}"):
+                resolved_count += 1
             continue
 
-        # ── Stale-bet expiry ──────────────────────────────────────────────
-        # For Kalshi tickers with an encoded date (e.g. KXHIGHTDC-26JUL06-T84),
-        # or Polymarket slugs with a date (tc-temp-mdwhigh-2026-07-06-*),
-        # expire 2 days after the market's settlement date.
-        # Fallback: expire 3 days after creation for any other stale bets.
-
+        # ── Stale-bet expiry fallback ─────────────────────────────────────
+        # For unresolved leftovers, expire 2 days after market date (or 3d age)
+        # and grade vs actuals when possible; otherwise void.
         expiry_triggered = False
+        reason = ""
 
         # Try Kalshi date from ticker
         kalshi_market_date = _kalshi_ticker_date(market_id) if venue == "kalshi" else None
@@ -303,23 +412,12 @@ async def resolve_weather_autobets() -> int:
             graded = _grade_bet_against_actual(bet, now)
             if graded is not None:
                 new_status, new_pnl = graded
-                grade_note = "graded vs observed temp"
+                grade_note = f"{reason}; graded vs observed temp"
             else:
                 new_status, new_pnl = "void", 0.0
-                grade_note = "unresolvable, voided"
-            try:
-                db.table("autobets").update({
-                    "status": new_status,
-                    "pnl": new_pnl,
-                    "resolved_at": now.isoformat()
-                }).eq("id", bet["id"]).execute()
+                grade_note = f"{reason}; unresolvable, voided"
+            if _apply_resolution(db, bet, new_status, new_pnl, now, grade_note):
                 resolved_count += 1
-                logger.info(
-                    f"Expired stale weather bet {bet['id'][:8]} [{market_id}] "
-                    f"-> {new_status} ({reason}; {grade_note})"
-                )
-            except Exception as e:
-                logger.error(f"Failed to expire stale weather bet {bet['id']}: {e}")
 
 
     logger.info(f"Resolved {resolved_count} weather bets.")

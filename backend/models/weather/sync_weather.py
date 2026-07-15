@@ -405,22 +405,33 @@ async def sync_weather_predictions():
             }
             shadow_record["paper_orders"].append(paper_order)
             
-            if fill.filled_shares > 0:
-                with open("paper_fills.jsonl", "a") as f:
-                    f.write(json.dumps(paper_order) + "\n")
-                    
-                clv_rec = init_clv_record(
-                    trade_id=f"sim_{virtual_match_id}_{event.market_id}",
-                    market_id=event.market_id,
-                    outcome_id="yes",
-                    side="YES",
-                    entry_price=fill.limit_price,
-                    entry_time=datetime.now(timezone.utc)
+            if fill.filled_shares <= 0:
+                logger.info(
+                    f"Paper fill rejected for {event.market_id}: "
+                    f"{fill.rejection_reason or 'unknown'}"
                 )
-                log_clv_record(clv_rec)
-            
-            # Record the bet in DB
+                # Undo exposure reservation so a later retry can try again.
+                exposure_tracker[virtual_match_id] = max(
+                    0.0, exposure_tracker.get(virtual_match_id, 0.0) - stake
+                )
+                continue
+
+            with open("paper_fills.jsonl", "a") as f:
+                f.write(json.dumps(paper_order) + "\n")
+
+            clv_rec = init_clv_record(
+                trade_id=f"sim_{virtual_match_id}_{event.market_id}",
+                market_id=event.market_id,
+                outcome_id="yes",
+                side="YES",
+                entry_price=fill.limit_price,
+                entry_time=datetime.now(timezone.utc)
+            )
+            log_clv_record(clv_rec)
+
+            # Record only filled paper/live bets in DB
             record = {
+                "venue": platform,
                 "bet_subject": virtual_match_id,
                 "market_id": event.market_id,
                 "market_slug": event.market_id,
@@ -468,7 +479,7 @@ async def sync_weather_predictions():
                     # Retry without optional columns when migrations are pending
                     msg = str(e)
                     slim = dict(record)
-                    for col in ("metadata", "raw_confidence", "bet_type", "sport"):
+                    for col in ("metadata", "raw_confidence", "bet_type", "sport", "venue"):
                         if col in msg or "PGRST204" in msg or "schema cache" in msg:
                             slim.pop(col, None)
                     try:

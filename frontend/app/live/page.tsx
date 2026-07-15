@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import {
   fetchReadiness, fetchLiveToggle, setLiveToggle, fetchGuardian,
 } from "@/lib/api";
@@ -191,6 +192,11 @@ export default function LiveReadinessPage() {
               <li>Flip the toggle above to arm live execution. Guardian and per-domain gates still apply.</li>
               <li>On CI, also set <code className="text-indigo-300">ALLOW_LIVE_ON_GITHUB_ACTIONS=true</code> as a second opt-in.</li>
             </ol>
+            <p className="pt-2 border-t border-white/5">
+              Paper positions are not listed here — open{" "}
+              <Link href="/trading" className="text-emerald-400 hover:underline">Trading → Open Positions</Link>
+              {" "}(filter Weather) to see shadow weather bets.
+            </p>
           </section>
         </>
       )}
