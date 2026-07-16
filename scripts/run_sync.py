@@ -180,15 +180,13 @@ async def run_ml_phase() -> dict[str, int]:
 
     print("Running weather prediction model (Phase 1)...")
     try:
-        import subprocess
-        weather_proc = subprocess.run(
-            [sys.executable, "backend/models/weather/sync_weather.py"],
-            check=False,
-        )
-        if weather_proc.returncode != 0:
-            print(f"  Weather sync failed with exit code {weather_proc.returncode}")
-        else:
-            print("  Weather sync completed")
+        # In-process so logs appear in the Actions step and repo-root imports work.
+        # (Subprocess `python backend/models/weather/sync_weather.py` previously
+        # failed with ModuleNotFoundError: backend, and check=False hid it.)
+        from backend.models.weather.sync_weather import sync_weather_predictions
+
+        await sync_weather_predictions()
+        print("  Weather sync completed")
     except Exception as exc:
         print(f"  Weather sync failed: {exc}")
 

@@ -9,12 +9,21 @@ import os
 from datetime import datetime, timezone
 from collections import defaultdict
 
+# Running as `python backend/models/weather/sync_weather.py` puts this file's
+# directory on sys.path[0], NOT the repo root — so `import backend` fails unless
+# we bootstrap. (CI used to swallow that failure via check=False.)
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 from backend.db import get_db
 from backend.trading.polymarket_client import PolymarketClient
 from backend.trading.autobet import _current_bankroll
 
 # Add the pavlov directory to the path so we can import the pipeline modules directly
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../pavlov")))
+_PAVLOV_ROOT = os.path.join(_REPO_ROOT, "pavlov")
+if _PAVLOV_ROOT not in sys.path:
+    sys.path.append(_PAVLOV_ROOT)
 
 os.environ["PAVLOV_BYPASS_CONFIG"] = "1"
 from backend.config import get_settings
@@ -33,36 +42,39 @@ async def sync_weather_predictions():
     logger.info("Starting rewritten weather prediction sync & portfolio optimization...")
     db = get_db()
     
-    # 1. Fetch active weather markets
+    # 1. Fetch active weather markets (platforms isolated — one failure must not
+    # skip the other; Kalshi is the primary paper-trading venue today).
     markets = []
     try:
         from polymarket import poly_client
         if not poly_client.poly_configured():
             logger.warning("POLYMARKET_KEY_ID not set. Using dummy keys for public data.")
             poly_client.poly_configured = lambda: True
-            original_get_client = poly_client.get_client
             def mock_get_client():
                 from polymarket_us import PolymarketUS
                 return PolymarketUS(key_id="dummy", secret_key="dummy")
             poly_client.get_client = mock_get_client
-            
+
         pm_markets = poly_client.get_weather_markets()
         for m in pm_markets:
             m["_platform"] = "polymarket"
         markets.extend(pm_markets)
         logger.info(f"Fetched {len(pm_markets)} Polymarket weather markets.")
-        
-        try:
-            from pipeline import kalshi_client
-            kalshi_markets = kalshi_client.get_weather_markets()
-            for m in kalshi_markets:
-                m["_platform"] = "kalshi"
-            markets.extend(kalshi_markets)
-            logger.info(f"Fetched {len(kalshi_markets)} Kalshi weather markets.")
-        except Exception as e:
-            logger.warning(f"Failed to fetch Kalshi weather markets: {e}")
     except Exception as e:
-        logger.error(f"Failed to fetch weather markets: {e}")
+        logger.warning(f"Failed to fetch Polymarket weather markets: {e}")
+
+    try:
+        from pipeline import kalshi_client
+        kalshi_markets = kalshi_client.get_weather_markets()
+        for m in kalshi_markets:
+            m["_platform"] = "kalshi"
+        markets.extend(kalshi_markets)
+        logger.info(f"Fetched {len(kalshi_markets)} Kalshi weather markets.")
+    except Exception as e:
+        logger.warning(f"Failed to fetch Kalshi weather markets: {e}")
+
+    if not markets:
+        logger.error("No weather markets fetched from Polymarket or Kalshi — aborting weather sync.")
         return
         
     bankroll = _current_bankroll(db)
@@ -176,7 +188,8 @@ async def sync_weather_predictions():
         # LOW markets need the daily-minimum ensemble members, not the maximum)
         ens_result = ensemble_client.get_ensemble_prob(city, date_str, 0.0, "above", metric=metric)
         if not ens_result:
-            logger.debug(f"Skipping {city} {date_str} ({metric}): No ensemble data.")
+            # INFO so CI logs show empty-ensemble / past-date skips (was silent at DEBUG).
+            logger.info(f"Skipping {city} {date_str} ({metric}): No ensemble data.")
             continue
             
         mean_f = ens_result["mean_f"]

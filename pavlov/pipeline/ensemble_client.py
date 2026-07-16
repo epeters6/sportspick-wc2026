@@ -59,14 +59,14 @@ _MODELS: dict[str, float] = {
 
 # GitHub Actions has a cold cache and many cities; fetching all four models
 # hammers Open-Meteo into 429s and zeros out weather trading for the whole run.
+# Single model keeps CI under the free-tier budget while still sizing trades.
 _MODELS_CI: dict[str, float] = {
     "gfs025":         2.0,
-    "icon_seamless":  2.0,
 }
 
 # Minimum inter-request gap for Open-Meteo (generous free tier, but be polite).
 _OM_REQUEST_GAP = 0.3   # seconds
-_OM_REQUEST_GAP_CI = 1.0
+_OM_REQUEST_GAP_CI = 1.5
 
 
 def _active_models() -> dict[str, float]:
@@ -309,12 +309,13 @@ def _fetch_members(
         total_members += max((len(vs) for vs in by_date.values()), default=0)
 
     if total_members == 0:
-        logger.warning("EnsembleClient: no members fetched for %s %s", city, metric)
-        cache[key] = {
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "by_date":    {},
-        }
-        _save_cache(cache)
+        # Do NOT cache empty failures — Open-Meteo 429s would otherwise poison
+        # this city+metric for _CACHE_TTL and silence the whole weather run.
+        logger.warning(
+            "EnsembleClient: no members fetched for %s %s (not caching empty result)",
+            city,
+            metric,
+        )
         return None
 
     cache[key] = {

@@ -178,10 +178,9 @@ def _load_private_key() -> RSAPrivateKey:
 
     Handles bare-base64 files, CRLF line endings, and UTF-8 BOM.
     """
-    if os.environ.get("PAVLOV_BYPASS_CONFIG", "0") == "1":
-        return None  # type: ignore
-
     # 1. Try the env-var route first (cloud-friendly).
+    # Prefer B64 even under PAVLOV_BYPASS_CONFIG so CI/paper sync can still sign
+    # Kalshi GETs when the key is present (bypass only skips missing Discord/etc.).
     b64_env = os.environ.get("KALSHI_PRIVATE_KEY_B64", "").strip()
     if b64_env:
         try:
@@ -195,6 +194,9 @@ def _load_private_key() -> RSAPrivateKey:
                 f"  Error: {exc}\n"
                 "  Ensure it is the full PEM content base64-encoded (no line breaks)."
             ) from exc
+
+    if os.environ.get("PAVLOV_BYPASS_CONFIG", "0") == "1":
+        return None  # type: ignore
 
     # 2. Fall back to file path.
     raw_path: str = CONFIG["KALSHI_PRIVATE_KEY_PATH"]
