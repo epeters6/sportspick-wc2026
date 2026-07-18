@@ -294,6 +294,15 @@ def _sign_request(method: str, path: str) -> dict[str, str]:
     if _private_key is None:
         return {}
 
+    # Half-auth (PEM present, empty/mismatched API key UUID) yields 401 on every
+    # request. Prefer unsigned public GETs over sending a broken signature pair.
+    api_key = (
+        str(CONFIG.get("KALSHI_API_KEY") or os.environ.get("KALSHI_API_KEY") or "")
+        .strip()
+    )
+    if not api_key:
+        return {}
+
     timestamp_ms = str(int(time.time() * 1000))
     message = (timestamp_ms + method.upper() + path).encode("utf-8")
 
@@ -308,7 +317,7 @@ def _sign_request(method: str, path: str) -> dict[str, str]:
     signature_b64 = base64.b64encode(signature_bytes).decode("utf-8")
 
     return {
-        "KALSHI-ACCESS-KEY":       CONFIG["KALSHI_API_KEY"],
+        "KALSHI-ACCESS-KEY":       api_key,
         "KALSHI-ACCESS-TIMESTAMP": timestamp_ms,
         "KALSHI-ACCESS-SIGNATURE": signature_b64,
     }
@@ -367,20 +376,33 @@ def _backoff_wait(attempt: int, resp) -> None:
     time.sleep(wait)
 
 
-def _get(path: str, params: dict | None = None) -> Any:
-    """Signed GET request with rate-limiting and automatic retry on 429/5xx.
+def _get(path: str, params: dict | None = None, *, signed: bool = True) -> Any:
+    """GET request with rate-limiting and automatic retry on 429/5xx.
 
     *path* is the suffix after BASE_URL, e.g. '/markets'.
+
+    Set ``signed=False`` for public market-data endpoints. Weather listing must
+    not depend on Kalshi API credentials — broken CI secrets previously signed
+    every series GET, got 401s, and silently returned zero markets.
     """
     url = f"{BASE_URL}{path}"
     for attempt in range(_MAX_RETRIES):
         _rate_limit()
         # Re-sign on every attempt so the timestamp is always fresh.
         signed_path = _API_PATH_PREFIX + path
-        headers = _sign_request("GET", signed_path)
+        headers = _sign_request("GET", signed_path) if signed else {}
         resp = _session.get(url, params=params, headers=headers, timeout=20)
 
         if resp.status_code == 401:
+            # Public market GETs: fall back to unsigned once if a bad key pair
+            # somehow still signed the request.
+            if signed and path.startswith("/markets"):
+                logger.warning(
+                    "KalshiClient: 401 on signed GET %s — retrying unsigned (public market data).",
+                    path,
+                )
+                signed = False
+                continue
             logger.error(
                 "KalshiClient: 401 on GET %s\n"
                 "  Signed path : %s\n"
@@ -563,16 +585,23 @@ def get_weather_markets() -> list[dict]:
     seen_tickers: set[str] = set()
     all_markets: list[dict] = []
 
+    series_failures = 0
     for series_ticker in _WEATHER_SERIES_TICKERS:
         try:
-            data = _get("/markets", params={
-                "status":        "open",
-                "series_ticker": series_ticker,
-                "limit":         100,
-            })
+            # Public market data — never require CI/paper Kalshi credentials.
+            data = _get(
+                "/markets",
+                params={
+                    "status":        "open",
+                    "series_ticker": series_ticker,
+                    "limit":         100,
+                },
+                signed=False,
+            )
         except Exception as exc:
-            logger.debug(
-                "KalshiClient: skipping series %s - %s", series_ticker, exc
+            series_failures += 1
+            logger.warning(
+                "KalshiClient: skipping series %s — %s", series_ticker, exc
             )
             continue
 
@@ -587,11 +616,20 @@ def get_weather_markets() -> list[dict]:
     filtered = [m for m in all_markets if _closes_within_window(m)]
 
     logger.info(
-        "KalshiClient: %d weather markets found -> %d closing within %dh.",
+        "KalshiClient: %d weather markets found -> %d closing within %dh "
+        "(series_failures=%d/%d).",
         len(all_markets),
         len(filtered),
         _CLOSE_WINDOW_HOURS,
+        series_failures,
+        len(_WEATHER_SERIES_TICKERS),
     )
+    if series_failures and not filtered:
+        logger.error(
+            "KalshiClient: all weather series failed or filtered to empty "
+            "(failures=%d). Check Kalshi API reachability.",
+            series_failures,
+        )
     _save_cache(filtered)
     return filtered
 
@@ -666,7 +704,7 @@ def get_market_as_parsed(ticker: str) -> dict | None:
     in the current weather scan list.
     """
     try:
-        data = _get(f"/markets/{ticker}")
+        data = _get(f"/markets/{ticker}", signed=False)
     except Exception as exc:
         logger.debug("KalshiClient: get_market_as_parsed(%s) — %s", ticker, exc)
         return None
@@ -791,7 +829,7 @@ def get_market_result(ticker: str) -> str | None:
     Returns:
         'yes', 'no', or None (market not yet settled).
     """
-    data = _get(f"/markets/{ticker}")
+    data = _get(f"/markets/{ticker}", signed=False)
     market: dict = data.get("market", data)
     status: str = market.get("status", "").lower()
 

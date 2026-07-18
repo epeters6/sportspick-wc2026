@@ -41,6 +41,16 @@ from backend.ml.intraday_nowcast import get_current_obs # Hypothetical or existi
 async def sync_weather_predictions():
     logger.info("Starting rewritten weather prediction sync & portfolio optimization...")
     db = get_db()
+    stats = {
+        "polymarket_markets": 0,
+        "kalshi_markets": 0,
+        "events": 0,
+        "ensemble_ok": 0,
+        "ensemble_fail": 0,
+        "kelly_reject": 0,
+        "bets_placed": 0,
+        "skipped_past": 0,
+    }
     
     # 1. Fetch active weather markets (platforms isolated — one failure must not
     # skip the other; Kalshi is the primary paper-trading venue today).
@@ -59,6 +69,7 @@ async def sync_weather_predictions():
         for m in pm_markets:
             m["_platform"] = "polymarket"
         markets.extend(pm_markets)
+        stats["polymarket_markets"] = len(pm_markets)
         logger.info(f"Fetched {len(pm_markets)} Polymarket weather markets.")
     except Exception as e:
         logger.warning(f"Failed to fetch Polymarket weather markets: {e}")
@@ -69,13 +80,21 @@ async def sync_weather_predictions():
         for m in kalshi_markets:
             m["_platform"] = "kalshi"
         markets.extend(kalshi_markets)
+        stats["kalshi_markets"] = len(kalshi_markets)
         logger.info(f"Fetched {len(kalshi_markets)} Kalshi weather markets.")
     except Exception as e:
         logger.warning(f"Failed to fetch Kalshi weather markets: {e}")
 
     if not markets:
-        logger.error("No weather markets fetched from Polymarket or Kalshi — aborting weather sync.")
-        return
+        # Raise so run_sync prints WEATHER SYNC FAILED (silent return kept CI green
+        # with empty artifacts and zero paper bets).
+        msg = (
+            "No weather markets fetched from Polymarket or Kalshi — aborting weather sync. "
+            f"poly={stats['polymarket_markets']} kalshi={stats['kalshi_markets']}"
+        )
+        logger.error(msg)
+        _write_weather_sync_status(ok=False, stats=stats, error=msg)
+        raise RuntimeError(msg)
         
     bankroll = _current_bankroll(db)
     
@@ -103,7 +122,13 @@ async def sync_weather_predictions():
         events_by_group[group_key].append(normalized)
         raw_by_group[group_key].append(m)
         
+    stats["events"] = len(events_by_group)
     logger.info(f"Normalized markets into {len(events_by_group)} distinct events.")
+    if not events_by_group:
+        msg = "Weather markets fetched but none normalized into events."
+        logger.error(msg)
+        _write_weather_sync_status(ok=False, stats=stats, error=msg)
+        raise RuntimeError(msg)
     
     # Pre-fetch existing exposure for open weather bets
     exposure_tracker = {}
@@ -170,7 +195,7 @@ async def sync_weather_predictions():
             }
             with open("orderbook_snapshots.jsonl", "a") as f:
                 import json
-                f.write(json.dumps(snapshot_log) + "\n")
+                f.write(json.dumps(snapshot_log, default=str) + "\n")
 
         
         city = events[0].city
@@ -183,14 +208,23 @@ async def sync_weather_predictions():
         local_now = datetime.now(ZoneInfo(get_tz_for_city(city)))
         lead_days = (event_date - local_now.date()).days
         hour = local_now.hour
+
+        # Past local dates cannot settle as open markets we still want to trade;
+        # Open-Meteo also drops them from the forecast window.
+        if lead_days < 0:
+            stats["skipped_past"] += 1
+            logger.info(f"Skipping {city} {date_str} ({metric}): past local date (lead={lead_days}).")
+            continue
         
         # Get raw ensemble stats using a dummy threshold call (metric-aware:
         # LOW markets need the daily-minimum ensemble members, not the maximum)
         ens_result = ensemble_client.get_ensemble_prob(city, date_str, 0.0, "above", metric=metric)
         if not ens_result:
+            stats["ensemble_fail"] += 1
             # INFO so CI logs show empty-ensemble / past-date skips (was silent at DEBUG).
             logger.info(f"Skipping {city} {date_str} ({metric}): No ensemble data.")
             continue
+        stats["ensemble_ok"] += 1
             
         mean_f = ens_result["mean_f"]
         spread_f = ens_result["spread_f"]
@@ -265,10 +299,12 @@ async def sync_weather_predictions():
                             raise ValueError(f"NOWCAST_IMPOSSIBLE_BUCKET_LEAK: Bucket {event.bucket_label} has prob {P_adj[i]} or shares {x_opt[i]}")
             
             if sum(x_opt) == 0:
+                stats["kelly_reject"] += 1
                 logger.info(f"Rejected event {city} {date_str} ({platform}): NON_POSITIVE_EXPECTED_LOG_GROWTH_AFTER_ROUNDING or zero trade.")
                 continue
             
         except ValueError as e:
+            stats["kelly_reject"] += 1
             logger.info(f"Rejected event {city} {date_str} ({platform}): {e}")
             continue
         except Exception as e:
@@ -507,7 +543,38 @@ async def sync_weather_predictions():
         with open(shadow_file, "a") as f:
             f.write(json.dumps(shadow_record) + "\n")
 
+    stats["bets_placed"] = bets_placed
+    logger.info(
+        f"Weather sync summary: markets poly={stats['polymarket_markets']} "
+        f"kalshi={stats['kalshi_markets']} events={stats['events']} "
+        f"ensemble_ok={stats['ensemble_ok']} ensemble_fail={stats['ensemble_fail']} "
+        f"kelly_reject={stats['kelly_reject']} skipped_past={stats['skipped_past']} "
+        f"bets_placed={bets_placed} mode={mode}"
+    )
     logger.info(f"Successfully processed portfolio optimization. Recorded {bets_placed} new {mode} risk-capped event-level optimized basket trades.")
+    _write_weather_sync_status(ok=True, stats=stats, error=None)
+    if stats["ensemble_ok"] == 0 and stats["events"] > 0:
+        msg = (
+            f"Weather sync ran but ensemble returned data for 0/{stats['events']} events "
+            f"(fail={stats['ensemble_fail']}, past={stats['skipped_past']})."
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
+
+
+def _write_weather_sync_status(*, ok: bool, stats: dict, error: str | None) -> None:
+    import json
+    payload = {
+        "ok": ok,
+        "error": error,
+        "stats": stats,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        with open("weather_sync_status.json", "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+    except OSError as exc:
+        logger.warning(f"Could not write weather_sync_status.json: {exc}")
 
 if __name__ == "__main__":
     import asyncio

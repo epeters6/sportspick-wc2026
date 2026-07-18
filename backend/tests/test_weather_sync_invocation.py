@@ -58,6 +58,34 @@ exec(compile(preamble + "from backend.db import get_db\\nprint('BACKEND_OK')\\n"
                 cache = ensemble_client._load_cache()
                 self.assertNotIn(ensemble_client._cache_key("New York", "high"), cache)
 
+    def test_weather_markets_fetch_is_unsigned(self):
+        """Weather series listing must not require Kalshi signing (CI public path)."""
+        os.environ["PAVLOV_BYPASS_CONFIG"] = "1"
+        if str(REPO_ROOT / "pavlov") not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT / "pavlov"))
+        from pipeline import kalshi_client
+
+        calls = []
+
+        def fake_get(path, params=None, *, signed=True):
+            calls.append({"path": path, "signed": signed, "params": params})
+            return {"markets": []}
+
+        with mock.patch.object(kalshi_client, "_get", side_effect=fake_get):
+            with mock.patch.object(kalshi_client, "_cache_is_fresh", return_value=False):
+                with mock.patch.object(kalshi_client, "_load_cache", return_value={}):
+                    with mock.patch.object(kalshi_client, "_save_cache"):
+                        # Only hit the first series ticker.
+                        with mock.patch.object(
+                            kalshi_client,
+                            "_WEATHER_SERIES_TICKERS",
+                            ["KXHIGHNY"],
+                        ):
+                            kalshi_client.get_weather_markets()
+        self.assertTrue(calls)
+        self.assertTrue(all(c["signed"] is False for c in calls))
+        self.assertTrue(all(c["path"] == "/markets" for c in calls))
+
 
 if __name__ == "__main__":
     unittest.main()

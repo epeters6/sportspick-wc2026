@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import os
 import sys
+import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -188,7 +189,10 @@ async def run_ml_phase() -> dict[str, int]:
         await sync_weather_predictions()
         print("  Weather sync completed")
     except Exception as exc:
-        print(f"  Weather sync failed: {exc}")
+        print(f"  WEATHER SYNC FAILED: {exc}")
+        traceback.print_exc()
+        # Fail the ML step so green CI can no longer hide zero weather markets/bets.
+        raise
 
     print("Running MLB Quant Model Orchestrator (Phase 3)...")
     try:

@@ -71,6 +71,7 @@ jobs:
             sports_paper_fills.jsonl
             sports_clv_tracking.jsonl
             weather_shadow_decisions.jsonl
+            weather_sync_status.json
             paper_fills.jsonl
             clv_tracking.jsonl
             orderbook_snapshots.jsonl
