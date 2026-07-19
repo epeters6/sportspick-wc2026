@@ -86,6 +86,37 @@ exec(compile(preamble + "from backend.db import get_db\\nprint('BACKEND_OK')\\n"
         self.assertTrue(all(c["signed"] is False for c in calls))
         self.assertTrue(all(c["path"] == "/markets" for c in calls))
 
+    def test_weather_import_survives_mlb_bot_pipeline_shadow(self):
+        """Consensus loads pavlov-mlb-bot's pipeline before weather; import must still work."""
+        os.environ["PAVLOV_BYPASS_CONFIG"] = "1"
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+
+        # Poison path the same way mlb_quant_legacy does during compute_all_consensus().
+        mlb_bot = str(REPO_ROOT / "pavlov" / "pavlov-mlb-bot")
+        sys.path.insert(0, mlb_bot)
+        for name in list(sys.modules):
+            if name == "pipeline" or name.startswith("pipeline."):
+                del sys.modules[name]
+            if name == "backend.models.weather.sync_weather":
+                del sys.modules[name]
+        import pipeline  # noqa: F401 — binds package to pavlov-mlb-bot
+
+        # Fresh import of the weather sync module under the poisoned state.
+        import importlib
+        mod = importlib.import_module("backend.models.weather.sync_weather")
+        importlib.reload(mod)
+
+        from pipeline import settlement_resolver
+
+        pipeline_dir = Path(settlement_resolver.__file__).resolve().parent
+        self.assertEqual(
+            pipeline_dir,
+            (REPO_ROOT / "pavlov" / "pipeline").resolve(),
+        )
+        self.assertTrue(hasattr(mod, "normalize_market"))
+        self.assertTrue(hasattr(mod, "sync_weather_predictions"))
+
 
 if __name__ == "__main__":
     unittest.main()

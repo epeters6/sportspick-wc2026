@@ -20,10 +20,37 @@ from backend.db import get_db
 from backend.trading.polymarket_client import PolymarketClient
 from backend.trading.autobet import _current_bankroll
 
-# Add the pavlov directory to the path so we can import the pipeline modules directly
+# Weather modules live in pavlov/pipeline. ML consensus loads mlb_quant_legacy first,
+# which inserts pavlov/pavlov-mlb-bot and binds `pipeline` to that package (no
+# settlement_resolver). Always prefer pavlov/ and clear a poisoned import.
 _PAVLOV_ROOT = os.path.join(_REPO_ROOT, "pavlov")
-if _PAVLOV_ROOT not in sys.path:
-    sys.path.append(_PAVLOV_ROOT)
+_WEATHER_PIPELINE = os.path.join(_PAVLOV_ROOT, "pipeline")
+
+
+def _ensure_weather_pipeline_importable() -> None:
+    if _PAVLOV_ROOT in sys.path:
+        sys.path.remove(_PAVLOV_ROOT)
+    sys.path.insert(0, _PAVLOV_ROOT)
+
+    weather_key = os.path.normcase(os.path.abspath(_WEATHER_PIPELINE))
+    for name in list(sys.modules):
+        if name != "pipeline" and not name.startswith("pipeline."):
+            continue
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        locations = []
+        mod_file = getattr(mod, "__file__", None)
+        if mod_file:
+            locations.append(os.path.normcase(os.path.abspath(mod_file)))
+        for p in getattr(mod, "__path__", []) or []:
+            locations.append(os.path.normcase(os.path.abspath(p)))
+        if any(loc == weather_key or loc.startswith(weather_key + os.sep) for loc in locations):
+            continue
+        del sys.modules[name]
+
+
+_ensure_weather_pipeline_importable()
 
 os.environ["PAVLOV_BYPASS_CONFIG"] = "1"
 from backend.config import get_settings
@@ -75,6 +102,7 @@ async def sync_weather_predictions():
         logger.warning(f"Failed to fetch Polymarket weather markets: {e}")
 
     try:
+        _ensure_weather_pipeline_importable()
         from pipeline import kalshi_client
         kalshi_markets = kalshi_client.get_weather_markets()
         for m in kalshi_markets:
