@@ -9,7 +9,9 @@ from unittest.mock import patch, AsyncMock, MagicMock
 from backend.models.sports.run_shadow_mlb import (
     PREGAME_MODEL_UNAVAILABLE,
     MLB_SHADOW_ZERO_PROCESSED,
+    MLB_MONEYLINE_MANIFEST_EMPTY,
     _pitcher_outs_prob,
+    report_pitcher_outs_availability,
     run_mlb_shadow_execution,
 )
 
@@ -71,49 +73,73 @@ class TestOrchestratorShadowIntegration(unittest.TestCase):
         self.assertEqual(p, 0.0)
         self.assertEqual(meta["rejection"], PREGAME_MODEL_UNAVAILABLE)
 
-    def test_run_shadow_raises_pregame_unavailable_not_zero_success(self):
+    def test_pitcher_outs_unavailable_does_not_block_moneyline_entrypoint(self):
+        """Moneyline path runs; pitcher-outs only appears as a report field."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         manifest = {
             "12345": _orchestrator_manifest_entry(slate_date=today, prediction=None),
         }
-        with patch(
-            "backend.ml.mlb_quant.orchestrator.load_existing_manifest",
-            return_value=manifest,
-        ):
-            with self.assertRaises(RuntimeError) as ctx:
-                asyncio.run(run_mlb_shadow_execution())
-        self.assertIn(PREGAME_MODEL_UNAVAILABLE, str(ctx.exception))
-        self.assertNotIn(MLB_SHADOW_ZERO_PROCESSED, str(ctx.exception))
-
-    def test_run_shadow_zero_processed_not_mislabeled_as_pregame(self):
-        """Matching/depth rejects must use MLB_SHADOW_ZERO_PROCESSED, not model gap."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        manifest = {
-            "12345": _orchestrator_manifest_entry(
-                slate_date=today,
-                prediction={"under_proba": 0.58, "over_proba": 0.42},
-            ),
+        moneyline_report = {
+            "strategy": "mlb_moneyline",
+            "slate_size": 1,
+            "processed": 0,
+            "rejected": 1,
+            "candidate_evaluations": 2,
+            "exposed_events": 1,
+            "by_venue": {"polymarket": {}, "kalshi": {}},
         }
-        mock_router = AsyncMock()
-        mock_router.fetch_markets = AsyncMock(return_value=[])
         with patch(
-            "backend.ml.mlb_quant.orchestrator.load_existing_manifest",
-            return_value=manifest,
+            "backend.models.sports.run_shadow_mlb.report_pitcher_outs_availability",
+            return_value={
+                "strategy": "mlb_pitcher_outs",
+                "enabled": False,
+                "availability": PREGAME_MODEL_UNAVAILABLE,
+                "rejection": PREGAME_MODEL_UNAVAILABLE,
+            },
         ), patch(
-            "backend.models.sports.run_shadow_mlb.VenueRouter",
-            return_value=mock_router,
+            "backend.models.sports.run_shadow_mlb.run_mlb_moneyline_shadow",
+            new=AsyncMock(return_value=moneyline_report),
+        ):
+            report = asyncio.run(run_mlb_shadow_execution())
+        self.assertEqual(report["pitcher_outs"]["rejection"], PREGAME_MODEL_UNAVAILABLE)
+        self.assertEqual(report["moneyline"]["strategy"], "mlb_moneyline")
+
+    def test_moneyline_zero_processed_not_mislabeled_as_pregame(self):
+        moneyline_report = {
+            "strategy": "mlb_moneyline",
+            "slate_size": 1,
+            "processed": 0,
+            "rejected": 1,
+            "candidate_evaluations": 2,
+            "exposed_events": 0,
+            "by_venue": {"polymarket": {"rejected": 2}, "kalshi": {"rejected": 2}},
+        }
+        with patch(
+            "backend.models.sports.run_shadow_mlb.report_pitcher_outs_availability",
+            return_value={"rejection": PREGAME_MODEL_UNAVAILABLE},
         ), patch(
-            "backend.models.sports.run_shadow_mlb.get_db",
-            return_value=MagicMock(),
-        ), patch(
-            "backend.models.sports.run_shadow_mlb._current_bankroll",
-            return_value=1000.0,
+            "backend.models.sports.run_shadow_mlb.run_mlb_moneyline_shadow",
+            new=AsyncMock(return_value=moneyline_report),
         ):
             with self.assertRaises(RuntimeError) as ctx:
                 asyncio.run(run_mlb_shadow_execution())
         msg = str(ctx.exception)
         self.assertIn(MLB_SHADOW_ZERO_PROCESSED, msg)
         self.assertNotIn(PREGAME_MODEL_UNAVAILABLE, msg)
+
+    def test_empty_moneyline_slate_raises_manifest_empty(self):
+        with patch(
+            "backend.models.sports.run_shadow_mlb.report_pitcher_outs_availability",
+            return_value={},
+        ), patch(
+            "backend.models.sports.run_shadow_mlb.run_mlb_moneyline_shadow",
+            new=AsyncMock(
+                side_effect=RuntimeError(f"{MLB_MONEYLINE_MANIFEST_EMPTY}: none")
+            ),
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                asyncio.run(run_mlb_shadow_execution())
+        self.assertIn(MLB_MONEYLINE_MANIFEST_EMPTY, str(ctx.exception))
 
     def test_in_game_prediction_on_orchestrator_schema_accepted(self):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -124,3 +150,8 @@ class TestOrchestratorShadowIntegration(unittest.TestCase):
         p, meta = _pitcher_outs_prob(entry, "UNDER")
         self.assertAlmostEqual(p, 0.58)
         self.assertEqual(meta["prob_method"], "in_game_fatigue_prediction")
+
+    def test_pitcher_outs_report_field(self):
+        r = report_pitcher_outs_availability(manifest={})
+        self.assertEqual(r["strategy"], "mlb_pitcher_outs")
+        self.assertEqual(r["rejection"], PREGAME_MODEL_UNAVAILABLE)

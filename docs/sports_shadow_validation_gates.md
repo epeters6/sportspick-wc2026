@@ -15,3 +15,6 @@ The following checklist contains validation gates that MUST be cleared before an
 - [ ] Fees/slippage included in all paper fills
 - [ ] Default coefficients replaced or explicitly approved after out-of-sample testing
 - [ ] Kalshi sports mapping verified before Kalshi routing is enabled
+- [x] MLB moneyline shadow uses `get_mlb_quant_probability` (home/away only)
+- [x] Kalshi MLB discovery uses `KXMLBGAME` events API (not team-as-series_ticker)
+- [x] Pitcher-outs `PREGAME_MODEL_UNAVAILABLE` is a separate report field and does not fail moneyline validation

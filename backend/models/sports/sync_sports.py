@@ -35,27 +35,40 @@ def sync_sports_market(
     now = datetime.now(timezone.utc)
     age_ms = 0
     is_stale = False
-    use_timestamp = real_orderbook_timestamp if real_orderbook_timestamp else real_received_timestamp
+    allow_received_shadow = (
+        mode == "shadow"
+        and bool(market_data.get("allow_received_timestamp_shadow"))
+    )
+    timestamp_source = market_data.get("timestamp_source")
+    use_timestamp = real_orderbook_timestamp if real_orderbook_timestamp else (
+        real_received_timestamp if allow_received_shadow else None
+    )
     if use_timestamp:
         age_ms = (now - use_timestamp).total_seconds() * 1000.0
         if age_ms > 2000:
             is_stale = True
+    if real_orderbook_timestamp is None and allow_received_shadow and real_received_timestamp is not None:
+        timestamp_source = timestamp_source or "received_timestamp"
 
     token_id = (
         outcome_id
         or market_data.get("outcome_id")
         or (features.sport_specific or {}).get("outcome_token_id")
     )
+    strategy = (features.sport_specific or {}).get("strategy") or "sports_quant_v1"
 
     snapshot_log = {
         "timestamp": now.isoformat(),
-        "strategy": "sports_mlb",
+        "strategy": strategy,
         "platform": market_data.get("platform", "polymarket"),
         "market_id": features.market_id,
         "outcome_id": token_id,
         "received_timestamp": real_received_timestamp.isoformat() if real_received_timestamp else None,
+        # Never label receipt time as exchange/orderbook timestamp
         "orderbook_timestamp": real_orderbook_timestamp.isoformat() if real_orderbook_timestamp else None,
         "exchange_timestamp": real_orderbook_timestamp.isoformat() if real_orderbook_timestamp else None,
+        "missing_orderbook_timestamp": real_orderbook_timestamp is None,
+        "timestamp_source": timestamp_source,
         "source": "api",
         "best_bid": best_bid,
         "best_ask": best_ask,
@@ -65,12 +78,11 @@ def sync_sports_market(
         "age_ms": age_ms,
         "is_stale": is_stale,
         "missing_received_timestamp": real_received_timestamp is None,
-        "missing_orderbook_timestamp": real_orderbook_timestamp is None,
     }
     with open("orderbook_snapshots.jsonl", "a") as f:
         f.write(json.dumps(snapshot_log) + "\n")
 
-    # 1. Predict — pitcher-outs may supply model_prob_override (coefficients unchanged)
+    # 1. Predict — moneyline/pitcher-outs may supply model_prob_override
     prediction = predict_sports_probability(features)
     override = None
     if isinstance(features.sport_specific, dict):
@@ -91,14 +103,22 @@ def sync_sports_market(
     if getattr(prediction, "calibration_status", "uncalibrated_shadow") != "calibrated_out_of_sample" and mode == "live":
         raise ValueError("UNCALIBRATED_MODEL_LIVE_BLOCK")
 
-    if market_data.get("platform", "").lower() == "kalshi":
+    platform = (market_data.get("platform") or "").lower()
+    kalshi_verified = bool(market_data.get("kalshi_moneyline_mapping_verified"))
+    if platform == "kalshi" and not kalshi_verified:
         _log_decision(features, prediction, None, None, None, "KALSHI_SPORTS_MAPPING_NOT_IMPLEMENTED")
         return
 
-    if real_orderbook_timestamp is None or real_received_timestamp is None:
+    if real_received_timestamp is None:
         _log_decision(features, prediction, None, None, None, "MISSING_ORDERBOOK_TIMESTAMP")
         return
-    if getattr(real_orderbook_timestamp, "tzinfo", None) is None or getattr(real_received_timestamp, "tzinfo", None) is None:
+    if real_orderbook_timestamp is None and not allow_received_shadow:
+        _log_decision(features, prediction, None, None, None, "MISSING_ORDERBOOK_TIMESTAMP")
+        return
+    if real_orderbook_timestamp is not None and getattr(real_orderbook_timestamp, "tzinfo", None) is None:
+        _log_decision(features, prediction, None, None, None, "NAIVE_ORDERBOOK_TIMESTAMP")
+        return
+    if getattr(real_received_timestamp, "tzinfo", None) is None:
         _log_decision(features, prediction, None, None, None, "NAIVE_ORDERBOOK_TIMESTAMP")
         return
     if visible_depth is None or float(visible_depth) <= 0:
@@ -123,7 +143,7 @@ def sync_sports_market(
         return
     fee_per_share = float(fee_per_share if fee_per_share is not None else fee_check)
 
-    # 2. Build TradeCandidate (YES on selected contract outcome token)
+    # 2. Build TradeCandidate (buy the selected outcome token)
     side = "YES"
     executable_cost = best_ask + fee_per_share + 0.005  # with slippage
 
@@ -132,7 +152,7 @@ def sync_sports_market(
         return
 
     candidate = TradeCandidate(
-        strategy="sports_quant_v1",
+        strategy=strategy,
         platform=market_data.get("platform", "polymarket"),
         market_id=features.market_id,
         outcome_id=str(token_id),
@@ -178,6 +198,7 @@ def sync_sports_market(
         orderbook_timestamp=real_orderbook_timestamp,
         received_timestamp=real_received_timestamp,
         mode=mode,
+        allow_received_timestamp_for_shadow=allow_received_shadow,
     )
 
     if fill.rejection_reason:
@@ -224,8 +245,9 @@ def _log_decision(
         "outcome_id": order.candidate.outcome_id if order else (features.sport_specific or {}).get("outcome_token_id"),
         "team_a": features.team_a,
         "team_b": features.team_b,
-        "market_type": features.sport_specific.get("market_type", "moneyline"),
-        "resolution_rule": features.sport_specific.get("resolution_rule", "standard"),
+        "market_type": (features.sport_specific or {}).get("market_type", "moneyline"),
+        "strategy": (features.sport_specific or {}).get("strategy"),
+        "resolution_rule": (features.sport_specific or {}).get("resolution_rule", "standard"),
         "snapshot_time": features.snapshot_time.isoformat() if features.snapshot_time else None,
         "event_start_time": features.start_time.isoformat() if features.start_time else None,
         "feature_snapshot": prediction.feature_snapshot,
@@ -240,6 +262,7 @@ def _log_decision(
         "sized_order": order.__dict__ if order else None,
         "paper_fill": fill.__dict__ if fill else None,
         "clv_record_id": clv_record.trade_id if clv_record else None,
+        "clv_obligation_created": clv_record is not None,
         "received_timestamp": order.candidate.received_timestamp.isoformat() if order and hasattr(order.candidate, "received_timestamp") and order.candidate.received_timestamp else None,
         "orderbook_timestamp": order.candidate.orderbook_timestamp.isoformat() if order and hasattr(order.candidate, "orderbook_timestamp") and order.candidate.orderbook_timestamp else None,
         "rejection_reason": rejection_reason,

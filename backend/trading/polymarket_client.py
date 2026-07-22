@@ -71,6 +71,8 @@ class PolyMarket:
     venue: str = "polymarket"
     received_timestamp: datetime | None = None
     exchange_timestamp: datetime | None = None
+    # Proven Kalshi YES proposition team (canonical), when known
+    yes_proposition_team: str | None = None
 
     def outcome_by_name(self, name: str) -> Outcome | None:
         target = name.strip().lower()

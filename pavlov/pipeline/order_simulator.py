@@ -46,23 +46,38 @@ def validate_orderbook_freshness(
     received_timestamp: Optional[datetime],
     mode: Literal["live", "shadow", "paper"] = "live",
     allow_assumed_fresh_orderbook_for_shadow: bool = False,
-    max_orderbook_age_ms: int = 2000
+    max_orderbook_age_ms: int = 2000,
+    allow_received_timestamp_for_shadow: bool = False,
 ) -> None:
     """Validate exchange orderbook freshness for evidence-grade fills.
 
-    Exchange ``orderbook_timestamp`` is required. ``received_timestamp`` alone
-    is not sufficient for acceptance. Naive timestamps are rejected.
-    Assumed-freshness shortcuts are invalid for fills (even if requested).
+    Exchange ``orderbook_timestamp`` is required in live mode.
+    In shadow only, when ``allow_received_timestamp_for_shadow`` is True and the
+    venue provides no exchange book time (e.g. Kalshi), freshness may be assessed
+    from ``received_timestamp`` captured at the HTTP response boundary. That
+    receipt time must never be labeled as an exchange/order-book timestamp.
     """
     if allow_assumed_fresh_orderbook_for_shadow:
         raise ValueError("ASSUMED_FRESHNESS_INVALID")
 
     orderbook_timestamp = _parse_utc_timestamp(orderbook_timestamp)
-    # Validate received_timestamp shape if present (naive still illegal),
-    # but do not use it as a substitute for exchange orderbook time.
-    _parse_utc_timestamp(received_timestamp)
+    received_timestamp = _parse_utc_timestamp(received_timestamp)
 
     if orderbook_timestamp is None:
+        if (
+            mode == "shadow"
+            and allow_received_timestamp_for_shadow
+            and received_timestamp is not None
+        ):
+            now = datetime.now(timezone.utc)
+            age_ms = (now - received_timestamp).total_seconds() * 1000.0
+            if age_ms > max_orderbook_age_ms:
+                logger.warning(
+                    f"STALE_ORDERBOOK: received_timestamp age is {age_ms:.0f}ms "
+                    f"(max {max_orderbook_age_ms}ms)"
+                )
+                raise ValueError("STALE_ORDERBOOK")
+            return
         raise ValueError("MISSING_ORDERBOOK_TIMESTAMP")
 
     now = datetime.now(timezone.utc)
@@ -71,6 +86,7 @@ def validate_orderbook_freshness(
     if age_ms > max_orderbook_age_ms:
         logger.warning(f"STALE_ORDERBOOK: age is {age_ms:.0f}ms (max {max_orderbook_age_ms}ms)")
         raise ValueError("STALE_ORDERBOOK")
+
 
 def reprice_and_validate(
     original_order: SizedOrder,
@@ -120,7 +136,8 @@ def simulate_paper_fill(
     orderbook_timestamp: Optional[datetime],
     received_timestamp: Optional[datetime],
     mode: Literal["live", "shadow", "paper"] = "live",
-    allow_assumed_fresh_orderbook_for_shadow: bool = False
+    allow_assumed_fresh_orderbook_for_shadow: bool = False,
+    allow_received_timestamp_for_shadow: bool = False,
 ) -> PaperFill:
     # Assumed freshness is never valid for evidence fills.
     if allow_assumed_fresh_orderbook_for_shadow:
@@ -144,10 +161,11 @@ def simulate_paper_fill(
 
     try:
         validate_orderbook_freshness(
-            orderbook_timestamp, 
-            received_timestamp, 
-            mode=mode, 
-            allow_assumed_fresh_orderbook_for_shadow=False
+            orderbook_timestamp,
+            received_timestamp,
+            mode=mode,
+            allow_assumed_fresh_orderbook_for_shadow=False,
+            allow_received_timestamp_for_shadow=allow_received_timestamp_for_shadow,
         )
     except ValueError as e:
         return PaperFill(

@@ -19,17 +19,22 @@ class VenueRouter:
         *,
         tag_slug: str | None = None,
         search: str | None = None,
+        series_ticker: str | None = None,
         limit: int = 200,
     ) -> List[PolyMarket]:
-        """Fetch markets from both venues concurrently."""
-        
-        # We run both fetches in parallel.
-        # Note: Kalshi uses `search` as a series ticker or title filter.
+        """Fetch markets from both venues concurrently.
+
+        Free-text ``search`` is Polymarket-only. Kalshi only accepts an explicit
+        ``series_ticker`` (never a team name as series_ticker).
+        """
         poly_task = self.poly.fetch_markets(tag_slug=tag_slug, search=search, limit=limit)
-        kalshi_task = self.kalshi.fetch_markets(tag_slug=tag_slug, search=search, limit=limit)
+        kalshi_task = self.kalshi.fetch_markets(
+            series_ticker=series_ticker,
+            limit=limit,
+        )
 
         results = await asyncio.gather(poly_task, kalshi_task, return_exceptions=True)
-        
+
         all_markets = []
         if isinstance(results[0], list):
             for m in results[0]:
@@ -37,7 +42,7 @@ class VenueRouter:
                 all_markets.append(m)
         else:
             logger.warning(f"VenueRouter: Polymarket fetch failed: {results[0]}")
-            
+
         if isinstance(results[1], list):
             for m in results[1]:
                 m.venue = "kalshi"
@@ -47,6 +52,22 @@ class VenueRouter:
 
         logger.info(f"VenueRouter: found {len(all_markets)} total markets across venues.")
         return all_markets
+
+    async def fetch_mlb_moneyline_markets(self, *, poly_search: str, limit: int = 80) -> List[PolyMarket]:
+        """Polymarket search + Kalshi KXMLBGAME events; local filter by matcher."""
+        poly_task = self.poly.fetch_markets(search=poly_search, limit=limit)
+        kalshi_task = self.kalshi.fetch_mlb_game_markets(limit=limit)
+        results = await asyncio.gather(poly_task, kalshi_task, return_exceptions=True)
+        out: List[PolyMarket] = []
+        if isinstance(results[0], list):
+            for m in results[0]:
+                m.venue = "polymarket"
+                out.append(m)
+        if isinstance(results[1], list):
+            for m in results[1]:
+                m.venue = "kalshi"
+                out.append(m)
+        return out
 
     async def get_book_depth(
         self, 

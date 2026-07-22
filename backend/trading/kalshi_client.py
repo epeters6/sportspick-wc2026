@@ -29,6 +29,9 @@ from backend.trading.polymarket_client import PolyMarket, Outcome
 
 BASE_URL = "https://external-api.kalshi.com/trade-api/v2"
 
+# Official Kalshi MLB game series — never substitute a free-text team name.
+KALSHI_MLB_SERIES_TICKER = "KXMLBGAME"
+
 # Tracks monotonic time of the last request to avoid 429s (Kalshi has strict limits)
 _last_request_time: float = 0.0
 _MIN_REQUEST_GAP = 0.5  # 500ms
@@ -125,16 +128,31 @@ class KalshiClient:
         *,
         tag_slug: str | None = None,
         search: str | None = None,
+        series_ticker: str | None = None,
         limit: int = 200,
     ) -> list[PolyMarket]:
+        """
+        Fetch open Kalshi markets.
+
+        ``series_ticker`` must be a real Kalshi series code (e.g. KXMLBGAME).
+        Free-text ``search`` is never sent as series_ticker.
+        """
         markets: list[PolyMarket] = []
         async with httpx.AsyncClient(timeout=20) as client:
             params: dict[str, Any] = {
                 "status": "open",
                 "limit": limit,
             }
-            if search:
-                params["series_ticker"] = search.upper()
+            if series_ticker:
+                params["series_ticker"] = str(series_ticker).upper()
+            elif search:
+                # Do not pass team names / free text as series_ticker.
+                logger.warning(
+                    "Kalshi fetch_markets: refusing free-text search=%r as series_ticker; "
+                    "use series_ticker= or fetch_mlb_game_markets()",
+                    search,
+                )
+                return []
 
             try:
                 data = await self._get(client, "/markets", params)
@@ -142,7 +160,7 @@ class KalshiClient:
             except Exception as exc:
                 logger.warning(f"Kalshi fetch_markets failed: {exc}")
                 return []
-            
+
             received_at = datetime.now(timezone.utc)
 
             for raw in raw_markets:
@@ -153,15 +171,69 @@ class KalshiClient:
         logger.info(f"Kalshi: fetched {len(markets)} tradeable markets")
         return markets
 
+    async def fetch_mlb_game_markets(self, *, limit: int = 200) -> list[PolyMarket]:
+        """
+        Discover current MLB game-winner markets via the events/series API,
+        then parse nested markets. Filter locally by teams/date in the matcher.
+        """
+        markets: list[PolyMarket] = []
+        async with httpx.AsyncClient(timeout=30) as client:
+            cursor: str | None = None
+            fetched_events = 0
+            while fetched_events < limit:
+                params: dict[str, Any] = {
+                    "status": "open",
+                    "series_ticker": KALSHI_MLB_SERIES_TICKER,
+                    "with_nested_markets": "true",
+                    "limit": min(200, limit - fetched_events),
+                }
+                if cursor:
+                    params["cursor"] = cursor
+                try:
+                    data = await self._get(client, "/events", params)
+                except Exception as exc:
+                    logger.warning(f"Kalshi MLB events fetch failed: {exc}")
+                    break
+                received_at = datetime.now(timezone.utc)
+                events = data.get("events") or []
+                if not events:
+                    break
+                for evt in events:
+                    fetched_events += 1
+                    evt_title = str(evt.get("title") or "")
+                    evt_ticker = str(evt.get("event_ticker") or evt.get("ticker") or "")
+                    nested = evt.get("markets") or []
+                    # Some responses put markets at top-level keyed by event
+                    for raw in nested:
+                        raw = dict(raw)
+                        if not raw.get("title") and evt_title:
+                            raw["title"] = evt_title
+                        if not raw.get("event_ticker"):
+                            raw["event_ticker"] = evt_ticker
+                        pm = self._parse_market(raw, received_at, event_title=evt_title)
+                        if pm and pm.accepting_orders and not pm.closed:
+                            pm.venue = "kalshi"
+                            markets.append(pm)
+                cursor = data.get("cursor") or None
+                if not cursor:
+                    break
+
+        logger.info(f"Kalshi: fetched {len(markets)} MLB game markets via {KALSHI_MLB_SERIES_TICKER}")
+        return markets
+
     @staticmethod
-    def _parse_market(raw: dict, received_at: datetime | None = None) -> PolyMarket | None:
+    def _parse_market(
+        raw: dict,
+        received_at: datetime | None = None,
+        event_title: str | None = None,
+    ) -> PolyMarket | None:
         try:
             # Kalshi returns yes/no markets usually.
             yes_ask = raw.get("yes_ask", 0)
             yes_bid = raw.get("yes_bid", 0)
             no_ask = raw.get("no_ask", 0)
             no_bid = raw.get("no_bid", 0)
-            
+
             # Kalshi prices are in cents (1-99), convert to (0-1) range.
             yes_price = yes_ask / 100.0 if yes_ask else (yes_bid / 100.0 if yes_bid else 0.5)
             no_price = no_ask / 100.0 if no_ask else (no_bid / 100.0 if no_bid else 0.5)
@@ -171,19 +243,32 @@ class KalshiClient:
                 Outcome(name="No", token_id="no", price=no_price, best_bid=no_bid/100.0 if no_bid else None, best_ask=no_ask/100.0 if no_ask else None),
             ]
 
+            ticker = str(raw.get("ticker", ""))
+            title = str(raw.get("title") or event_title or "")
+            yes_team = None
+            # Ticker pattern ...-TEAM (YES side)
+            import re
+            from backend.models.sports.mlb_moneyline_match import _KALSHI_ABBR_TO_TEAM
+
+            m = re.search(r"-([A-Z]{2,3})$", ticker.upper())
+            if m:
+                yes_team = _KALSHI_ABBR_TO_TEAM.get(m.group(1))
+
             return PolyMarket(
-                market_id=str(raw.get("ticker", "")),
-                gamma_id=str(raw.get("ticker", "")),
-                slug=str(raw.get("ticker", "")),
-                question=str(raw.get("title", "")),
+                market_id=ticker,
+                gamma_id=ticker,
+                slug=ticker,
+                question=title,
                 outcomes=outcomes,
                 liquidity=float(raw.get("liquidity") or 0) / 100.0,
                 volume_24h=float(raw.get("volume_24h") or 0) / 100.0,
-                end_date=raw.get("close_time"),
-                accepting_orders=True, # status=open implies accepting orders
+                end_date=raw.get("close_time") or raw.get("expected_expiration_time"),
+                accepting_orders=True,  # status=open implies accepting orders
                 closed=False,
+                venue="kalshi",
                 received_timestamp=received_at or datetime.now(timezone.utc),
-                exchange_timestamp=None, # Kalshi GET /markets doesn't have a reliable last updated at
+                exchange_timestamp=None,
+                yes_proposition_team=yes_team,
             )
         except Exception as exc:
             logger.debug(f"Could not parse Kalshi market: {exc}")
@@ -197,10 +282,22 @@ class KalshiClient:
             "bid_size": 0.0,
             "ask_size": 0.0,
             "book_timestamp": None,
+            "received_timestamp": None,
+            "missing_orderbook_timestamp": True,
+            "timestamp_source": None,
         }
+        received_at: datetime | None = None
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                book = await self._get(client, f"/markets/{market_id}/orderbook")
+                await self._rate_limit()
+                headers = self._sign_request("GET", f"/trade-api/v2/markets/{market_id}/orderbook")
+                r = await client.get(
+                    f"{BASE_URL}/markets/{market_id}/orderbook", headers=headers
+                )
+                r.raise_for_status()
+                # Capture receipt at the real HTTP response boundary
+                received_at = datetime.now(timezone.utc)
+                book = r.json()
         except Exception as exc:
             logger.debug(f"Kalshi book fetch failed for {market_id}: {exc}")
             return empty
@@ -215,7 +312,7 @@ class KalshiClient:
             best_bid = float(bids[0][0]) / 100.0 if bids else None
             bid_size = float(bids[0][1]) if bids else 0.0
         except (TypeError, ValueError, IndexError):
-            return empty
+            return {**empty, "received_timestamp": received_at}
         return {
             "best_bid": best_bid,
             "best_ask": best_ask,
@@ -223,6 +320,9 @@ class KalshiClient:
             "ask_size": ask_size,
             # Kalshi orderbook payload has no exchange timestamp — do not invent one.
             "book_timestamp": None,
+            "received_timestamp": received_at,
+            "missing_orderbook_timestamp": True,
+            "timestamp_source": "received_timestamp",
         }
 
     async def get_book_depth(self, token_id: str, market_id: str, side: str = "sell") -> tuple[float | None, float]:

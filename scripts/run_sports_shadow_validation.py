@@ -71,8 +71,22 @@ async def run_validation():
             )
         report = run_analysis(decisions_file=decisions_path)
 
-        # 4. Write timestamped report
+        # Attach moneyline per-venue + pitcher-outs availability from status artifact
         today_str = datetime.now().strftime("%Y-%m-%d")
+        status_art = os.path.join(
+            repo_root, "reports", "sports_shadow", f"{today_str}_mlb_shadow_status.json"
+        )
+        if os.path.exists(status_art):
+            try:
+                with open(status_art, "r") as f:
+                    mlb_status = json.load(f)
+                report["mlb_moneyline"] = mlb_status.get("moneyline")
+                report["pitcher_outs"] = mlb_status.get("pitcher_outs")
+                report["by_venue"] = (mlb_status.get("moneyline") or {}).get("by_venue")
+            except Exception as exc:
+                logger.warning(f"Could not merge mlb shadow status: {exc}")
+
+        # 4. Write timestamped report
         report_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports", "sports_shadow")
         os.makedirs(report_dir, exist_ok=True)
 
