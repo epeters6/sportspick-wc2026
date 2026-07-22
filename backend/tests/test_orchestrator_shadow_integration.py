@@ -4,10 +4,11 @@ from __future__ import annotations
 import asyncio
 import unittest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 from backend.models.sports.run_shadow_mlb import (
     PREGAME_MODEL_UNAVAILABLE,
+    MLB_SHADOW_ZERO_PROCESSED,
     _pitcher_outs_prob,
     run_mlb_shadow_execution,
 )
@@ -82,6 +83,37 @@ class TestOrchestratorShadowIntegration(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 asyncio.run(run_mlb_shadow_execution())
         self.assertIn(PREGAME_MODEL_UNAVAILABLE, str(ctx.exception))
+        self.assertNotIn(MLB_SHADOW_ZERO_PROCESSED, str(ctx.exception))
+
+    def test_run_shadow_zero_processed_not_mislabeled_as_pregame(self):
+        """Matching/depth rejects must use MLB_SHADOW_ZERO_PROCESSED, not model gap."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        manifest = {
+            "12345": _orchestrator_manifest_entry(
+                slate_date=today,
+                prediction={"under_proba": 0.58, "over_proba": 0.42},
+            ),
+        }
+        mock_router = AsyncMock()
+        mock_router.fetch_markets = AsyncMock(return_value=[])
+        with patch(
+            "backend.ml.mlb_quant.orchestrator.load_existing_manifest",
+            return_value=manifest,
+        ), patch(
+            "backend.models.sports.run_shadow_mlb.VenueRouter",
+            return_value=mock_router,
+        ), patch(
+            "backend.models.sports.run_shadow_mlb.get_db",
+            return_value=MagicMock(),
+        ), patch(
+            "backend.models.sports.run_shadow_mlb._current_bankroll",
+            return_value=1000.0,
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                asyncio.run(run_mlb_shadow_execution())
+        msg = str(ctx.exception)
+        self.assertIn(MLB_SHADOW_ZERO_PROCESSED, msg)
+        self.assertNotIn(PREGAME_MODEL_UNAVAILABLE, msg)
 
     def test_in_game_prediction_on_orchestrator_schema_accepted(self):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

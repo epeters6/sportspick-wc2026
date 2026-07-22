@@ -11,8 +11,10 @@ Probability source selection (explicit — do not invent):
 ``over_proba`` during games. That is *not* a substitute for pregame shadow.
 
 Until the pregame model is wired, this module reports
-``PREGAME_MODEL_UNAVAILABLE`` and refuses a successful zero-processed report.
-Live submission remains disabled (``mode="shadow"`` only).
+``PREGAME_MODEL_UNAVAILABLE`` for that model gap. A separate
+``MLB_SHADOW_ZERO_PROCESSED`` covers zero fills after unrelated rejects
+(matching, depth, timestamps, etc.). Live submission remains disabled
+(``mode="shadow"`` only).
 """
 import json
 import os
@@ -33,6 +35,7 @@ from backend.trading.autobet import _current_bankroll
 from backend.trading.market_matcher import _canonical, _parse_dt
 
 PREGAME_MODEL_UNAVAILABLE = "PREGAME_MODEL_UNAVAILABLE"
+MLB_SHADOW_ZERO_PROCESSED = "MLB_SHADOW_ZERO_PROCESSED"
 
 
 def _lookup_match_start(db, team: str, opp: str, slate_date: str | None) -> datetime | None:
@@ -379,7 +382,7 @@ async def run_mlb_shadow_execution():
 
     if processed == 0:
         raise RuntimeError(
-            f"{PREGAME_MODEL_UNAVAILABLE}: no pitcher-outs fills after "
+            f"{MLB_SHADOW_ZERO_PROCESSED}: no pitcher-outs fills after "
             f"rejects={rejected}; refusing successful zero report."
         )
 

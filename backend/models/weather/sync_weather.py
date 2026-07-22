@@ -78,6 +78,36 @@ def weather_candidate_id(
     return f"{platform}:{station}:{date_str}:{metric}:{market_id}:yes:{mode}"
 
 
+def init_weather_clv_record(
+    *,
+    candidate_id: str,
+    market_id: str,
+    raw_m: dict,
+    fill,
+    platform: str,
+):
+    """
+    Persist weather CLV with market fill vs effective cost split.
+
+    outcome_id uses the Polymarket YES token when present so book lookups work.
+    entry_market_price = simulated_fill_price; entry_effective_cost = limit_price.
+    """
+    from pavlov.pipeline.clv_tracker import init_clv_record
+
+    outcome_id = str(raw_m.get("yes_token") or "yes")
+    return init_clv_record(
+        trade_id=candidate_id,
+        market_id=market_id,
+        outcome_id=outcome_id,
+        side="YES",
+        entry_price=fill.simulated_fill_price,
+        entry_market_price=fill.simulated_fill_price,
+        entry_effective_cost=fill.limit_price,
+        entry_time=datetime.now(timezone.utc),
+        platform=platform,
+    )
+
+
 async def sync_weather_predictions():
     logger.info("Starting rewritten weather prediction sync & portfolio optimization...")
     db = get_db()
@@ -376,7 +406,7 @@ async def sync_weather_predictions():
             
         from pavlov.pipeline.trade_candidate import TradeCandidate, SizedOrder
         from pavlov.pipeline.order_simulator import simulate_paper_fill, PaperFill
-        from pavlov.pipeline.clv_tracker import init_clv_record, log_clv_record
+        from pavlov.pipeline.clv_tracker import log_clv_record
         import json
         import os
         
@@ -556,13 +586,11 @@ async def sync_weather_predictions():
             with open("paper_fills.jsonl", "a") as f:
                 f.write(json.dumps(paper_order) + "\n")
 
-            clv_rec = init_clv_record(
-                trade_id=candidate_id,
+            clv_rec = init_weather_clv_record(
+                candidate_id=candidate_id,
                 market_id=event.market_id,
-                outcome_id="yes",
-                side="YES",
-                entry_price=fill.limit_price,
-                entry_time=datetime.now(timezone.utc),
+                raw_m=raw_m,
+                fill=fill,
                 platform=platform,
             )
             log_clv_record(clv_rec)
