@@ -1,3 +1,19 @@
+"""
+MLB shadow execution — pitcher-outs contracts only.
+
+Probability source selection (explicit — do not invent):
+-------------------------------------------------------
+**Selected for pregame paper/shadow:** a dedicated *pregame pitcher-outs model*
+(not yet implemented/wired into this path).
+
+**Separate workflow:** the in-game fatigue engine
+(``mlb_pitcher_fatigue_engine_v4``) attaches live ``under_proba`` /
+``over_proba`` during games. That is *not* a substitute for pregame shadow.
+
+Until the pregame model is wired, this module reports
+``PREGAME_MODEL_UNAVAILABLE`` and refuses a successful zero-processed report.
+Live submission remains disabled (``mode="shadow"`` only).
+"""
 import json
 import os
 import sys
@@ -15,6 +31,8 @@ from backend.models.sports.sync_sports import sync_sports_market
 from backend.models.sports.mlb_contract_match import match_pitcher_outs_contract
 from backend.trading.autobet import _current_bankroll
 from backend.trading.market_matcher import _canonical, _parse_dt
+
+PREGAME_MODEL_UNAVAILABLE = "PREGAME_MODEL_UNAVAILABLE"
 
 
 def _lookup_match_start(db, team: str, opp: str, slate_date: str | None) -> datetime | None:
@@ -81,8 +99,11 @@ def _resolve_event_times(
 
 def _pitcher_outs_prob(data: dict, side: str) -> tuple[float, dict]:
     """
-    Require the pitcher-outs engine / manifest to supply under/over probabilities.
-    No hard-coded expected-outs logistic fallback.
+    Use only probabilities supplied by the selected model path.
+
+    - Pregame model: not yet wired → PREGAME_MODEL_UNAVAILABLE
+    - In-game fatigue: may attach prediction={{under_proba, over_proba}} — accepted
+      when present (separate workflow artifact), never invented here.
     """
     meta = {
         "model_version": data.get("model_version") or "mlb_pitcher_outs_v4",
@@ -99,9 +120,28 @@ def _pitcher_outs_prob(data: dict, side: str) -> tuple[float, dict]:
             p = float(under_p if side == "UNDER" else over_p)
             if p <= 0.0 or p >= 1.0:
                 return 0.0, {**meta, "rejection": "PITCHER_OUTS_PRED_OUT_OF_RANGE"}
-            return p, {**meta, "prob_method": "pitcher_outs_engine"}
+            return p, {**meta, "prob_method": "in_game_fatigue_prediction"}
 
-    return 0.0, {**meta, "rejection": "PITCHER_OUTS_PRED_MISSING"}
+    return 0.0, {
+        **meta,
+        "rejection": PREGAME_MODEL_UNAVAILABLE,
+        "note": (
+            "Selected path is a pregame pitcher-outs model (not yet implemented). "
+            "In-game fatigue is a separate workflow — do not invent pregame probs."
+        ),
+    }
+
+
+def _slate_has_in_game_prediction(manifest: dict, today_str: str) -> bool:
+    for data in manifest.values():
+        if not isinstance(data, dict):
+            continue
+        if data.get("slate_date") and data.get("slate_date") != today_str:
+            continue
+        pred = data.get("prediction")
+        if isinstance(pred, dict) and pred.get("under_proba") is not None and pred.get("over_proba") is not None:
+            return True
+    return False
 
 
 async def run_mlb_shadow_execution():
@@ -131,10 +171,19 @@ async def run_mlb_shadow_execution():
     if not manifest:
         raise RuntimeError("MLB_MANIFEST_EMPTY")
 
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Refuse successful zero report when pregame model is unavailable and no
+    # in-game prediction artifacts are present on today's slate.
+    if not _slate_has_in_game_prediction(manifest, today_str):
+        raise RuntimeError(
+            f"{PREGAME_MODEL_UNAVAILABLE}: pregame pitcher-outs model not wired; "
+            "in-game fatigue is a separate workflow. Refusing successful zero report."
+        )
+
     router = VenueRouter()
     db = get_db()
     bankroll = _current_bankroll(db)
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     risk_caps = RiskCaps(
         max_event_exposure_pct=0.05,
@@ -236,7 +285,6 @@ async def run_mlb_shadow_execution():
         )
         received_ts = datetime.now(timezone.utc)
 
-        # No outcome.price / liquidity / fabricated bid / fixed-spread fallbacks
         if best_ask is None or best_bid is None:
             logger.info(f"MISSING_TOP_OF_BOOK: {pitcher} market={target_market.market_id}")
             rejected += 1
@@ -328,6 +376,12 @@ async def run_mlb_shadow_execution():
             outcome_id=str(token_id),
         )
         processed += 1
+
+    if processed == 0:
+        raise RuntimeError(
+            f"{PREGAME_MODEL_UNAVAILABLE}: no pitcher-outs fills after "
+            f"rejects={rejected}; refusing successful zero report."
+        )
 
     logger.info(
         f"MLB shadow execution complete. processed={processed} rejected={rejected}"

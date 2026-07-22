@@ -19,13 +19,17 @@ def load_clv_records(filepath: str = "clv_tracking.jsonl") -> List[CLVRecord]:
         with open(filepath, "r") as f:
             for line in f:
                 data = json.loads(line)
+                market = data.get("entry_market_price", data.get("entry_price"))
+                effective = data.get("entry_effective_cost", market)
                 rec = CLVRecord(
                     trade_id=data["trade_id"],
                     market_id=data["market_id"],
                     outcome_id=data["outcome_id"],
                     side=data["side"],
-                    entry_price=data["entry_price"],
                     entry_time=datetime.fromisoformat(data["entry_time"]),
+                    entry_market_price=float(market),
+                    entry_effective_cost=float(effective),
+                    entry_price=float(market),
                     price_after_15m=data.get("price_after_15m"),
                     price_after_1h=data.get("price_after_1h"),
                     pre_event_price=data.get("pre_event_price"),
@@ -51,7 +55,9 @@ def save_clv_records(records: List[CLVRecord], filepath: str = "clv_tracking.jso
                 "market_id": r.market_id,
                 "outcome_id": r.outcome_id,
                 "side": r.side,
-                "entry_price": r.entry_price,
+                "entry_market_price": r.entry_market_price,
+                "entry_effective_cost": r.entry_effective_cost,
+                "entry_price": r.entry_market_price,
                 "entry_time": r.entry_time.isoformat(),
                 "price_after_15m": r.price_after_15m,
                 "price_after_1h": r.price_after_1h,
@@ -67,10 +73,23 @@ def save_clv_records(records: List[CLVRecord], filepath: str = "clv_tracking.jso
             f.write(json.dumps(data) + "\n")
 
 
-def calculate_clv(entry_price: float, current_price: float, side: str) -> float:
-    """CLV when current_price is the executable price of the same side we bought."""
-    return current_price - entry_price
+def calculate_market_clv(
+    entry_market_price: float, current_price: float, side: str
+) -> float:
+    """Market CLV: current executable − entry market fill (simulated_fill_price)."""
+    return current_price - entry_market_price
 
+
+def calculate_execution_adjusted_clv(
+    entry_effective_cost: float, current_price: float, side: str
+) -> float:
+    """Execution-adjusted CLV: current executable − entry effective cost (limit_price)."""
+    return current_price - entry_effective_cost
+
+
+def calculate_clv(entry_price: float, current_price: float, side: str) -> float:
+    """Legacy alias for market CLV."""
+    return calculate_market_clv(entry_price, current_price, side)
 
 def _parse_ts(value: Any) -> Optional[datetime]:
     if value is None:
@@ -121,7 +140,8 @@ async def update_clv_checkpoints(
                 r.missing_market_price = False
                 logger.info(
                     f"Updated AFTER_15M for {r.trade_id}: {p} "
-                    f"(CLV: {calculate_clv(r.entry_price, p, r.side)})"
+                    f"(market_CLV: {calculate_market_clv(r.entry_market_price, p, r.side)}, "
+                    f"exec_CLV: {calculate_execution_adjusted_clv(r.entry_effective_cost, p, r.side)})"
                 )
                 updated = True
             else:

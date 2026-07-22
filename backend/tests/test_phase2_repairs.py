@@ -66,8 +66,9 @@ class TestClvObligationUpsert(unittest.TestCase):
             market_id="m",
             outcome_id="yes",
             side="YES",
-            entry_price=0.5,
             entry_time=datetime.now(timezone.utc),
+            entry_market_price=0.5,
+            entry_effective_cost=0.52,
         )
         with patch("backend.db.get_db", side_effect=RuntimeError("no creds")):
             # Must not raise
@@ -100,11 +101,11 @@ class TestSettlementResolutionSource(unittest.TestCase):
 
 class TestPitcherOutsNoLogisticFallback(unittest.TestCase):
     def test_missing_prediction_rejects(self):
-        from backend.models.sports.run_shadow_mlb import _pitcher_outs_prob
+        from backend.models.sports.run_shadow_mlb import _pitcher_outs_prob, PREGAME_MODEL_UNAVAILABLE
 
         p, meta = _pitcher_outs_prob({"prop_line": 17.5}, "UNDER")
         self.assertEqual(p, 0.0)
-        self.assertEqual(meta.get("rejection"), "PITCHER_OUTS_PRED_MISSING")
+        self.assertEqual(meta.get("rejection"), PREGAME_MODEL_UNAVAILABLE)
 
     def test_engine_prediction_used(self):
         from backend.models.sports.run_shadow_mlb import _pitcher_outs_prob
@@ -115,7 +116,7 @@ class TestPitcherOutsNoLogisticFallback(unittest.TestCase):
         )
         self.assertAlmostEqual(p, 0.62)
         self.assertIsNone(meta.get("rejection"))
-        self.assertEqual(meta.get("prob_method"), "pitcher_outs_engine")
+        self.assertEqual(meta.get("prob_method"), "in_game_fatigue_prediction")
 
 
 class TestGuardianHaltFailClosed(unittest.TestCase):

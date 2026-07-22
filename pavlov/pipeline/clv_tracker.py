@@ -13,8 +13,13 @@ class CLVRecord:
     market_id: str
     outcome_id: str
     side: str
-    entry_price: float
     entry_time: datetime
+    # Market fill (simulated_fill_price / best ask) — used for market CLV
+    entry_market_price: float
+    # Effective cost (limit_price = ask + fee + slippage) — execution-adjusted CLV
+    entry_effective_cost: float
+    # Legacy alias: same as entry_market_price (jsonl / older readers)
+    entry_price: Optional[float] = None
     price_after_15m: Optional[float] = None
     price_after_1h: Optional[float] = None
     pre_event_price: Optional[float] = None
@@ -25,6 +30,10 @@ class CLVRecord:
     missing_market_price_reason: Optional[str] = None
     last_clv_update_attempt: Optional[str] = None
     clv_update_error: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.entry_price is None:
+            self.entry_price = float(self.entry_market_price)
 
 
 def _upsert_clv_obligation(
@@ -42,13 +51,17 @@ def _upsert_clv_obligation(
         close = due_close
         if close is not None and close.tzinfo is None:
             close = close.replace(tzinfo=timezone.utc)
+        market_px = float(record.entry_market_price)
+        effective = float(record.entry_effective_cost)
         row = {
             "candidate_id": record.trade_id,
             "platform": platform or "unknown",
             "market_id": record.market_id,
             "outcome_id": record.outcome_id,
             "side": record.side,
-            "entry_price": float(record.entry_price),
+            "entry_price": market_px,  # legacy column = market fill
+            "entry_market_price": market_px,
+            "entry_effective_cost": effective,
             "entry_ts": entry.isoformat(),
             "due_15m": (entry + timedelta(minutes=15)).isoformat(),
             "due_1h": (entry + timedelta(hours=1)).isoformat(),
@@ -57,7 +70,16 @@ def _upsert_clv_obligation(
             "status_1h": "pending",
             "status_close": "pending",
         }
-        get_db().table("clv_obligations").upsert(row, on_conflict="candidate_id").execute()
+        # Soft-fail if new columns not yet migrated: retry without them
+        try:
+            get_db().table("clv_obligations").upsert(row, on_conflict="candidate_id").execute()
+        except Exception as col_exc:
+            if "entry_market_price" in str(col_exc) or "entry_effective_cost" in str(col_exc):
+                row.pop("entry_market_price", None)
+                row.pop("entry_effective_cost", None)
+                get_db().table("clv_obligations").upsert(row, on_conflict="candidate_id").execute()
+            else:
+                raise
     except Exception as exc:
         logger.debug("clv_obligations upsert skipped: %s", exc)
 
@@ -71,14 +93,31 @@ def init_clv_record(
     entry_time: datetime,
     platform: Optional[str] = None,
     due_close: Optional[datetime] = None,
+    *,
+    entry_market_price: Optional[float] = None,
+    entry_effective_cost: Optional[float] = None,
 ) -> CLVRecord:
+    """
+    Create a CLV record.
+
+    Positional ``entry_price`` is the legacy market-fill argument.
+    Prefer also passing ``entry_market_price`` (= simulated_fill_price) and
+    ``entry_effective_cost`` (= limit_price) so both CLV variants are stored.
+    """
+    market = float(
+        entry_market_price if entry_market_price is not None else entry_price
+    )
+    effective = float(
+        entry_effective_cost if entry_effective_cost is not None else entry_price
+    )
     rec = CLVRecord(
         trade_id=trade_id,
         market_id=market_id,
         outcome_id=outcome_id,
         side=side,
-        entry_price=entry_price,
         entry_time=entry_time,
+        entry_market_price=market,
+        entry_effective_cost=effective,
     )
     _upsert_clv_obligation(rec, platform=platform, due_close=due_close)
     return rec
@@ -90,7 +129,9 @@ def log_clv_record(record: CLVRecord, filepath: str = "clv_tracking.jsonl") -> N
         "market_id": record.market_id,
         "outcome_id": record.outcome_id,
         "side": record.side,
-        "entry_price": record.entry_price,
+        "entry_market_price": record.entry_market_price,
+        "entry_effective_cost": record.entry_effective_cost,
+        "entry_price": record.entry_market_price,  # legacy alias
         "entry_time": record.entry_time.isoformat(),
         "price_after_15m": record.price_after_15m,
         "price_after_1h": record.price_after_1h,

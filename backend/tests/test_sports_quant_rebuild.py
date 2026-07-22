@@ -7,6 +7,7 @@ from pavlov.pipeline.mlb_model import build_mlb_features, predict_mlb_probabilit
 from pavlov.pipeline.soccer_model import build_soccer_features, predict_soccer_3way_probabilities, predict_soccer_binary_contract
 from pavlov.pipeline.sports_backtest_metrics import log_loss, brier_score, calibration_bins, mean_clv
 from backend.models.sports.sync_sports import sync_sports_market
+from backend.tests.clv_test_isolation import isolate_clv_db
 
 
 def _call_sync(market_data, features, best_ask, fee_per_share, visible_depth, bankroll, risk_caps, mode="shadow", **extra):
@@ -16,21 +17,22 @@ def _call_sync(market_data, features, best_ask, fee_per_share, visible_depth, ba
     if md.get("platform") == "test":
         md["platform"] = "polymarket"
     md.setdefault("outcome_id", "tok_test")
-    sync_sports_market(
-        md,
-        features,
-        best_ask,
-        fee_per_share,
-        visible_depth,
-        bankroll,
-        risk_caps,
-        mode=mode,
-        best_bid=extra.get("best_bid", max(0.01, float(best_ask) - 0.02) if best_ask is not None else 0.01),
-        spread=extra.get("spread", 0.02),
-        outcome_id=extra.get("outcome_id", md["outcome_id"]),
-        real_orderbook_timestamp=extra.get("real_orderbook_timestamp", now),
-        real_received_timestamp=extra.get("real_received_timestamp", now),
-    )
+    with isolate_clv_db():
+        sync_sports_market(
+            md,
+            features,
+            best_ask,
+            fee_per_share,
+            visible_depth,
+            bankroll,
+            risk_caps,
+            mode=mode,
+            best_bid=extra.get("best_bid", max(0.01, float(best_ask) - 0.02) if best_ask is not None else 0.01),
+            spread=extra.get("spread", 0.02),
+            outcome_id=extra.get("outcome_id", md["outcome_id"]),
+            real_orderbook_timestamp=extra.get("real_orderbook_timestamp", now),
+            real_received_timestamp=extra.get("real_received_timestamp", now),
+        )
 
 
 def make_base_features(

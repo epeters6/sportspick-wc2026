@@ -1,11 +1,13 @@
 import asyncio
 import unittest
 from datetime import datetime, timezone, timedelta
+from unittest.mock import patch
 from pavlov.pipeline.trade_candidate import TradeCandidate, SizedOrder
 from pavlov.pipeline.fee_model import estimate_fee_per_share
 from pavlov.pipeline.binary_kelly import binary_kelly_fraction, size_binary_trade
 from pavlov.pipeline.risk_caps import RiskCaps
 from pavlov.pipeline.order_simulator import validate_orderbook_freshness, simulate_paper_fill, reprice_and_validate
+from backend.tests.clv_test_isolation import isolate_clv_db
 
 def make_candidate(p=0.6, c=0.5, bankroll=1000.0, depth=100.0):
     # Reverse engineer the correct best_ask to match the target executable cost `c`
@@ -56,6 +58,13 @@ def make_risk_caps():
     )
 
 class TestExecutionLayer(unittest.TestCase):
+    def setUp(self):
+        self._clv_iso = isolate_clv_db()
+        self._clv_iso.__enter__()
+
+    def tearDown(self):
+        self._clv_iso.__exit__(None, None, None)
+
     # Fee Model
     def test_fee_model_used_by_execution_cost(self):
         fee = estimate_fee_per_share("polymarket", 0.5, 1.0)
@@ -210,6 +219,8 @@ class TestExecutionLayer(unittest.TestCase):
     def test_clv_record_created_on_paper_trade(self):
         from pavlov.pipeline.clv_tracker import init_clv_record
         rec = init_clv_record("t1", "m1", "o1", "YES", 0.5, datetime.now(timezone.utc))
+        self.assertEqual(rec.entry_market_price, 0.5)
+        self.assertEqual(rec.entry_effective_cost, 0.5)
         self.assertEqual(rec.entry_price, 0.5)
 
     def test_clv_side_aware_yes(self):
@@ -224,14 +235,15 @@ class TestExecutionLayer(unittest.TestCase):
 
     # CLV Updater
     def test_clv_yes_side_calculation(self):
-        from pavlov.pipeline.clv_updater import calculate_clv
-        # bought YES at 0.4. Now it's 0.6. CLV is 0.2
-        self.assertAlmostEqual(calculate_clv(0.4, 0.6, "YES"), 0.2)
+        from pavlov.pipeline.clv_updater import calculate_market_clv, calculate_execution_adjusted_clv
+        # bought YES at market 0.4 / effective 0.45. Now 0.6.
+        self.assertAlmostEqual(calculate_market_clv(0.4, 0.6, "YES"), 0.2)
+        self.assertAlmostEqual(calculate_execution_adjusted_clv(0.45, 0.6, "YES"), 0.15)
 
     def test_clv_no_side_calculation(self):
-        from pavlov.pipeline.clv_updater import calculate_clv
+        from pavlov.pipeline.clv_updater import calculate_market_clv
         # bought NO at 0.4. Now the NO price is 0.6. CLV is 0.2
-        self.assertAlmostEqual(calculate_clv(0.4, 0.6, "NO"), 0.2)
+        self.assertAlmostEqual(calculate_market_clv(0.4, 0.6, "NO"), 0.2)
 
     def test_clv_checkpoint_due_after_15m(self):
         from pavlov.pipeline.clv_updater import update_clv_checkpoints
@@ -336,7 +348,16 @@ class TestExecutionLayer(unittest.TestCase):
         self.assertGreater(fill.filled_shares, 0)
         
         # 4. CLV
-        rec = init_clv_record("tid", fill.market_id, fill.outcome_id, fill.side, fill.limit_price, now)
+        rec = init_clv_record(
+            "tid",
+            fill.market_id,
+            fill.outcome_id,
+            fill.side,
+            fill.simulated_fill_price,
+            now,
+            entry_market_price=fill.simulated_fill_price,
+            entry_effective_cost=fill.limit_price,
+        )
         log_clv_record(rec, "test_integration_clv.jsonl")
         
         from pavlov.pipeline.clv_updater import load_clv_records

@@ -184,16 +184,18 @@ def sync_sports_market(
         _log_decision(features, prediction, sized_order, fill, None, fill.rejection_reason)
         return
 
-    # 5. CLV Tracking — platform outcome/token id + close due at event start
+    # 5. CLV Tracking — market fill vs effective cost stored separately
     clv_record = init_clv_record(
         trade_id=f"sports_{features.event_id}_{int(datetime.now(timezone.utc).timestamp())}",
         market_id=features.market_id,
         outcome_id=str(token_id),
         side=side,
-        entry_price=fill.limit_price,
+        entry_price=fill.simulated_fill_price,
         entry_time=datetime.now(timezone.utc),
         platform=market_data.get("platform") or "unknown",
         due_close=features.start_time,
+        entry_market_price=fill.simulated_fill_price,
+        entry_effective_cost=fill.limit_price,
     )
     log_clv_record(clv_record, "sports_clv_tracking.jsonl")
 

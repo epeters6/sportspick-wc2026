@@ -2,11 +2,18 @@ import unittest
 import sys
 import os
 from datetime import datetime, timezone
+from backend.tests.clv_test_isolation import isolate_clv_db
 
 # External scrape integration is opt-in via RUN_EXTERNAL_SYNC_INTEGRATION=1
 # and is skipped by default in unit CI.
 
 class TestSportsShadowAudit(unittest.TestCase):
+    def setUp(self):
+        self._clv_iso = isolate_clv_db()
+        self._clv_iso.__enter__()
+
+    def tearDown(self):
+        self._clv_iso.__exit__(None, None, None)
     def test_new_mlb_quant_orchestrator_imports(self):
         import backend.ml.mlb_quant.orchestrator as orchestrator
         self.assertIsNotNone(orchestrator.setup_daily_slate)
@@ -235,7 +242,9 @@ class TestSportsShadowAudit(unittest.TestCase):
         
         rec = CLVRecord(
             trade_id="t1", market_id="m1", outcome_id="o1", side="YES",
-            entry_price=0.5, entry_time=datetime.now(timezone.utc)
+            entry_time=datetime.now(timezone.utc),
+            entry_market_price=0.5,
+            entry_effective_cost=0.5,
         )
         rec.missing_market_price = True
         rec.missing_market_price_checkpoint = "AFTER_15M"
