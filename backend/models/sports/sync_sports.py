@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from loguru import logger
 from pavlov.pipeline.sports_features import SportsEventFeatures
 from pavlov.pipeline.sports_probability_model import predict_sports_probability
@@ -10,6 +10,29 @@ from pavlov.pipeline.risk_caps import RiskCaps
 from pavlov.pipeline.order_simulator import simulate_paper_fill
 from pavlov.pipeline.clv_tracker import init_clv_record, log_clv_record
 from pavlov.pipeline.fee_model import estimate_fee_per_share
+
+
+def _sync_result(
+    *,
+    rejection_reason: Optional[str] = None,
+    would_trade: bool = False,
+    paper_filled: bool = False,
+    clv_obligation_created: bool = False,
+    executable_cost: Optional[float] = None,
+    net_edge: Optional[float] = None,
+    extra: Optional[dict] = None,
+) -> dict[str, Any]:
+    out = {
+        "rejection_reason": rejection_reason,
+        "would_trade": would_trade,
+        "paper_filled": paper_filled,
+        "clv_obligation_created": clv_obligation_created,
+        "executable_cost": executable_cost,
+        "net_edge": net_edge,
+    }
+    if extra:
+        out.update(extra)
+    return out
 
 
 def sync_sports_market(
@@ -26,7 +49,7 @@ def sync_sports_market(
     best_bid: Optional[float] = None,
     spread: Optional[float] = None,
     outcome_id: Optional[str] = None,
-):
+) -> dict[str, Any]:
     if mode != "live":
         # Hard guard to ensure no live orders can be placed from shadow/paper mode
         submit_live_orders = False
@@ -92,13 +115,27 @@ def sync_sports_market(
     if override is not None:
         prediction.model_prob = float(override)
         if isinstance(features.sport_specific, dict):
-            for k in ("model_version", "feature_version", "coefficient_source", "calibration_status"):
+            for k in (
+                "model_version",
+                "feature_version",
+                "coefficient_source",
+                "calibration_status",
+                "model_type",
+            ):
                 if features.sport_specific.get(k) is not None and hasattr(prediction, k):
                     setattr(prediction, k, features.sport_specific[k])
+            if features.sport_specific.get("model_type"):
+                prediction.model_type = features.sport_specific["model_type"]
+        # Recompute edge against market baseline after override
+        market_p = prediction.market_prob
+        if market_p is None:
+            market_p = features.market_prob_baseline
+        if market_p is not None:
+            prediction.edge_before_execution = float(prediction.model_prob) - float(market_p)
 
     if prediction.rejection_reason:
         _log_decision(features, prediction, None, None, None, prediction.rejection_reason)
-        return
+        return _sync_result(rejection_reason=prediction.rejection_reason)
 
     if getattr(prediction, "calibration_status", "uncalibrated_shadow") != "calibrated_out_of_sample" and mode == "live":
         raise ValueError("UNCALIBRATED_MODEL_LIVE_BLOCK")
@@ -107,29 +144,29 @@ def sync_sports_market(
     kalshi_verified = bool(market_data.get("kalshi_moneyline_mapping_verified"))
     if platform == "kalshi" and not kalshi_verified:
         _log_decision(features, prediction, None, None, None, "KALSHI_SPORTS_MAPPING_NOT_IMPLEMENTED")
-        return
+        return _sync_result(rejection_reason="KALSHI_SPORTS_MAPPING_NOT_IMPLEMENTED")
 
     if real_received_timestamp is None:
         _log_decision(features, prediction, None, None, None, "MISSING_ORDERBOOK_TIMESTAMP")
-        return
+        return _sync_result(rejection_reason="MISSING_ORDERBOOK_TIMESTAMP")
     if real_orderbook_timestamp is None and not allow_received_shadow:
         _log_decision(features, prediction, None, None, None, "MISSING_ORDERBOOK_TIMESTAMP")
-        return
+        return _sync_result(rejection_reason="MISSING_ORDERBOOK_TIMESTAMP")
     if real_orderbook_timestamp is not None and getattr(real_orderbook_timestamp, "tzinfo", None) is None:
         _log_decision(features, prediction, None, None, None, "NAIVE_ORDERBOOK_TIMESTAMP")
-        return
+        return _sync_result(rejection_reason="NAIVE_ORDERBOOK_TIMESTAMP")
     if getattr(real_received_timestamp, "tzinfo", None) is None:
         _log_decision(features, prediction, None, None, None, "NAIVE_ORDERBOOK_TIMESTAMP")
-        return
+        return _sync_result(rejection_reason="NAIVE_ORDERBOOK_TIMESTAMP")
     if visible_depth is None or float(visible_depth) <= 0:
         _log_decision(features, prediction, None, None, None, "INSUFFICIENT_DEPTH")
-        return
+        return _sync_result(rejection_reason="INSUFFICIENT_DEPTH")
     if best_bid is None or spread is None:
         _log_decision(features, prediction, None, None, None, "MISSING_TOP_OF_BOOK")
-        return
+        return _sync_result(rejection_reason="MISSING_TOP_OF_BOOK")
     if not token_id:
         _log_decision(features, prediction, None, None, None, "MISSING_OUTCOME_TOKEN_ID")
-        return
+        return _sync_result(rejection_reason="MISSING_OUTCOME_TOKEN_ID")
 
     # Re-validate fee via model (reject unknown platforms; no fixed-fee invent)
     try:
@@ -140,16 +177,21 @@ def sync_sports_market(
         )
     except ValueError as exc:
         _log_decision(features, prediction, None, None, None, str(exc))
-        return
+        return _sync_result(rejection_reason=str(exc))
     fee_per_share = float(fee_per_share if fee_per_share is not None else fee_check)
 
     # 2. Build TradeCandidate (buy the selected outcome token)
     side = "YES"
     executable_cost = best_ask + fee_per_share + 0.005  # with slippage
+    net_edge = float(prediction.model_prob) - float(executable_cost)
 
     if executable_cost >= 1.0:
         _log_decision(features, prediction, None, None, None, "EFFECTIVE_COST_NOT_TRADABLE")
-        return
+        return _sync_result(
+            rejection_reason="EFFECTIVE_COST_NOT_TRADABLE",
+            executable_cost=executable_cost,
+            net_edge=net_edge,
+        )
 
     candidate = TradeCandidate(
         strategy=strategy,
@@ -186,11 +228,19 @@ def sync_sports_market(
 
     if sized_order.rejection_reason:
         _log_decision(features, prediction, sized_order, None, None, sized_order.rejection_reason)
-        return
+        return _sync_result(
+            rejection_reason=sized_order.rejection_reason,
+            executable_cost=executable_cost,
+            net_edge=net_edge,
+        )
 
     if sized_order.target_shares <= 0.0:
         _log_decision(features, prediction, sized_order, None, None, "ZERO_SIZED_ORDER")
-        return
+        return _sync_result(
+            rejection_reason="ZERO_SIZED_ORDER",
+            executable_cost=executable_cost,
+            net_edge=net_edge,
+        )
 
     # 4. Paper Fill
     fill = simulate_paper_fill(
@@ -203,7 +253,11 @@ def sync_sports_market(
 
     if fill.rejection_reason:
         _log_decision(features, prediction, sized_order, fill, None, fill.rejection_reason)
-        return
+        return _sync_result(
+            rejection_reason=fill.rejection_reason,
+            executable_cost=executable_cost,
+            net_edge=net_edge,
+        )
 
     # 5. CLV Tracking — market fill vs effective cost stored separately
     clv_record = init_clv_record(
@@ -222,6 +276,14 @@ def sync_sports_market(
 
     # Log successful decision
     _log_decision(features, prediction, sized_order, fill, clv_record, None)
+    return _sync_result(
+        would_trade=True,
+        paper_filled=True,
+        clv_obligation_created=True,
+        executable_cost=executable_cost,
+        net_edge=net_edge,
+        extra={"clv_record_id": clv_record.trade_id},
+    )
 
 
 def _log_decision(

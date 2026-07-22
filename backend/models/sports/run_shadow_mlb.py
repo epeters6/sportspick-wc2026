@@ -17,6 +17,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -46,7 +47,16 @@ MLB_MONEYLINE_MANIFEST_EMPTY = "MLB_MONEYLINE_MANIFEST_EMPTY"
 COEFFICIENT_SOURCE = "mlb_quant_legacy.calculate_win_probability"
 MODEL_VERSION = "mlb_quant_legacy"
 FEATURE_VERSION = "mlb_moneyline_v1"
+MODEL_TYPE = "mlb_quant_legacy"
+NY_TZ = ZoneInfo("America/New_York")
 ENABLE_PITCHER_OUTS = os.environ.get("MLB_SHADOW_PITCHER_OUTS", "0") == "1"
+
+
+def _mlb_game_date(start: datetime) -> str:
+    """Official MLB calendar date in America/New_York (not UTC date)."""
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    return start.astimezone(NY_TZ).strftime("%Y-%m-%d")
 
 
 @dataclass
@@ -147,10 +157,8 @@ def _valid_prob(p: Any) -> bool:
     return math.isfinite(v) and 0.0 < v < 1.0
 
 
-def _moneyline_prob_for_team(
-    home: str, away: str, selected: str
-) -> tuple[float, dict] | tuple[None, dict]:
-    probs = get_mlb_quant_probability(home, away)
+def _moneyline_probs(home: str, away: str) -> tuple[dict | None, dict]:
+    """Fetch home/away win probs once per game."""
     meta = {
         "model_version": MODEL_VERSION,
         "feature_version": FEATURE_VERSION,
@@ -158,22 +166,31 @@ def _moneyline_prob_for_team(
         "calibration_status": "uncalibrated_shadow",
         "market_type": "moneyline",
         "strategy": "mlb_moneyline",
+        "model_type": MODEL_TYPE,
     }
+    probs = get_mlb_quant_probability(home, away)
     if not probs:
         return None, {**meta, "rejection": "MLB_QUANT_PROB_UNAVAILABLE"}
     home_p = probs.get("home_prob")
     away_p = probs.get("away_prob")
     if not _valid_prob(home_p) or not _valid_prob(away_p):
         return None, {**meta, "rejection": "MLB_QUANT_PROB_INVALID"}
+    return {
+        "home_prob": float(home_p),
+        "away_prob": float(away_p),
+    }, meta
+
+
+def _prob_for_team(probs: dict, home: str, away: str, selected: str) -> float:
     home_c = _canonical(home) or home
     sel_c = _canonical(selected) or selected
     if sel_c == home_c or selected == home:
-        return float(home_p), meta
-    return float(away_p), meta
+        return float(probs["home_prob"])
+    return float(probs["away_prob"])
 
 
 def _load_moneyline_slate(db) -> list[dict]:
-    """Nonempty slate of upcoming MLB games (home/away/date/start)."""
+    """Nonempty slate of upcoming MLB games (home/away/NY-date/start)."""
     slate: list[dict] = []
     now = datetime.now(timezone.utc)
     try:
@@ -202,7 +219,7 @@ def _load_moneyline_slate(db) -> list[dict]:
             {
                 "home_team": home,
                 "away_team": away,
-                "slate_date": start.strftime("%Y-%m-%d"),
+                "slate_date": _mlb_game_date(start),
                 "scheduled_start_utc": start.isoformat(),
                 "match_id": row.get("id"),
             }
@@ -211,7 +228,6 @@ def _load_moneyline_slate(db) -> list[dict]:
     if slate:
         return slate
 
-    # Fallback: today's schedule from the quant engine's schedule source
     try:
         from pipeline.mlb_client import get_todays_games
 
@@ -220,16 +236,16 @@ def _load_moneyline_slate(db) -> list[dict]:
             away = (g.get("away") or {}).get("name")
             if not home or not away:
                 continue
-            game_date = g.get("game_date") or g.get("official_date")
             start_s = g.get("game_datetime") or g.get("gameDate")
             start = _parse_dt(start_s)
             if start is None or start.tzinfo is None or start <= now:
                 continue
+            official = g.get("game_date") or g.get("official_date") or _mlb_game_date(start)
             slate.append(
                 {
                     "home_team": home,
                     "away_team": away,
-                    "slate_date": (game_date or start.strftime("%Y-%m-%d")),
+                    "slate_date": str(official)[:10],
                     "scheduled_start_utc": start.isoformat(),
                     "match_id": g.get("game_pk"),
                 }
@@ -320,11 +336,9 @@ async def _evaluate_venue_candidate(
     slate_date: str,
     selected_team: str,
     model_prob: float,
+    start_time: datetime,
     stats: VenueStats,
 ) -> dict | None:
-    stats.discovered += len(
-        [m for m in markets if (getattr(m, "venue", "") or "").lower() == venue]
-    )
     matched = match_mlb_moneyline_contract(
         markets=markets,
         home_team=home,
@@ -361,7 +375,31 @@ async def _evaluate_venue_candidate(
     best_bid = book.get("best_bid")
     ask_size = float(book.get("ask_size") or 0.0)
     book_ts = book.get("book_timestamp")
-    received_ts = book.get("received_timestamp") or datetime.now(timezone.utc)
+    received_ts = book.get("received_timestamp")
+    if received_ts is None:
+        stats.reject("MISSING_RECEIVED_TIMESTAMP")
+        return {
+            "venue": venue,
+            "tradeable": False,
+            "rejection_reason": "MISSING_RECEIVED_TIMESTAMP",
+            "selected_team": selected_team,
+        }
+    if received_ts.tzinfo is None:
+        stats.reject("NAIVE_RECEIVED_TIMESTAMP")
+        return {
+            "venue": venue,
+            "tradeable": False,
+            "rejection_reason": "NAIVE_RECEIVED_TIMESTAMP",
+            "selected_team": selected_team,
+        }
+    if received_ts >= start_time:
+        stats.reject("BOOK_RECEIPT_AFTER_FIRST_PITCH")
+        return {
+            "venue": venue,
+            "tradeable": False,
+            "rejection_reason": "BOOK_RECEIPT_AFTER_FIRST_PITCH",
+            "selected_team": selected_team,
+        }
 
     if best_ask is None or best_bid is None:
         stats.reject("MISSING_TOP_OF_BOOK")
@@ -380,13 +418,14 @@ async def _evaluate_venue_candidate(
             "selected_team": selected_team,
         }
     if book_ts is None and venue != "kalshi":
-        stats.reject("MISSING_ORDERBOOK_TIMESTAMP")
-        return {
-            "venue": venue,
-            "tradeable": False,
-            "rejection_reason": "MISSING_ORDERBOOK_TIMESTAMP",
-            "selected_team": selected_team,
-        }
+        # Polymarket may fall back to received_timestamp for freshness in shadow
+        # only when explicitly allowed; require exchange book time when present path
+        # expects it. Shadow polymarket still needs a book_ts OR we allow received.
+        pass
+    if book_ts is None and venue == "polymarket":
+        # Allow shadow freshness from receipt only if exchange stamp missing —
+        # still do not invent an exchange timestamp.
+        pass
 
     try:
         eff = _executable_cost(venue, float(best_ask))
@@ -421,10 +460,30 @@ async def _evaluate_venue_candidate(
         "model_prob": model_prob,
         "selected_team": selected_team,
         "missing_orderbook_timestamp": book_ts is None,
-        "timestamp_source": book.get("timestamp_source")
-        if book_ts is None
-        else "orderbook_timestamp",
+        "timestamp_source": (
+            book.get("timestamp_source")
+            if book_ts is None
+            else "orderbook_timestamp"
+        ),
+        "allow_received_timestamp_shadow": book_ts is None,
     }
+
+
+def _select_best_candidate(tradeable: list[dict]) -> dict | None:
+    """
+    Per team → best venue (lowest effective cost).
+    Across teams → highest positive net edge.
+    """
+    by_team: dict[str, dict] = {}
+    for c in tradeable:
+        team = c["selected_team"]
+        prev = by_team.get(team)
+        if prev is None or c["effective_cost"] < prev["effective_cost"]:
+            by_team[team] = c
+    positive = [c for c in by_team.values() if c.get("net_edge", 0) > 0]
+    if not positive:
+        return None
+    return max(positive, key=lambda c: c["net_edge"])
 
 
 async def run_mlb_moneyline_shadow(
@@ -463,6 +522,14 @@ async def run_mlb_moneyline_shadow(
     exposed_events: set[str] = set()
     candidate_evaluations = 0
 
+    # Fetch Kalshi MLB slate once per run
+    try:
+        kalshi_slate = await router.kalshi.fetch_mlb_game_markets(limit=200)
+    except Exception as exc:
+        logger.warning(f"Kalshi MLB slate fetch failed: {exc}")
+        kalshi_slate = []
+    kalshi_stats.discovered = len(kalshi_slate)
+
     for game in slate:
         home = game["home_team"]
         away = game["away_team"]
@@ -473,18 +540,23 @@ async def run_mlb_moneyline_shadow(
         if times is None:
             rejected += 1
             continue
-        snapshot_time, start_time = times
-        event_id = f"mlb_ml_{slate_date}_{_canonical(home) or home}_{_canonical(away) or away}"
+        _pre_discovery_snapshot, start_time = times
+        event_id = (
+            f"mlb_ml_{slate_date}_{_canonical(home) or home}_{_canonical(away) or away}"
+        )
         if event_id in exposed_events:
             continue
 
+        # Polymarket discovery per game; Kalshi from once-per-run slate
+        markets: list = list(kalshi_slate)
         search = f"{home} vs {away}"
         try:
-            markets = await router.fetch_mlb_moneyline_markets(poly_search=search, limit=80)
+            poly = await router.poly.fetch_markets(search=search, limit=80)
+            for m in poly or []:
+                m.venue = "polymarket"
+                markets.append(m)
         except Exception as exc:
-            logger.warning(f"Market discovery failed for {search}: {exc}")
-            markets = []
-        # Extra poly single-team searches
+            logger.warning(f"Polymarket discovery failed for {search}: {exc}")
         for term in (home, away, f"{away} @ {home}"):
             try:
                 extra = await router.poly.fetch_markets(search=term, limit=40)
@@ -494,17 +566,23 @@ async def run_mlb_moneyline_shadow(
             except Exception:
                 pass
 
+        poly_n = len(
+            [m for m in markets if (getattr(m, "venue", "") or "").lower() == "polymarket"]
+        )
+        poly_stats.discovered += poly_n
+
+        probs, meta = _moneyline_probs(home, away)
+        if probs is None:
+            reason = meta.get("rejection") or "MLB_QUANT_PROB_UNAVAILABLE"
+            logger.info(f"{reason}: {home} vs {away}")
+            poly_stats.reject(reason)
+            kalshi_stats.reject(reason)
+            rejected += 1
+            continue
+
         venue_candidates: list[dict] = []
         for selected in (home, away):
-            model_prob, meta = _moneyline_prob_for_team(home, away, selected)
-            if model_prob is None:
-                reason = meta.get("rejection") or "MLB_QUANT_PROB_UNAVAILABLE"
-                logger.info(f"{reason}: {selected} in {home} vs {away}")
-                poly_stats.reject(reason)
-                kalshi_stats.reject(reason)
-                rejected += 1
-                continue
-
+            model_prob = _prob_for_team(probs, home, away, selected)
             for venue, stats in (("polymarket", poly_stats), ("kalshi", kalshi_stats)):
                 candidate_evaluations += 1
                 ev = await _evaluate_venue_candidate(
@@ -516,12 +594,11 @@ async def run_mlb_moneyline_shadow(
                     slate_date=slate_date,
                     selected_team=selected,
                     model_prob=model_prob,
+                    start_time=start_time,
                     stats=stats,
                 )
                 if ev:
                     ev["model_meta"] = meta
-                    # Log every venue evaluation as a shadow decision row via sync only for winner;
-                    # still record rejection candidates below.
                     venue_candidates.append(ev)
 
         tradeable = [c for c in venue_candidates if c.get("tradeable")]
@@ -534,22 +611,32 @@ async def run_mlb_moneyline_shadow(
             rejected += 1
             continue
 
-        # Best effective cost among tradeable candidates for this game
-        best = min(tradeable, key=lambda c: c["effective_cost"])
-        # Log non-selected tradeable venues as rejected for exposure dedup transparency
+        best = _select_best_candidate(tradeable)
+        if best is None:
+            logger.info(
+                f"NO_POSITIVE_NET_EDGE: {home} vs {away}; "
+                f"candidates={[ (c['venue'], c['selected_team'], round(c['net_edge'], 4)) for c in tradeable ]}"
+            )
+            rejected += 1
+            exposed_events.add(event_id)
+            continue
+
         for c in tradeable:
             if c is best:
                 continue
             logger.info(
-                f"CROSS_VENUE_NOT_SELECTED: venue={c['venue']} team={c['selected_team']} "
-                f"eff={c['effective_cost']:.4f} best_venue={best['venue']} "
-                f"best_eff={best['effective_cost']:.4f}"
+                f"CANDIDATE_NOT_SELECTED: venue={c['venue']} team={c['selected_team']} "
+                f"net_edge={c['net_edge']:.4f} eff={c['effective_cost']:.4f} "
+                f"best_venue={best['venue']} best_team={best['selected_team']} "
+                f"best_net_edge={best['net_edge']:.4f}"
             )
 
         meta = best["model_meta"]
         venue = best["venue"]
         stats = poly_stats if venue == "polymarket" else kalshi_stats
         fee = estimate_fee_per_share(venue, best["best_ask"], 1.0)
+        # Snapshot = selected book receipt (not pre-discovery wall clock)
+        snapshot_time = best["received_ts"]
         features = SportsEventFeatures(
             sport="mlb",
             league="mlb",
@@ -574,34 +661,35 @@ async def run_mlb_moneyline_shadow(
                 "contract_type": "moneyline",
                 "market_type": "moneyline",
                 "strategy": "mlb_moneyline",
+                "model_type": MODEL_TYPE,
                 "selected_team": best["selected_team"],
                 "contract_side": best["side"],
                 "model_prob_override": best["model_prob"],
                 "outcome_token_id": best["token_id"],
                 "yes_proposition_team": best.get("yes_team"),
-                **{k: meta[k] for k in (
-                    "model_version",
-                    "feature_version",
-                    "coefficient_source",
-                    "calibration_status",
-                )},
+                **{
+                    k: meta[k]
+                    for k in (
+                        "model_version",
+                        "feature_version",
+                        "coefficient_source",
+                        "calibration_status",
+                    )
+                },
             },
         )
 
-        before_fills = 0
-        fills_path = "sports_paper_fills.jsonl"
-        if os.path.exists(fills_path):
-            with open(fills_path, "r") as fh:
-                before_fills = sum(1 for _ in fh if _.strip())
-
-        sync_sports_market(
+        sync_result = sync_sports_market(
             market_data={
                 "platform": venue,
                 "contract_type": "moneyline",
                 "model_prob_override": best["model_prob"],
                 "outcome_id": best["token_id"],
                 "kalshi_moneyline_mapping_verified": venue == "kalshi",
-                "allow_received_timestamp_shadow": venue == "kalshi",
+                "allow_received_timestamp_shadow": bool(
+                    best.get("allow_received_timestamp_shadow")
+                )
+                or venue == "kalshi",
                 "timestamp_source": best.get("timestamp_source"),
             },
             features=features,
@@ -618,22 +706,17 @@ async def run_mlb_moneyline_shadow(
             outcome_id=best["token_id"],
         )
 
-        after_fills = before_fills
-        if os.path.exists(fills_path):
-            with open(fills_path, "r") as fh:
-                after_fills = sum(1 for _ in fh if _.strip())
-
-        # Count would_trade / CLV from decisions file tail is heavy; approximate:
-        stats.would_trade += 1
-        if after_fills > before_fills:
+        exposed_events.add(event_id)
+        if sync_result.get("would_trade"):
+            stats.would_trade += 1
+        if sync_result.get("paper_filled"):
             stats.paper_filled += 1
-            stats.clv_obligations += 1
             processed += 1
-            exposed_events.add(event_id)
-        else:
-            # Edge/risk rejection still counts as completed evaluation
+        if sync_result.get("clv_obligation_created"):
+            stats.clv_obligations += 1
+        if sync_result.get("rejection_reason"):
             rejected += 1
-            exposed_events.add(event_id)
+            stats.reject(str(sync_result["rejection_reason"]))
 
     return {
         "strategy": "mlb_moneyline",

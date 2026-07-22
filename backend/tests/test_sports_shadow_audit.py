@@ -56,9 +56,7 @@ class TestSportsShadowAudit(unittest.TestCase):
             min_log_growth_delta=0.001
         )
         
-        # We expect this to run cleanly and NOT make a live order, logging to shadow.
-        # However predict_sports_probability will return None model_prob for unknown type,
-        # so it will early return. But it definitely won't call live order.
+        # Expect early rejection (e.g. snapshot timing) and never a live order.
         res = sync_sports_market(
             market_data={"platform": "test", "outcome_id": "tok_test"},
             features=features,
@@ -74,7 +72,9 @@ class TestSportsShadowAudit(unittest.TestCase):
             real_received_timestamp=datetime.now(timezone.utc),
             outcome_id="tok_test",
         )
-        self.assertIsNone(res)
+        self.assertIsInstance(res, dict)
+        self.assertFalse(res.get("would_trade"))
+        self.assertFalse(res.get("paper_filled"))
 
     def test_default_coefficients_marked_uncalibrated(self):
         from pavlov.pipeline.sports_probability_model import predict_sports_probability

@@ -296,6 +296,64 @@ def _select_kalshi_outcome(
     return no_o, "NO", None, yes_team
 
 
+def _kalshi_event_stem(ticker: str) -> str:
+    """Strip trailing -TEAM suffix so ...LAA-SF-LAA and ...LAA-SF-SF share a stem."""
+    t = (ticker or "").upper()
+    m = re.match(r"^(.+)-([A-Z]{2,3})$", t)
+    return m.group(1) if m else t
+
+
+def _pick_kalshi_paired_market(
+    candidates: list[Any], selected_team: str, home_team: str, away_team: str
+) -> tuple[Any | None, Any | None, str, Optional[str], Optional[str]]:
+    """
+    Prefer the selected team's direct YES contract among same-event stems.
+    Fall back to NO on the opponent's contract only when direct YES is unavailable.
+    Returns (market, outcome, side, yes_team, rejection).
+    """
+    by_stem: dict[str, list[Any]] = {}
+    for m in candidates:
+        stem = _kalshi_event_stem(str(getattr(m, "market_id", "") or ""))
+        by_stem.setdefault(stem, []).append(m)
+
+    if len(by_stem) > 1:
+        # Distinct games — still ambiguous
+        return None, None, "", None, "DUPLICATE_GAME_MARKET"
+
+    group = next(iter(by_stem.values()))
+    direct = None
+    complement = None
+    for m in group:
+        yes_team = resolve_kalshi_yes_team(m)
+        if yes_team is None:
+            continue
+        if _same_team(yes_team, selected_team):
+            direct = m
+        elif _same_team(yes_team, home_team) or _same_team(yes_team, away_team):
+            complement = m
+
+    if direct is not None:
+        outcome, side, rej, yes_team = _select_kalshi_outcome(
+            direct, selected_team, home_team, away_team
+        )
+        if rej:
+            return direct, None, "", yes_team, rej
+        return direct, outcome, side, yes_team, None
+
+    if complement is not None:
+        outcome, side, rej, yes_team = _select_kalshi_outcome(
+            complement, selected_team, home_team, away_team
+        )
+        if rej:
+            return complement, None, "", yes_team, rej
+        # Must be NO on opponent's YES contract
+        if side != "NO":
+            return complement, None, "", yes_team, "TEAM_DIRECTION_MISMATCH"
+        return complement, outcome, side, yes_team, None
+
+    return None, None, "", None, "AMBIGUOUS_MLB_GAME_MATCH"
+
+
 def match_mlb_moneyline_contract(
     *,
     markets: list[Any],
@@ -331,8 +389,13 @@ def match_mlb_moneyline_contract(
             if mv and mv != venue.lower():
                 continue
         q = getattr(m, "question", "") or ""
-        if not _is_moneyline_question(q):
-            # Track if it looked like MLB game but wrong type
+        ticker = str(getattr(m, "market_id", "") or "")
+        # Kalshi game tickers are moneyline even when title is sparse
+        is_kalshi_game = (
+            (getattr(m, "venue", "") or "").lower() == "kalshi"
+            and "KXMLBGAME" in ticker.upper()
+        )
+        if not _is_moneyline_question(q) and not is_kalshi_game:
             if home_team and away_team and (
                 _norm(home_team) in _norm(q) or _norm(away_team) in _norm(q)
             ):
@@ -363,22 +426,13 @@ def match_mlb_moneyline_contract(
             rejection_reason="UNSUPPORTED_MLB_MARKET_TYPE", selected_team=selected_team
         )
 
-    # Distinct market ids → duplicate/ambiguous
-    uniq_ids = {str(getattr(m, "market_id", id(m))) for m in candidates}
-    if len(uniq_ids) > 1:
-        return MoneylineMatch(
-            rejection_reason="DUPLICATE_GAME_MARKET", selected_team=selected_team
-        )
-    if len(candidates) > 1 and len(uniq_ids) == 1:
-        # Same id repeated — take first
-        pass
-
-    market = candidates[0]
-    venue_name = (getattr(market, "venue", None) or venue or "polymarket").lower()
+    venue_name = (
+        getattr(candidates[0], "venue", None) or venue or "polymarket"
+    ).lower()
 
     if venue_name == "kalshi":
-        outcome, side, rej, yes_team = _select_kalshi_outcome(
-            market, selected_team, home_team, away_team
+        market, outcome, side, yes_team, rej = _pick_kalshi_paired_market(
+            candidates, selected_team, home_team, away_team
         )
         if rej:
             return MoneylineMatch(
@@ -395,16 +449,18 @@ def match_mlb_moneyline_contract(
             yes_team=yes_team,
         )
 
+    # Polymarket: distinct market ids for the same game remain ambiguous
+    uniq_ids = {str(getattr(m, "market_id", id(m))) for m in candidates}
+    if len(uniq_ids) > 1:
+        return MoneylineMatch(
+            rejection_reason="DUPLICATE_GAME_MARKET", selected_team=selected_team
+        )
+
+    market = candidates[0]
     outcome, side, rej = _select_polymarket_outcome(
         market, selected_team, home_team, away_team
     )
     if rej:
-        # If selected team is opponent of Yes-subject we returned No above;
-        # TEAM_DIRECTION_MISMATCH means no team-named outcome matched.
-        if rej == "TEAM_DIRECTION_MISMATCH":
-            # Check whether Yes maps to the other team — if so and we wanted selected,
-            # Polymarket Yes/No path should have returned No. Reach here for team-named miss.
-            pass
         return MoneylineMatch(
             market=market, selected_team=selected_team, rejection_reason=rej
         )
@@ -413,5 +469,4 @@ def match_mlb_moneyline_contract(
         outcome=outcome,
         selected_team=selected_team,
         side=side,
-        yes_team=resolve_kalshi_yes_team(market) if venue_name == "kalshi" else None,
     )

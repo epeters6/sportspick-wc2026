@@ -247,11 +247,13 @@ class PolymarketClient:
             "bid_size": 0.0,
             "ask_size": 0.0,
             "book_timestamp": None,
+            "received_timestamp": None,
         }
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.get(f"{CLOB_BASE}/book", params={"token_id": token_id})
                 r.raise_for_status()
+                received_at = datetime.now(timezone.utc)
                 book = r.json()
         except Exception as exc:
             logger.debug(f"CLOB book fetch failed for {token_id}: {exc}")
@@ -288,6 +290,11 @@ class PolymarketClient:
                 "bid_size": bid_size,
                 "ask_size": ask_size,
                 "book_timestamp": book_ts,
+                "received_timestamp": received_at,
+                "timestamp_source": (
+                    "orderbook_timestamp" if book_ts is not None else "received_timestamp"
+                ),
+                "missing_orderbook_timestamp": book_ts is None,
             }
         except (KeyError, ValueError, IndexError, TypeError) as exc:
             logger.debug(f"Failed to parse CLOB top-of-book for {token_id}: {exc}")

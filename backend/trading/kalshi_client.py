@@ -275,7 +275,7 @@ class KalshiClient:
             return None
 
     async def get_top_of_book(self, token_id: str, market_id: str) -> dict:
-        """Real Kalshi top-of-book for yes/no token. No fabricated bids/spreads."""
+        """Real Kalshi top-of-book via orderbook_fp bid ladders (no fabricated prices)."""
         empty = {
             "best_bid": None,
             "best_ask": None,
@@ -290,39 +290,81 @@ class KalshiClient:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 await self._rate_limit()
-                headers = self._sign_request("GET", f"/trade-api/v2/markets/{market_id}/orderbook")
+                headers = self._sign_request(
+                    "GET", f"/trade-api/v2/markets/{market_id}/orderbook"
+                )
                 r = await client.get(
                     f"{BASE_URL}/markets/{market_id}/orderbook", headers=headers
                 )
                 r.raise_for_status()
-                # Capture receipt at the real HTTP response boundary
                 received_at = datetime.now(timezone.utc)
                 book = r.json()
         except Exception as exc:
             logger.debug(f"Kalshi book fetch failed for {market_id}: {exc}")
             return empty
 
-        kalshi_side = "yes" if str(token_id).lower() in {"yes", "y"} else "no"
-        ob = book.get("orderbook", {}) if isinstance(book, dict) else {}
-        asks = ob.get(f"{kalshi_side}_asks") or []
-        bids = ob.get(f"{kalshi_side}_bids") or []
-        try:
-            best_ask = float(asks[0][0]) / 100.0 if asks else None
-            ask_size = float(asks[0][1]) if asks else 0.0
-            best_bid = float(bids[0][0]) / 100.0 if bids else None
-            bid_size = float(bids[0][1]) if bids else 0.0
-        except (TypeError, ValueError, IndexError):
+        parsed = self._top_of_book_from_orderbook_fp(book, token_id)
+        if parsed is None:
             return {**empty, "received_timestamp": received_at}
+        parsed["book_timestamp"] = None
+        parsed["received_timestamp"] = received_at
+        parsed["missing_orderbook_timestamp"] = True
+        parsed["timestamp_source"] = "received_timestamp"
+        return parsed
+
+    @staticmethod
+    def _top_of_book_from_orderbook_fp(book: dict, token_id: str) -> dict | None:
+        """
+        Parse Kalshi orderbook_fp ladders.
+
+        yes_dollars / no_dollars are ascending bid ladders (highest bid last).
+        YES: best_bid = max YES bid; best_ask = 1 - max NO bid
+        NO:  best_bid = max NO bid;  best_ask = 1 - max YES bid
+        """
+        if not isinstance(book, dict):
+            return None
+        ob = book.get("orderbook_fp") or {}
+        yes_levels = ob.get("yes_dollars") or []
+        no_levels = ob.get("no_dollars") or []
+
+        def _best_bid_level(levels):
+            if not levels:
+                return None, 0.0
+            try:
+                # Ascending by price — last is highest bid
+                price_s, size_s = levels[-1][0], levels[-1][1]
+                return float(price_s), float(size_s)
+            except (TypeError, ValueError, IndexError):
+                return None, 0.0
+
+        yes_bid, yes_bid_sz = _best_bid_level(yes_levels)
+        no_bid, no_bid_sz = _best_bid_level(no_levels)
+        side = "yes" if str(token_id).lower() in {"yes", "y"} else "no"
+
+        if side == "yes":
+            if yes_bid is None or no_bid is None:
+                return None
+            best_bid = yes_bid
+            bid_size = yes_bid_sz
+            best_ask = 1.0 - no_bid
+            ask_size = no_bid_sz
+        else:
+            if no_bid is None or yes_bid is None:
+                return None
+            best_bid = no_bid
+            bid_size = no_bid_sz
+            best_ask = 1.0 - yes_bid
+            ask_size = yes_bid_sz
+
+        if best_ask is None or best_bid is None:
+            return None
+        if not (0.0 < best_ask < 1.0) or not (0.0 <= best_bid < 1.0):
+            return None
         return {
             "best_bid": best_bid,
             "best_ask": best_ask,
-            "bid_size": bid_size,
-            "ask_size": ask_size,
-            # Kalshi orderbook payload has no exchange timestamp — do not invent one.
-            "book_timestamp": None,
-            "received_timestamp": received_at,
-            "missing_orderbook_timestamp": True,
-            "timestamp_source": "received_timestamp",
+            "bid_size": float(bid_size),
+            "ask_size": float(ask_size),
         }
 
     async def get_book_depth(self, token_id: str, market_id: str, side: str = "sell") -> tuple[float | None, float]:
