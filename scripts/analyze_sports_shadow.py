@@ -3,6 +3,18 @@ import os
 from collections import defaultdict
 import statistics
 
+# Phase 4 contamination: Jul 23 fills reused Jul 22 model probs (ATL-SD, TOR-TB).
+# Keep them as execution-path evidence but exclude from CLV evaluation metrics.
+CLV_EVAL_EXCLUDE_TRADE_ID_SUBSTRINGS = (
+    "mlb_ml_2026-07-23_",
+)
+
+
+def _clv_excluded(trade_id: str | None) -> bool:
+    tid = trade_id or ""
+    return any(s in tid for s in CLV_EVAL_EXCLUDE_TRADE_ID_SUBSTRINGS)
+
+
 def run_analysis(decisions_file="sports_shadow_decisions.jsonl", fills_file="sports_paper_fills.jsonl", clv_file="sports_clv_tracking.jsonl"):
     if not os.path.exists(decisions_file):
         raise FileNotFoundError(
@@ -12,14 +24,14 @@ def run_analysis(decisions_file="sports_shadow_decisions.jsonl", fills_file="spo
     total_predictions = 0
     total_rejections = 0
     total_would_trade = 0
-    
+
     rejection_reason_counts = defaultdict(int)
     calibration_status_counts = defaultdict(int)
     coefficient_source_counts = defaultdict(int)
-    
+
     timestamp_missing_count = 0
     timestamp_assumed_count = 0
-    
+
     model_probs = []
     market_probs = []
     edges_before = []
@@ -27,40 +39,40 @@ def run_analysis(decisions_file="sports_shadow_decisions.jsonl", fills_file="spo
     executable_costs = []
     fees_per_share = []
     visible_depths = []
-    
+
     # Groups
     by_sport = defaultdict(int)
     by_league = defaultdict(int)
     by_market_type = defaultdict(int)
     by_platform = defaultdict(int)
     by_model_version = defaultdict(int)
-    
+
     with open(decisions_file, "r") as f:
         for line in f:
             if not line.strip():
                 continue
             d = json.loads(line)
             total_predictions += 1
-            
+
             rejection_reason = d.get("rejection_reason")
             if rejection_reason:
                 total_rejections += 1
                 rejection_reason_counts[rejection_reason] += 1
             else:
                 total_would_trade += 1
-                
+
             cal_status = d.get("calibration_status", "unknown")
             calibration_status_counts[cal_status] += 1
-            
+
             coef_src = d.get("coefficient_source", "unknown")
             coefficient_source_counts[coef_src] += 1
-            
+
             if not d.get("received_timestamp"):
                 timestamp_missing_count += 1
-                
+
             if rejection_reason == "ORDERBOOK_TIMESTAMP_ASSUMED_FOR_SHADOW":
                 timestamp_assumed_count += 1
-                
+
             if "P_model" in d and d["P_model"] is not None:
                 model_probs.append(d["P_model"])
             if "P_market" in d and d["P_market"] is not None:
@@ -75,7 +87,7 @@ def run_analysis(decisions_file="sports_shadow_decisions.jsonl", fills_file="spo
                 fees_per_share.append(d["fee_per_share"])
             if "visible_depth" in d and d["visible_depth"] is not None:
                 visible_depths.append(d["visible_depth"])
-                
+
             by_sport[d.get("sport", "unknown")] += 1
             by_league[d.get("league", "unknown")] += 1
             by_market_type[d.get("market_type", "unknown")] += 1
@@ -85,7 +97,7 @@ def run_analysis(decisions_file="sports_shadow_decisions.jsonl", fills_file="spo
 
     total_paper_fills = 0
     paper_fill_sizes = []
-    
+
     if os.path.exists(fills_file):
         with open(fills_file, "r") as f:
             for line in f:
@@ -96,18 +108,22 @@ def run_analysis(decisions_file="sports_shadow_decisions.jsonl", fills_file="spo
                     total_paper_fills += 1
                     if "filled_shares" in d:
                         paper_fill_sizes.append(d["filled_shares"])
-                        
+
     clv_15m_vals = []
     clv_1h_vals = []
     closing_line_beaten = 0
     clv_records_count = 0
-    
+    clv_excluded_count = 0
+
     if os.path.exists(clv_file):
         with open(clv_file, "r") as f:
             for line in f:
                 if not line.strip():
                     continue
                 d = json.loads(line)
+                if _clv_excluded(d.get("trade_id")):
+                    clv_excluded_count += 1
+                    continue
                 clv_records_count += 1
                 if "price_after_15m" in d and d["price_after_15m"] is not None:
                     clv_15m_vals.append(d["price_after_15m"] - d.get("entry_price", 0))
@@ -134,6 +150,8 @@ def run_analysis(decisions_file="sports_shadow_decisions.jsonl", fills_file="spo
         "average_clv_15m": statistics.mean(clv_15m_vals) if clv_15m_vals else 0,
         "average_clv_1h": statistics.mean(clv_1h_vals) if clv_1h_vals else 0,
         "closing_line_beaten_rate_if_available": closing_line_beaten / clv_records_count if clv_records_count > 0 else 0,
+        "clv_records_evaluated": clv_records_count,
+        "clv_records_excluded_reused_prob": clv_excluded_count,
         "calibration_status_counts": dict(calibration_status_counts),
         "coefficient_source_counts": dict(coefficient_source_counts),
         "timestamp_missing_count": timestamp_missing_count,

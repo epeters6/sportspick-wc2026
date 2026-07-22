@@ -38,11 +38,22 @@ from backend.models.sports.mlb_contract_match import match_pitcher_outs_contract
 from backend.models.sports.mlb_moneyline_match import match_mlb_moneyline_contract
 from backend.trading.autobet import _current_bankroll
 from backend.trading.market_matcher import _canonical, _parse_dt
-from backend.ml.mlb_quant_legacy import get_mlb_quant_probability
+from backend.ml.mlb_quant_legacy import (
+    MlbQuantGameIdentityAmbiguous,
+    get_mlb_quant_probability,
+)
 
 PREGAME_MODEL_UNAVAILABLE = "PREGAME_MODEL_UNAVAILABLE"
 MLB_SHADOW_ZERO_PROCESSED = "MLB_SHADOW_ZERO_PROCESSED"
 MLB_MONEYLINE_MANIFEST_EMPTY = "MLB_MONEYLINE_MANIFEST_EMPTY"
+DUPLICATE_SHADOW_EXPOSURE = "DUPLICATE_SHADOW_EXPOSURE"
+MLB_QUANT_GAME_IDENTITY_AMBIGUOUS = MlbQuantGameIdentityAmbiguous.CODE
+
+# Contaminated Phase-4 fills that reused today's model prob for tomorrow's slate.
+# Exclude from CLV / calibration evaluation until replaced by identity-correct fills.
+CLV_EVAL_EXCLUDE_EVENT_PREFIXES = (
+    "mlb_ml_2026-07-23_",  # ATL-SD / TOR-TB reuse evidence
+)
 
 COEFFICIENT_SOURCE = "mlb_quant_legacy.calculate_win_probability"
 MODEL_VERSION = "mlb_quant_legacy"
@@ -157,8 +168,15 @@ def _valid_prob(p: Any) -> bool:
     return math.isfinite(v) and 0.0 < v < 1.0
 
 
-def _moneyline_probs(home: str, away: str) -> tuple[dict | None, dict]:
-    """Fetch home/away win probs once per game."""
+def _moneyline_probs(
+    home: str,
+    away: str,
+    *,
+    slate_date: str | None = None,
+    scheduled_start_utc: str | None = None,
+    game_pk: int | str | None = None,
+) -> tuple[dict | None, dict]:
+    """Fetch home/away win probs for the exact slate game (date/pk/time)."""
     meta = {
         "model_version": MODEL_VERSION,
         "feature_version": FEATURE_VERSION,
@@ -167,8 +185,19 @@ def _moneyline_probs(home: str, away: str) -> tuple[dict | None, dict]:
         "market_type": "moneyline",
         "strategy": "mlb_moneyline",
         "model_type": MODEL_TYPE,
+        "slate_date": slate_date,
+        "game_pk": game_pk,
     }
-    probs = get_mlb_quant_probability(home, away)
+    try:
+        probs = get_mlb_quant_probability(
+            home,
+            away,
+            slate_date=slate_date,
+            scheduled_start_utc=scheduled_start_utc,
+            game_pk=game_pk,
+        )
+    except MlbQuantGameIdentityAmbiguous as exc:
+        return None, {**meta, "rejection": MLB_QUANT_GAME_IDENTITY_AMBIGUOUS, "detail": str(exc)}
     if not probs:
         return None, {**meta, "rejection": "MLB_QUANT_PROB_UNAVAILABLE"}
     home_p = probs.get("home_prob")
@@ -178,7 +207,98 @@ def _moneyline_probs(home: str, away: str) -> tuple[dict | None, dict]:
     return {
         "home_prob": float(home_p),
         "away_prob": float(away_p),
+        "game_pk": probs.get("game_pk") or game_pk,
     }, meta
+
+
+def _parse_game_pk(external_id: Any, match_id: Any = None) -> int | str | None:
+    if match_id is not None and str(match_id).isdigit():
+        return int(match_id)
+    if external_id is None:
+        return None
+    s = str(external_id)
+    if s.startswith("mlb_") and s[4:].isdigit():
+        return int(s[4:])
+    if s.isdigit():
+        return int(s)
+    return s or None
+
+
+def durable_open_shadow_event_exposure(db, event_id: str) -> float:
+    """
+    Sum open paper/shadow stake for an event across venues from durable CLV rows.
+
+    Uses candidate_id prefix ``sports_{event_id}`` and/or metadata.event_id.
+    """
+    if db is None or not event_id:
+        return 0.0
+    total = 0.0
+    seen: set[str] = set()
+    try:
+        prefix = f"sports_{event_id}"
+        rows = (
+            db.table("clv_obligations")
+            .select("candidate_id, entry_price, metadata")
+            .like("candidate_id", f"{prefix}%")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        logger.warning(f"Durable shadow exposure lookup failed: {exc}")
+        rows = []
+
+    for row in rows:
+        cid = str(row.get("candidate_id") or "")
+        if cid in seen:
+            continue
+        seen.add(cid)
+        meta = row.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        stake = meta.get("stake")
+        if stake is None:
+            # Fallback: entry_price * shares if stored; else treat as occupying full
+            # event slot so we do not double-fill when stake metadata is missing.
+            shares = meta.get("shares")
+            if shares is not None and row.get("entry_price") is not None:
+                stake = float(shares) * float(row["entry_price"])
+            else:
+                stake = float(meta.get("notional") or 0.0)
+                if stake <= 0:
+                    # Unknown prior size — occupy the event to prevent duplicate fills
+                    return float("inf")
+        total += float(stake)
+    return total
+
+
+def _dedupe_poly_markets(markets: list) -> list:
+    """Deduplicate Polymarket markets by market_id then outcome token_id."""
+    by_market: dict[str, Any] = {}
+    for m in markets or []:
+        mid = str(getattr(m, "market_id", None) or getattr(m, "slug", None) or id(m))
+        if mid in by_market:
+            continue
+        by_market[mid] = m
+    return list(by_market.values())
+
+
+async def _fetch_polymarket_mlb_universe(router: VenueRouter) -> list:
+    """Fetch MLB Polymarket universe once per run (tag + search), deduped."""
+    collected: list = []
+    for kwargs in (
+        {"tag_slug": "mlb", "limit": 200},
+        {"tag_slug": "baseball", "limit": 200},
+        {"search": "MLB", "limit": 200},
+    ):
+        try:
+            batch = await router.poly.fetch_markets(**kwargs)
+            for m in batch or []:
+                m.venue = "polymarket"
+                collected.append(m)
+        except Exception as exc:
+            logger.warning(f"Polymarket MLB universe fetch failed ({kwargs}): {exc}")
+    return _dedupe_poly_markets(collected)
 
 
 def _prob_for_team(probs: dict, home: str, away: str, selected: str) -> float:
@@ -196,7 +316,7 @@ def _load_moneyline_slate(db) -> list[dict]:
     try:
         rows = (
             db.table("matches")
-            .select("id, home_team, away_team, scheduled_at, sport, is_final")
+            .select("id, home_team, away_team, scheduled_at, sport, is_final, external_id")
             .eq("sport", "mlb")
             .eq("is_final", False)
             .execute()
@@ -222,6 +342,8 @@ def _load_moneyline_slate(db) -> list[dict]:
                 "slate_date": _mlb_game_date(start),
                 "scheduled_start_utc": start.isoformat(),
                 "match_id": row.get("id"),
+                "game_pk": _parse_game_pk(row.get("external_id")),
+                "external_id": row.get("external_id"),
             }
         )
 
@@ -247,7 +369,8 @@ def _load_moneyline_slate(db) -> list[dict]:
                     "away_team": away,
                     "slate_date": str(official)[:10],
                     "scheduled_start_utc": start.isoformat(),
-                    "match_id": g.get("game_pk"),
+                    "match_id": g.get("game_id") or g.get("game_pk"),
+                    "game_pk": g.get("game_id") or g.get("game_pk"),
                 }
             )
     except Exception as exc:
@@ -417,15 +540,17 @@ async def _evaluate_venue_candidate(
             "rejection_reason": "INSUFFICIENT_DEPTH",
             "selected_team": selected_team,
         }
-    if book_ts is None and venue != "kalshi":
-        # Polymarket may fall back to received_timestamp for freshness in shadow
-        # only when explicitly allowed; require exchange book time when present path
-        # expects it. Shadow polymarket still needs a book_ts OR we allow received.
-        pass
+    # Polymarket requires an actual CLOB/exchange book timestamp (no receipt fallback).
+    # Kalshi shadow may proceed with receipt-only freshness when book_ts is missing.
     if book_ts is None and venue == "polymarket":
-        # Allow shadow freshness from receipt only if exchange stamp missing —
-        # still do not invent an exchange timestamp.
-        pass
+        stats.reject("MISSING_ORDERBOOK_TIMESTAMP")
+        return {
+            "venue": venue,
+            "tradeable": False,
+            "rejection_reason": "MISSING_ORDERBOOK_TIMESTAMP",
+            "selected_team": selected_team,
+            "missing_orderbook_timestamp": True,
+        }
 
     try:
         eff = _executable_cost(venue, float(best_ask))
@@ -465,7 +590,8 @@ async def _evaluate_venue_candidate(
             if book_ts is None
             else "orderbook_timestamp"
         ),
-        "allow_received_timestamp_shadow": book_ts is None,
+        # Receipt-only freshness is Kalshi-shadow-only; never for Polymarket.
+        "allow_received_timestamp_shadow": book_ts is None and venue == "kalshi",
     }
 
 
@@ -522,7 +648,7 @@ async def run_mlb_moneyline_shadow(
     exposed_events: set[str] = set()
     candidate_evaluations = 0
 
-    # Fetch Kalshi MLB slate once per run
+    # Fetch Kalshi MLB slate + Polymarket MLB universe once per run
     try:
         kalshi_slate = await router.kalshi.fetch_mlb_game_markets(limit=200)
     except Exception as exc:
@@ -530,10 +656,18 @@ async def run_mlb_moneyline_shadow(
         kalshi_slate = []
     kalshi_stats.discovered = len(kalshi_slate)
 
+    try:
+        poly_universe = await _fetch_polymarket_mlb_universe(router)
+    except Exception as exc:
+        logger.warning(f"Polymarket MLB universe fetch failed: {exc}")
+        poly_universe = []
+    poly_stats.discovered = len(poly_universe)
+
     for game in slate:
         home = game["home_team"]
         away = game["away_team"]
         slate_date = game["slate_date"]
+        game_pk = game.get("game_pk")
         times = _resolve_event_times(
             db, home, away, slate_date, game.get("scheduled_start_utc")
         )
@@ -547,34 +681,38 @@ async def run_mlb_moneyline_shadow(
         if event_id in exposed_events:
             continue
 
-        # Polymarket discovery per game; Kalshi from once-per-run slate
-        markets: list = list(kalshi_slate)
-        search = f"{home} vs {away}"
-        try:
-            poly = await router.poly.fetch_markets(search=search, limit=80)
-            for m in poly or []:
-                m.venue = "polymarket"
-                markets.append(m)
-        except Exception as exc:
-            logger.warning(f"Polymarket discovery failed for {search}: {exc}")
-        for term in (home, away, f"{away} @ {home}"):
-            try:
-                extra = await router.poly.fetch_markets(search=term, limit=40)
-                for m in extra or []:
-                    m.venue = "polymarket"
-                    markets.append(m)
-            except Exception:
-                pass
+        open_stake = durable_open_shadow_event_exposure(db, event_id)
+        event_cap = float(risk_caps.get_event_exposure_cap_dollars(bankroll))
+        remaining_cap = event_cap - float(open_stake)
+        if remaining_cap <= 0:
+            logger.info(
+                f"{DUPLICATE_SHADOW_EXPOSURE}: {event_id} "
+                f"open_stake={open_stake} cap={event_cap}"
+            )
+            poly_stats.reject(DUPLICATE_SHADOW_EXPOSURE)
+            kalshi_stats.reject(DUPLICATE_SHADOW_EXPOSURE)
+            exposed_events.add(event_id)
+            rejected += 1
+            continue
+        if open_stake > 0:
+            logger.info(
+                f"REPEAT_SHADOW_PREDICTION: {event_id} open_stake={open_stake} "
+                f"remaining_cap={remaining_cap:.2f}"
+            )
 
-        poly_n = len(
-            [m for m in markets if (getattr(m, "venue", "") or "").lower() == "polymarket"]
+        # Shared once-per-run universes; filter/match per game (no per-game re-search)
+        markets: list = list(kalshi_slate) + list(poly_universe)
+
+        probs, meta = _moneyline_probs(
+            home,
+            away,
+            slate_date=slate_date,
+            scheduled_start_utc=game.get("scheduled_start_utc"),
+            game_pk=game_pk,
         )
-        poly_stats.discovered += poly_n
-
-        probs, meta = _moneyline_probs(home, away)
         if probs is None:
             reason = meta.get("rejection") or "MLB_QUANT_PROB_UNAVAILABLE"
-            logger.info(f"{reason}: {home} vs {away}")
+            logger.info(f"{reason}: {home} vs {away} slate={slate_date} pk={game_pk}")
             poly_stats.reject(reason)
             kalshi_stats.reject(reason)
             rejected += 1
@@ -631,12 +769,61 @@ async def run_mlb_moneyline_shadow(
                 f"best_net_edge={best['net_edge']:.4f}"
             )
 
+        # Re-fetch the selected winning book immediately before sizing
+        try:
+            fresh = await router.get_top_of_book(
+                venue=best["venue"],
+                token_id=best["token_id"],
+                market_id=best["market"].market_id,
+            )
+            if fresh.get("best_ask") is not None and fresh.get("best_bid") is not None:
+                best["best_ask"] = float(fresh["best_ask"])
+                best["best_bid"] = float(fresh["best_bid"])
+                best["spread"] = best["best_ask"] - best["best_bid"]
+                best["ask_size"] = float(fresh.get("ask_size") or best["ask_size"])
+                best["book_ts"] = fresh.get("book_timestamp")
+                if fresh.get("received_timestamp") is not None:
+                    best["received_ts"] = fresh["received_timestamp"]
+                best["effective_cost"] = _executable_cost(best["venue"], best["best_ask"])
+                best["net_edge"] = float(best["model_prob"]) - best["effective_cost"]
+                if best["venue"] == "polymarket" and best["book_ts"] is None:
+                    logger.info(
+                        f"MISSING_ORDERBOOK_TIMESTAMP after re-fetch: {home} vs {away}"
+                    )
+                    poly_stats.reject("MISSING_ORDERBOOK_TIMESTAMP")
+                    rejected += 1
+                    continue
+                if best["net_edge"] <= 0:
+                    logger.info(
+                        f"NO_POSITIVE_NET_EDGE after re-fetch: {home} vs {away} "
+                        f"net_edge={best['net_edge']:.4f}"
+                    )
+                    rejected += 1
+                    exposed_events.add(event_id)
+                    continue
+                best["allow_received_timestamp_shadow"] = (
+                    best["book_ts"] is None and best["venue"] == "kalshi"
+                )
+        except Exception as exc:
+            logger.warning(f"Winning-book re-fetch failed ({best['venue']}): {exc}")
+
         meta = best["model_meta"]
         venue = best["venue"]
         stats = poly_stats if venue == "polymarket" else kalshi_stats
         fee = estimate_fee_per_share(venue, best["best_ask"], 1.0)
         # Snapshot = selected book receipt (not pre-discovery wall clock)
         snapshot_time = best["received_ts"]
+        # Shrink event exposure cap to remaining durable capacity
+        run_caps = RiskCaps(
+            max_event_exposure_pct=max(remaining_cap / bankroll, 1e-9) if bankroll > 0 else 0.0,
+            max_outcome_exposure_pct=risk_caps.max_outcome_exposure_pct,
+            max_strategy_exposure_pct=risk_caps.max_strategy_exposure_pct,
+            max_platform_exposure_pct=risk_caps.max_platform_exposure_pct,
+            max_daily_loss_pct=risk_caps.max_daily_loss_pct,
+            max_weekly_loss_pct=risk_caps.max_weekly_loss_pct,
+            min_net_edge=risk_caps.min_net_edge,
+            min_log_growth_delta=risk_caps.min_log_growth_delta,
+        )
         features = SportsEventFeatures(
             sport="mlb",
             league="mlb",
@@ -667,6 +854,11 @@ async def run_mlb_moneyline_shadow(
                 "model_prob_override": best["model_prob"],
                 "outcome_token_id": best["token_id"],
                 "yes_proposition_team": best.get("yes_team"),
+                "slate_date": slate_date,
+                "game_pk": probs.get("game_pk") or game_pk,
+                "exclude_from_clv_eval": any(
+                    event_id.startswith(p) for p in CLV_EVAL_EXCLUDE_EVENT_PREFIXES
+                ),
                 **{
                     k: meta[k]
                     for k in (
@@ -686,11 +878,14 @@ async def run_mlb_moneyline_shadow(
                 "model_prob_override": best["model_prob"],
                 "outcome_id": best["token_id"],
                 "kalshi_moneyline_mapping_verified": venue == "kalshi",
+                # Kalshi shadow only — Polymarket must have CLOB book_ts
                 "allow_received_timestamp_shadow": bool(
                     best.get("allow_received_timestamp_shadow")
                 )
-                or venue == "kalshi",
+                and venue == "kalshi",
                 "timestamp_source": best.get("timestamp_source"),
+                "shadow_event_id": event_id,
+                "shadow_stake_metadata": True,
             },
             features=features,
             best_ask=best["best_ask"],
@@ -699,7 +894,7 @@ async def run_mlb_moneyline_shadow(
             fee_per_share=fee,
             visible_depth=best["ask_size"],
             bankroll=bankroll,
-            risk_caps=risk_caps,
+            risk_caps=run_caps,
             mode="shadow",
             real_orderbook_timestamp=best["book_ts"],
             real_received_timestamp=best["received_ts"],
@@ -725,6 +920,7 @@ async def run_mlb_moneyline_shadow(
         "rejected": rejected,
         "candidate_evaluations": candidate_evaluations,
         "exposed_events": len(exposed_events),
+        "polymarket_universe_size": len(poly_universe),
         "by_venue": {
             "polymarket": poly_stats.as_dict(),
             "kalshi": kalshi_stats.as_dict(),

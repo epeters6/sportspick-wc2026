@@ -131,9 +131,48 @@ class TestClvObligationsUpdater(unittest.TestCase):
         self.assertEqual(patch["status_15m"], "unavailable")
         self.assertEqual(
             (patch.get("metadata") or {}).get("15m_reason"),
-            "NO_ORDERBOOK_PRICE_OVERDUE",
+            "OBSERVATION_OVERDUE",
         )
 
+    def test_price_available_but_three_hours_late_is_unavailable(self):
+        """A valid current price must not be labeled as a timely 15m observation."""
+        from pavlov.pipeline.clv_updater import update_clv_obligations
 
-if __name__ == "__main__":
-    unittest.main()
+        now = datetime(2026, 7, 21, 15, 0, tzinfo=timezone.utc)
+        due_15 = now - timedelta(hours=3)  # 3h late vs 30m grace
+        row = {
+            "candidate_id": "c_late",
+            "market_id": "m1",
+            "outcome_id": "tok_late",
+            "side": "YES",
+            "status_15m": "pending",
+            "status_1h": "pending",
+            "status_close": "pending",
+            "due_15m": due_15.isoformat(),
+            "due_1h": due_15.isoformat(),
+            "due_close": None,
+            "metadata": {},
+        }
+        db = MagicMock()
+        select_chain = MagicMock()
+        select_chain.or_.return_value.execute.return_value.data = [row]
+        db.table.return_value.select.return_value = select_chain
+        update_chain = MagicMock()
+        db.table.return_value.update.return_value = update_chain
+        update_chain.eq.return_value.execute.return_value = MagicMock()
+
+        async def fetch_ok(mid, oid, side):
+            return 0.62, now  # price available, but observation is overdue
+
+        stats = asyncio.run(update_clv_obligations(fetch_ok, db=db, now=now))
+        self.assertGreaterEqual(stats["unavailable"], 1)
+        self.assertEqual(stats["updated"], 0)
+        patch = db.table.return_value.update.call_args[0][0]
+        self.assertEqual(patch["status_15m"], "unavailable")
+        self.assertNotIn("obs_15m_price", patch)
+        meta = patch.get("metadata") or {}
+        self.assertEqual(meta.get("15m_reason"), "OBSERVATION_OVERDUE")
+        self.assertTrue(meta.get("15m_price_available_but_late"))
+        self.assertEqual(meta.get("15m_late_price_not_accepted"), 0.62)
+        self.assertIn("15m_receipt_ts", meta)
+        self.assertGreaterEqual(meta.get("15m_obs_delay_seconds", 0), 3 * 3600 - 1)

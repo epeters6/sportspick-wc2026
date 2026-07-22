@@ -120,53 +120,53 @@ def _checkpoint_fields(checkpoint: str) -> tuple[str, str, str, str]:
 async def update_clv_checkpoints(
     fetch_price: Callable[[str, str, str], Any],
     filepath: str = "clv_tracking.jsonl",
+    *,
+    now: Optional[datetime] = None,
+    overdue_grace: timedelta = _OVERDUE_GRACE,
 ) -> None:
     """Legacy jsonl updater (kept for local artifacts). Prefer update_clv_obligations."""
     records = load_clv_records(filepath)
-    now = datetime.now(timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     updated = False
 
     for r in records:
         entry = r.entry_time
         if entry.tzinfo is None:
             entry = entry.replace(tzinfo=timezone.utc)
-        age_delta = now - entry
 
-        if r.price_after_15m is None and age_delta >= timedelta(minutes=15):
-            p = await fetch_price(r.market_id, r.outcome_id, r.side)
+        for attr, due_delta, checkpoint in (
+            ("price_after_15m", timedelta(minutes=15), "AFTER_15M"),
+            ("price_after_1h", timedelta(hours=1), "AFTER_1H"),
+        ):
+            if getattr(r, attr) is not None:
+                continue
+            due = entry + due_delta
+            if now < due:
+                continue
             r.last_clv_update_attempt = now.isoformat()
-            if p is not None:
-                r.price_after_15m = p
-                r.missing_market_price = False
-                logger.info(
-                    f"Updated AFTER_15M for {r.trade_id}: {p} "
-                    f"(market_CLV: {calculate_market_clv(r.entry_market_price, p, r.side)}, "
-                    f"exec_CLV: {calculate_execution_adjusted_clv(r.entry_effective_cost, p, r.side)})"
-                )
-                updated = True
-            else:
+            delay = now - due
+            if delay > overdue_grace:
+                # Price may exist, but observation is too late to label as 15m/1h
                 if not r.missing_market_price:
                     r.missing_market_price = True
-                    r.missing_market_price_checkpoint = "AFTER_15M"
-                    r.missing_market_price_reason = "NO_ORDERBOOK_PRICE"
-                    r.clv_update_error = "Failed to fetch price"
+                    r.missing_market_price_checkpoint = checkpoint
+                    r.missing_market_price_reason = "OBSERVATION_OVERDUE"
+                    r.clv_update_error = (
+                        f"Observation delay {delay.total_seconds():.0f}s exceeds grace"
+                    )
                     updated = True
-
-        if r.price_after_1h is None and age_delta >= timedelta(hours=1):
+                continue
             p = await fetch_price(r.market_id, r.outcome_id, r.side)
-            r.last_clv_update_attempt = now.isoformat()
+            if isinstance(p, tuple):
+                p = p[0]
             if p is not None:
-                r.price_after_1h = p
+                setattr(r, attr, p)
                 r.missing_market_price = False
-                logger.info(f"Updated AFTER_1H for {r.trade_id}: {p}")
+                logger.info(f"Updated {checkpoint} for {r.trade_id}: {p}")
                 updated = True
-            else:
-                if not r.missing_market_price:
-                    r.missing_market_price = True
-                    r.missing_market_price_checkpoint = "AFTER_1H"
-                    r.missing_market_price_reason = "NO_ORDERBOOK_PRICE"
-                    r.clv_update_error = "Failed to fetch price"
-                    updated = True
+            # else: within grace, leave unset and retry
 
     if updated:
         save_clv_records(records, filepath)
@@ -223,6 +223,7 @@ async def update_clv_obligations(
     *,
     db=None,
     now: Optional[datetime] = None,
+    overdue_grace: timedelta = _OVERDUE_GRACE,
 ) -> dict[str, int]:
     """
     Consume pending clv_obligations rows and write 15m / 1h / close observations.
@@ -230,6 +231,10 @@ async def update_clv_obligations(
     ``fetch_price(market_id, outcome_id, side)`` must return the side-correct
     executable price for the purchased outcome token (ask when buying YES/token).
     May return ``(price, book_timestamp)`` or bare ``price``.
+
+    Observations received after ``due + overdue_grace`` are marked unavailable
+    even when a current book price is available — never label a late price as
+    a timely 15m/1h checkpoint.
     """
     from backend.db import get_db
 
@@ -257,6 +262,7 @@ async def update_clv_obligations(
         side = (row.get("side") or "YES").upper()
         patch: dict[str, Any] = {"updated_at": now.isoformat()}
         touched = False
+        meta = dict(row.get("metadata") or {})
 
         for checkpoint, due_key in (
             ("15m", "due_15m"),
@@ -274,13 +280,50 @@ async def update_clv_obligations(
                 # 15m/1h should always have due times; mark unavailable if missing
                 patch[status_col] = "unavailable"
                 patch[obs_ts_col] = now.isoformat()
-                meta = dict(row.get("metadata") or {})
                 meta[f"{checkpoint}_reason"] = "MISSING_DUE_TIME"
+                meta[f"{checkpoint}_receipt_ts"] = now.isoformat()
                 patch["metadata"] = meta
                 touched = True
                 stats["unavailable"] += 1
                 continue
             if now < due:
+                continue
+
+            delay = now - due
+            # Overdue beyond grace: reject even if a current price is available.
+            if delay > overdue_grace:
+                price_probe = None
+                book_ts_probe = None
+                try:
+                    price_probe, book_ts_probe = await _normalize_fetch(
+                        fetch_price, market_id, outcome_id, side
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"CLV overdue probe error {candidate_id} {checkpoint}: {exc}"
+                    )
+                    stats["errors"] += 1
+                patch[status_col] = "unavailable"
+                patch[obs_ts_col] = now.isoformat()
+                meta[f"{checkpoint}_reason"] = "OBSERVATION_OVERDUE"
+                meta[f"{checkpoint}_obs_delay_seconds"] = delay.total_seconds()
+                meta[f"{checkpoint}_receipt_ts"] = now.isoformat()
+                meta[f"{checkpoint}_price_available_but_late"] = (
+                    price_probe is not None
+                    and 0.0 < float(price_probe) < 1.0
+                )
+                if price_probe is not None:
+                    meta[f"{checkpoint}_late_price_not_accepted"] = float(price_probe)
+                if book_ts_probe is not None:
+                    meta[f"{checkpoint}_late_book_ts"] = book_ts_probe.isoformat()
+                patch["metadata"] = meta
+                touched = True
+                stats["unavailable"] += 1
+                logger.warning(
+                    f"CLV {checkpoint} unavailable (overdue "
+                    f"{delay.total_seconds():.0f}s) for {candidate_id}; "
+                    f"price_available={meta[f'{checkpoint}_price_available_but_late']}"
+                )
                 continue
 
             try:
@@ -300,21 +343,18 @@ async def update_clv_obligations(
                 patch[obs_ts_col] = now.isoformat()
                 if book_ts is not None:
                     patch[book_ts_col] = book_ts.isoformat()
+                meta[f"{checkpoint}_reason"] = "OBSERVED"
+                meta[f"{checkpoint}_obs_delay_seconds"] = delay.total_seconds()
+                meta[f"{checkpoint}_receipt_ts"] = now.isoformat()
+                meta[f"{checkpoint}_book_ts_source"] = (
+                    "orderbook_timestamp" if book_ts is not None else "missing"
+                )
+                patch["metadata"] = meta
                 touched = True
                 stats["updated"] += 1
                 logger.info(
-                    f"CLV {checkpoint} observed for {candidate_id}: {price}"
-                )
-            elif now > due + _OVERDUE_GRACE:
-                patch[status_col] = "unavailable"
-                patch[obs_ts_col] = now.isoformat()
-                meta = dict(row.get("metadata") or {})
-                meta[f"{checkpoint}_reason"] = "NO_ORDERBOOK_PRICE_OVERDUE"
-                patch["metadata"] = meta
-                touched = True
-                stats["unavailable"] += 1
-                logger.warning(
-                    f"CLV {checkpoint} unavailable (overdue) for {candidate_id}"
+                    f"CLV {checkpoint} observed for {candidate_id}: {price} "
+                    f"(delay={delay.total_seconds():.0f}s)"
                 )
             # else: still within grace — leave pending and retry next cycle
 

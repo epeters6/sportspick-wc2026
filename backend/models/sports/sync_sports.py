@@ -260,6 +260,20 @@ def sync_sports_market(
         )
 
     # 5. CLV Tracking — market fill vs effective cost stored separately
+    stake = float(fill.filled_shares) * float(fill.simulated_fill_price)
+    clv_meta = {
+        "event_id": features.event_id,
+        "mode": mode,
+        "platform": market_data.get("platform") or "unknown",
+        "stake": stake,
+        "shares": float(fill.filled_shares),
+        "notional": stake,
+        "exclude_from_clv_eval": bool(
+            (features.sport_specific or {}).get("exclude_from_clv_eval")
+        ),
+        "slate_date": (features.sport_specific or {}).get("slate_date"),
+        "game_pk": (features.sport_specific or {}).get("game_pk"),
+    }
     clv_record = init_clv_record(
         trade_id=f"sports_{features.event_id}_{int(datetime.now(timezone.utc).timestamp())}",
         market_id=features.market_id,
@@ -271,6 +285,7 @@ def sync_sports_market(
         due_close=features.start_time,
         entry_market_price=fill.simulated_fill_price,
         entry_effective_cost=fill.limit_price,
+        metadata=clv_meta,
     )
     log_clv_record(clv_record, "sports_clv_tracking.jsonl")
 

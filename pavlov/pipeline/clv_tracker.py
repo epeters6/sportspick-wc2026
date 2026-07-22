@@ -40,6 +40,7 @@ def _upsert_clv_obligation(
     record: CLVRecord,
     platform: Optional[str] = None,
     due_close: Optional[datetime] = None,
+    metadata: Optional[dict] = None,
 ) -> None:
     """Durable CLV checkpoint stub in Supabase. Fail soft if unavailable."""
     try:
@@ -69,6 +70,7 @@ def _upsert_clv_obligation(
             "status_15m": "pending",
             "status_1h": "pending",
             "status_close": "pending",
+            "metadata": metadata or {},
         }
         # Soft-fail if new columns not yet migrated: retry without them
         try:
@@ -96,6 +98,7 @@ def init_clv_record(
     *,
     entry_market_price: Optional[float] = None,
     entry_effective_cost: Optional[float] = None,
+    metadata: Optional[dict] = None,
 ) -> CLVRecord:
     """
     Create a CLV record.
@@ -119,7 +122,9 @@ def init_clv_record(
         entry_market_price=market,
         entry_effective_cost=effective,
     )
-    _upsert_clv_obligation(rec, platform=platform, due_close=due_close)
+    _upsert_clv_obligation(
+        rec, platform=platform, due_close=due_close, metadata=metadata
+    )
     return rec
 
 
