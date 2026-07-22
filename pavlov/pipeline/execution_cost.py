@@ -17,7 +17,8 @@ class ExecutableBucket:
 
 from pavlov.pipeline.fee_model import estimate_fee_per_share
 
-# Paper/shadow fill depth when list endpoints omit book size (common for Kalshi/Poly).
+# Opt-in only: evidence paths must pass default_depth_if_missing=None (the default)
+# so missing ask size yields depth 0 / INSUFFICIENT_DEPTH rather than assumed size.
 _DEFAULT_SHADOW_ASK_DEPTH = 50.0
 
 
@@ -54,13 +55,17 @@ def generate_executable_cost_vector(
     raw_markets: List[dict],
     platform: str,
     slippage_buffer: float = 0.005,
-    default_depth_if_missing: Optional[float] = _DEFAULT_SHADOW_ASK_DEPTH,
+    default_depth_if_missing: Optional[float] = None,
 ) -> Tuple[List[float], List[float]]:
     """
     Given a list of raw markets (mutually exclusive buckets), calculate the 
     Q_exec vector representing the marginal cost to execute one YES contract,
     and extract the available depth at that ask level.
     Q_exec = ask_price + fee + slippage
+
+    Missing/zero ask size yields depth 0 (no assumed depth). Callers may
+    explicitly pass default_depth_if_missing (e.g. _DEFAULT_SHADOW_ASK_DEPTH)
+    only for non-evidence exploratory paths.
     """
     Q_exec = []
     depth_caps = []
@@ -85,13 +90,12 @@ def generate_executable_cost_vector(
         if effective_cost >= 1.0:
             raise ValueError(f"EFFECTIVE_COST_NOT_TRADABLE: Bucket ask={ask} plus fee/slippage yields cost {effective_cost} >= 1.0")
         
-        if ask_size <= 0 and default_depth_if_missing:
+        if ask_size <= 0:
             logger.debug(
-                "Missing ask depth for %s — using shadow default %.1f",
+                "Missing/zero ask depth for %s — depth cap 0 (no assumed fill)",
                 m.get("ticker") or m.get("id") or "unknown",
-                default_depth_if_missing,
             )
-            ask_size = float(default_depth_if_missing)
+            ask_size = 0.0
 
         Q_exec.append(effective_cost)
         depth_caps.append(ask_size)

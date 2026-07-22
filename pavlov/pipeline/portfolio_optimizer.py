@@ -5,10 +5,12 @@ from loguru import logger
 
 def expected_log_growth(x: np.ndarray, p_adj: np.ndarray, q_exec: np.ndarray, bankroll: float) -> float:
     """
-    Calculate the negative expected log-growth of the bankroll (negative because we minimize).
-    x: vector of shares bought for each bucket
-    p_adj: vector of adjusted probabilities for each bucket
-    q_exec: vector of execution costs per share for each bucket
+    Negative expected log-wealth (minimize = maximize growth).
+
+    x: shares bought per bucket (each share pays $1 if that outcome wins)
+    q_exec: execution cost per share → dollars spent = sum(q_exec * x)
+    Relative wealth if j wins: 1 - f + x_j/bankroll where f = dollars/bankroll,
+    matching dollar-fraction Kelly (binary: 1 - f + f/c).
     """
     total_cost = np.sum(q_exec * x)
     

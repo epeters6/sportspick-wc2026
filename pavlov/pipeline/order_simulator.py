@@ -23,7 +23,8 @@ class PaperFill:
     unfilled_shares: float = 0.0
     partial_fill_reason: Optional[str] = None
 
-def _coerce_utc_timestamp(value) -> Optional[datetime]:
+def _parse_utc_timestamp(value) -> Optional[datetime]:
+    """Parse a timestamp to timezone-aware UTC. Raises on naive datetimes."""
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -36,7 +37,7 @@ def _coerce_utc_timestamp(value) -> Optional[datetime]:
     else:
         return None
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
+        raise ValueError("NAIVE_ORDERBOOK_TIMESTAMP")
     return ts.astimezone(timezone.utc)
 
 
@@ -47,30 +48,29 @@ def validate_orderbook_freshness(
     allow_assumed_fresh_orderbook_for_shadow: bool = False,
     max_orderbook_age_ms: int = 2000
 ) -> None:
+    """Validate exchange orderbook freshness for evidence-grade fills.
+
+    Exchange ``orderbook_timestamp`` is required. ``received_timestamp`` alone
+    is not sufficient for acceptance. Naive timestamps are rejected.
+    Assumed-freshness shortcuts are invalid for fills (even if requested).
+    """
+    if allow_assumed_fresh_orderbook_for_shadow:
+        raise ValueError("ASSUMED_FRESHNESS_INVALID")
+
+    orderbook_timestamp = _parse_utc_timestamp(orderbook_timestamp)
+    # Validate received_timestamp shape if present (naive still illegal),
+    # but do not use it as a substitute for exchange orderbook time.
+    _parse_utc_timestamp(received_timestamp)
+
+    if orderbook_timestamp is None:
+        raise ValueError("MISSING_ORDERBOOK_TIMESTAMP")
+
     now = datetime.now(timezone.utc)
-    received_timestamp = _coerce_utc_timestamp(received_timestamp)
-    orderbook_timestamp = _coerce_utc_timestamp(orderbook_timestamp)
-    
-    if received_timestamp is None:
-        if mode == "live":
-            raise ValueError("MISSING_ORDERBOOK_TIMESTAMP")
-        elif not allow_assumed_fresh_orderbook_for_shadow:
-            raise ValueError("MISSING_ORDERBOOK_TIMESTAMP")
-        else:
-            logger.info("ORDERBOOK_TIMESTAMP_ASSUMED_FOR_SHADOW")
-            return
-            
-    use_timestamp = orderbook_timestamp if orderbook_timestamp else received_timestamp
-    
-    age_ms = (now - use_timestamp).total_seconds() * 1000.0
-    
+    age_ms = (now - orderbook_timestamp).total_seconds() * 1000.0
+
     if age_ms > max_orderbook_age_ms:
         logger.warning(f"STALE_ORDERBOOK: age is {age_ms:.0f}ms (max {max_orderbook_age_ms}ms)")
-        # Paper/shadow runs scan many markets; by fill time the snapshot is often older
-        # than 2s. Live must fail closed; paper may proceed when explicitly allowed.
-        if mode == "live" or not allow_assumed_fresh_orderbook_for_shadow:
-            raise ValueError("STALE_ORDERBOOK")
-        logger.info("STALE_ORDERBOOK_ALLOWED_FOR_SHADOW")
+        raise ValueError("STALE_ORDERBOOK")
 
 def reprice_and_validate(
     original_order: SizedOrder,
@@ -122,12 +122,32 @@ def simulate_paper_fill(
     mode: Literal["live", "shadow", "paper"] = "live",
     allow_assumed_fresh_orderbook_for_shadow: bool = False
 ) -> PaperFill:
+    # Assumed freshness is never valid for evidence fills.
+    if allow_assumed_fresh_orderbook_for_shadow:
+        return PaperFill(
+            market_id=order.candidate.market_id,
+            outcome_id=order.candidate.outcome_id,
+            side=order.candidate.side,
+            requested_shares=order.target_shares,
+            filled_shares=0.0,
+            limit_price=order.limit_price,
+            simulated_fill_price=0.0,
+            fees=0.0,
+            slippage=0.0,
+            visible_depth_used=0.0,
+            rejection_reason="ASSUMED_FRESHNESS_INVALID",
+            is_partial=False,
+            is_full_fill=False,
+            unfilled_shares=order.target_shares,
+            partial_fill_reason=None
+        )
+
     try:
         validate_orderbook_freshness(
             orderbook_timestamp, 
             received_timestamp, 
             mode=mode, 
-            allow_assumed_fresh_orderbook_for_shadow=allow_assumed_fresh_orderbook_for_shadow
+            allow_assumed_fresh_orderbook_for_shadow=False
         )
     except ValueError as e:
         return PaperFill(
@@ -169,8 +189,28 @@ def simulate_paper_fill(
             partial_fill_reason=None
         )
         
-    # Fill up to depth cap
-    filled_shares = min(order.target_shares, candidate.visible_depth)
+    # Fill up to depth cap — missing/zero depth is not fillable
+    visible_depth = candidate.visible_depth
+    if visible_depth is None or visible_depth <= 0:
+        return PaperFill(
+            market_id=candidate.market_id,
+            outcome_id=candidate.outcome_id,
+            side=candidate.side,
+            requested_shares=order.target_shares,
+            filled_shares=0.0,
+            limit_price=order.limit_price,
+            simulated_fill_price=0.0,
+            fees=0.0,
+            slippage=0.0,
+            visible_depth_used=0.0,
+            rejection_reason="INSUFFICIENT_DEPTH",
+            is_partial=False,
+            is_full_fill=False,
+            unfilled_shares=order.target_shares,
+            partial_fill_reason=None
+        )
+
+    filled_shares = min(order.target_shares, visible_depth)
     if filled_shares <= 0:
         return PaperFill(
             market_id=candidate.market_id,

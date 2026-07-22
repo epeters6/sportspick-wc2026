@@ -56,14 +56,27 @@ os.environ["PAVLOV_BYPASS_CONFIG"] = "1"
 from backend.config import get_settings
 s = get_settings()
 
-from pipeline import ensemble_client
-from pipeline.settlement_resolver import normalize_market
-from pipeline.probability_model import generate_event_probability_vector
-from pipeline.market_probability import generate_market_implied_vector, shrink_probability_vector
-from pipeline.execution_cost import generate_executable_cost_vector, _as_probability
-from pipeline.portfolio_optimizer import optimize_portfolio
-from pipeline.nowcast_features import mask_impossible_buckets
+from pavlov.pipeline import ensemble_client
+from pavlov.pipeline.settlement_resolver import normalize_market
+from pavlov.pipeline.probability_model import generate_event_probability_vector
+from pavlov.pipeline.market_probability import generate_market_implied_vector, shrink_probability_vector
+from pavlov.pipeline.execution_cost import generate_executable_cost_vector, _as_probability
+from pavlov.pipeline.portfolio_optimizer import optimize_portfolio
+from pavlov.pipeline.nowcast_features import mask_impossible_buckets
 from backend.ml.intraday_nowcast import get_current_obs # Hypothetical or existing NWS fetcher
+
+
+def weather_candidate_id(
+    platform: str,
+    station: str,
+    date_str: str,
+    metric: str,
+    market_id: str,
+    mode: str,
+) -> str:
+    """Deterministic id shared by shadow / fill / CLV / autobet metadata."""
+    return f"{platform}:{station}:{date_str}:{metric}:{market_id}:yes:{mode}"
+
 
 async def sync_weather_predictions():
     logger.info("Starting rewritten weather prediction sync & portfolio optimization...")
@@ -101,10 +114,10 @@ async def sync_weather_predictions():
     except Exception as e:
         logger.warning(f"Failed to fetch Polymarket weather markets: {e}")
 
-    try:
-        _ensure_weather_pipeline_importable()
-        from pipeline import kalshi_client
-        kalshi_markets = kalshi_client.get_weather_markets()
+        try:
+            _ensure_weather_pipeline_importable()
+            from pavlov.pipeline import kalshi_client
+            kalshi_markets = kalshi_client.get_weather_markets()
         for m in kalshi_markets:
             m["_platform"] = "kalshi"
         markets.extend(kalshi_markets)
@@ -158,13 +171,35 @@ async def sync_weather_predictions():
         _write_weather_sync_status(ok=False, stats=stats, error=msg)
         raise RuntimeError(msg)
     
-    # Pre-fetch existing exposure for open weather bets
+    # Pre-fetch exposure + open-position keys for duplicate detection before fills
+    import json as _json
     exposure_tracker = {}
-    open_bets = db.table("autobets").select("bet_subject, stake").eq("status", "open").like("bet_subject", "weather_%").execute()
+    open_candidate_ids: set[str] = set()
+    open_legacy_keys: set[str] = set()
+    open_bets = (
+        db.table("autobets")
+        .select("bet_subject, stake, market_id, outcome_name, mode, metadata")
+        .eq("status", "open")
+        .like("bet_subject", "weather_%")
+        .execute()
+    )
     for row in (open_bets.data or []):
         subj = row.get("bet_subject")
         exposure_tracker[subj] = exposure_tracker.get(subj, 0.0) + (row.get("stake") or 0.0)
-        
+        meta = row.get("metadata") or {}
+        if isinstance(meta, str):
+            try:
+                meta = _json.loads(meta)
+            except (ValueError, TypeError):
+                meta = {}
+        if isinstance(meta, dict) and meta.get("candidate_id"):
+            open_candidate_ids.add(str(meta["candidate_id"]))
+        mid = row.get("market_id")
+        out = str(row.get("outcome_name") or "yes").lower()
+        row_mode = row.get("mode") or "paper"
+        if mid:
+            open_legacy_keys.add(f"{mid}:{out}:{row_mode}")
+
     paper_max_dollars = bankroll * s.polymarket_paper_max_position_pct
     live_max_dollars = bankroll * s.polymarket_max_position_pct
     from backend.trading.live_toggle import is_live_mode
@@ -305,7 +340,7 @@ async def sync_weather_predictions():
             # D2. Final Nowcast Masking & Assertion
             if nowcast_active:
                 P_adj = mask_impossible_buckets(events, P_adj, observed_extreme, metric=metric)
-                from pipeline.probability_model import validate_probability_vector
+                from pavlov.pipeline.probability_model import validate_probability_vector
                 validate_probability_vector("P_adj_after_nowcast", P_adj)
             
             # E. Execution Cost
@@ -441,11 +476,33 @@ async def sync_weather_predictions():
                 limit_price=q_i,
                 expected_log_growth_delta=0.0 # Logged at portfolio level
             )
-            
+
+            candidate_id = f"{platform}:{events[0].settlement_station}:{date_str}:{metric}:{event.market_id}:yes:{mode}"
+            # Duplicate check BEFORE fill / CLV logging so artifacts reconcile with DB bets
+            existing = (
+                db.table("autobets")
+                .select("id")
+                .eq("market_id", event.market_id)
+                .eq("outcome_name", "yes")
+                .eq("mode", mode)
+                .eq("status", "open")
+                .execute()
+            )
+            if existing.data:
+                logger.info(f"DUPLICATE_OPEN_POSITION: {candidate_id}")
+                shadow_record.setdefault("rejections", []).append(
+                    {"candidate_id": candidate_id, "reason": "DUPLICATE_OPEN_POSITION"}
+                )
+                exposure_tracker[virtual_match_id] = max(
+                    0.0, exposure_tracker.get(virtual_match_id, 0.0) - stake
+                )
+                continue
+
             # Save generic execution shadow order
             with open("execution_shadow_orders.jsonl", "a") as f:
                 f.write(json.dumps({
                     "strategy": candidate.strategy,
+                    "candidate_id": candidate_id,
                     "market_id": candidate.market_id,
                     "target_shares": sized_order.target_shares,
                     "target_cost": sized_order.target_cost,
@@ -464,10 +521,11 @@ async def sync_weather_predictions():
                 orderbook_timestamp=real_orderbook_timestamp,
                 received_timestamp=real_received_timestamp,
                 mode=mode,
-                allow_assumed_fresh_orderbook_for_shadow=True
+                allow_assumed_fresh_orderbook_for_shadow=False,
             )
             
             paper_order = {
+                "candidate_id": candidate_id,
                 "bucket_id": fill.market_id,
                 "side": fill.side,
                 "shares": fill.requested_shares,
@@ -497,7 +555,7 @@ async def sync_weather_predictions():
                 f.write(json.dumps(paper_order) + "\n")
 
             clv_rec = init_clv_record(
-                trade_id=f"sim_{virtual_match_id}_{event.market_id}",
+                trade_id=candidate_id,
                 market_id=event.market_id,
                 outcome_id="yes",
                 side="YES",
@@ -530,6 +588,7 @@ async def sync_weather_predictions():
                 "status": "open",
                 "bet_type": "weather",
                 "metadata": {
+                    "candidate_id": candidate_id,
                     "p_adj": P_adj[i],
                     "q_exec": q_i,
                     "mean_f": mean_f,
@@ -547,25 +606,25 @@ async def sync_weather_predictions():
                 }
             }
             
-            existing = db.table("autobets").select("id").eq("market_id", event.market_id).eq("outcome_name", "yes").eq("mode", mode).eq("status", "open").execute()
-            if not existing.data:
+            try:
+                db.table("autobets").insert(record).execute()
+                bets_placed += 1
+            except Exception as e:
+                # Retry without optional columns when migrations are pending
+                msg = str(e)
+                slim = dict(record)
+                for col in ("metadata", "raw_confidence", "bet_type", "sport", "venue"):
+                    if col in msg or "PGRST204" in msg or "schema cache" in msg:
+                        slim.pop(col, None)
                 try:
-                    db.table("autobets").insert(record).execute()
+                    db.table("autobets").insert(slim).execute()
                     bets_placed += 1
-                except Exception as e:
-                    # Retry without optional columns when migrations are pending
-                    msg = str(e)
-                    slim = dict(record)
-                    for col in ("metadata", "raw_confidence", "bet_type", "sport", "venue"):
-                        if col in msg or "PGRST204" in msg or "schema cache" in msg:
-                            slim.pop(col, None)
-                    try:
-                        db.table("autobets").insert(slim).execute()
-                        bets_placed += 1
-                        logger.warning(f"Weather autobet recorded with slim schema ({e})")
-                    except Exception as e2:
-                        logger.error(f"Failed to record weather autobet: {e2}")
-                    
+                    logger.warning(f"Weather autobet recorded with slim schema ({e})")
+                except Exception as e2:
+                    logger.error(f"Failed to record weather autobet: {e2}")
+                    exposure_tracker[virtual_match_id] = max(
+                        0.0, exposure_tracker.get(virtual_match_id, 0.0) - stake
+                    )
         # Write Shadow Record
         shadow_file = "weather_shadow_decisions.jsonl"
         with open(shadow_file, "a") as f:

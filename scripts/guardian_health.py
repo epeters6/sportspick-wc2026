@@ -111,26 +111,103 @@ def check_health():
                 
     except Exception as exc:
         logger.error(f"Guardian failed to check CLV degradation: {exc}")
-        
-    # 3. Explicit Resumption Rule
-    # If halted, domain stays in Paper Trading until its Paper Trading Shrunken ROI > 0.0% over N>=10 bets.
-    # (Checking paper bets is skipped here for brevity but would be part of a full resumption orchestrator)
-        
-    # 4. Write State
+
+    # 3. Realized-loss hard stops (apply even when paper_loose_gates=true)
+    #    - tier/sport: >5% of bankroll lost over 7 days → halt that sport
+    #    - account: >12% of bankroll lost over 7 days → halt all automated betting
+    try:
+        from backend.trading.autobet import _current_bankroll
+
+        bankroll = float(_current_bankroll(db) or 0.0)
+        seven_days_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        settled = (
+            db.table("autobets")
+            .select("sport, pnl, status, mode")
+            .gte("resolved_at", seven_days_ago)
+            .in_("status", ["won", "lost"])
+            .execute()
+            .data
+            or []
+        )
+        by_sport: dict[str, float] = {}
+        total_pnl = 0.0
+        for row in settled:
+            pnl = float(row.get("pnl") or 0.0)
+            sport = (row.get("sport") or "unknown").split("_")[0]
+            by_sport[sport] = by_sport.get(sport, 0.0) + pnl
+            total_pnl += pnl
+
+        if bankroll > 0:
+            for sport, pnl in by_sport.items():
+                if pnl < 0 and abs(pnl) / bankroll > 0.05:
+                    halt_reasons.append(
+                        f"TIER_HARD_STOP [{sport}]: 7d realized loss {pnl:.2f} "
+                        f"exceeds 5% of bankroll ({bankroll:.2f})."
+                    )
+            if total_pnl < 0 and abs(total_pnl) / bankroll > 0.12:
+                halt_reasons.append(
+                    f"ACCOUNT_HARD_STOP: 7d realized loss {total_pnl:.2f} "
+                    f"exceeds 12% of bankroll ({bankroll:.2f})."
+                )
+    except Exception as exc:
+        logger.error(f"Guardian failed realized-loss hard-stop check: {exc}")
+
+    # 4. Persist halt state (local file + durable app_settings so new runners see it)
     state = {
         "halted": len(halt_reasons) > 0,
         "reasons": halt_reasons,
-        "updated_at": datetime.utcnow().isoformat()
+        "updated_at": datetime.utcnow().isoformat(),
+        "requires_explicit_resume": True if halt_reasons else False,
     }
-    
+
+    # Do not auto-clear a prior durable halt without explicit resume
+    try:
+        prior = (
+            db.table("app_settings")
+            .select("value")
+            .eq("key", "guardian_halt")
+            .execute()
+            .data
+            or []
+        )
+        if prior:
+            prev = prior[0].get("value") or {}
+            if prev.get("halted") and prev.get("requires_explicit_resume"):
+                # Merge prior reasons; keep halted until audited resume
+                merged = list(dict.fromkeys((prev.get("reasons") or []) + halt_reasons))
+                state = {
+                    "halted": True,
+                    "reasons": merged,
+                    "updated_at": datetime.utcnow().isoformat(),
+                    "requires_explicit_resume": True,
+                    "prior_halt_preserved": True,
+                }
+    except Exception as exc:
+        logger.warning(f"Guardian durable read failed: {exc}")
+
     with open(HALT_FILE, "w") as f:
         json.dump(state, f, indent=2)
-        
+
+    try:
+        db.table("app_settings").upsert(
+            {
+                "key": "guardian_halt",
+                "value": state,
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+            on_conflict="key",
+        ).execute()
+    except Exception as exc:
+        logger.warning(f"Guardian durable write failed: {exc}")
+
     if state["halted"]:
         print(f"⚠️ GUARDIAN HALT TRIGGERED:")
-        for r in halt_reasons:
+        for r in state["reasons"]:
             print(f"  - {r}")
-        print("\nRESUMPTION RULE: A domain remains in Paper Trading mode until its 14-day Paper Trading Shrunken Expected ROI recovers above +0.0% with a minimum of 10 paper trades.")
+        print(
+            "\nRESUMPTION RULE: Halt persists across runners. "
+            "Requires explicit audited resume after hard stop."
+        )
     else:
         print("✅ Guardian Health Check Passed.")
 

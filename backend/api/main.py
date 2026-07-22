@@ -24,7 +24,7 @@ from typing import Any
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
@@ -426,19 +426,40 @@ def get_guardian_status():
 
 @app.get("/trading/live-toggle")
 def get_live_toggle_state():
-    """Current live-trading toggle plus the effective mode after safety gates."""
+    """Current live-trading toggle plus the effective mode after safety gates.
+
+    Public read is intentional for dashboard status; writes require admin auth.
+    """
     from backend.trading.live_toggle import get_live_toggle, is_live_mode
     toggle = get_live_toggle()
     return {"toggle": toggle, "effective_live": is_live_mode()}
 
 
 @app.post("/trading/live-toggle")
-def set_live_toggle_state(payload: dict):
-    """Flip the live-trading toggle from the dashboard."""
-    from backend.trading.live_toggle import set_live_toggle, is_live_mode
+def set_live_toggle_state(payload: dict, request: Request):
+    """Flip the live-trading toggle (admin Authorization required)."""
+    from backend.trading.live_toggle import request_live_toggle, is_live_mode
+
+    auth = request.headers.get("Authorization")
+    if not auth or not str(auth).strip():
+        raise HTTPException(status_code=401, detail="Authorization header required")
+
     enabled = bool(payload.get("enabled"))
-    value = set_live_toggle(enabled, by=str(payload.get("by") or "dashboard"))
-    return {"toggle": value, "effective_live": is_live_mode()}
+    result = request_live_toggle(
+        enabled,
+        actor=str(payload.get("by") or "dashboard"),
+        authorization_header=auth,
+    )
+    if not result.get("allowed"):
+        status = int(result.get("status") or 403)
+        raise HTTPException(status_code=status, detail=result.get("reason") or "live toggle rejected")
+
+    return {
+        "toggle": result.get("toggle"),
+        "effective_live": is_live_mode(),
+        "reason": result.get("reason"),
+        "readiness": result.get("readiness"),
+    }
 
 
 @app.get("/trading/arb-scan")

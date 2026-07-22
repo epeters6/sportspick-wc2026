@@ -59,30 +59,49 @@ def sync_sports_market(
     with open("orderbook_snapshots.jsonl", "a") as f:
         f.write(json.dumps(snapshot_log) + "\n")
         
-    # 1. Predict
+    # 1. Predict — pitcher-outs may supply model_prob_override (coefficients unchanged)
     prediction = predict_sports_probability(features)
-    
+    override = None
+    if isinstance(features.sport_specific, dict):
+        override = features.sport_specific.get("model_prob_override")
+    if override is None:
+        override = market_data.get("model_prob_override")
+    if override is not None:
+        prediction.model_prob = float(override)
+        if isinstance(features.sport_specific, dict):
+            for k in ("model_version", "feature_version", "coefficient_source", "calibration_status"):
+                if features.sport_specific.get(k) is not None and hasattr(prediction, k):
+                    setattr(prediction, k, features.sport_specific[k])
+
     if prediction.rejection_reason:
         _log_decision(features, prediction, None, None, None, prediction.rejection_reason)
         return
-        
+
     if getattr(prediction, "calibration_status", "uncalibrated_shadow") != "calibrated_out_of_sample" and mode == "live":
         raise ValueError("UNCALIBRATED_MODEL_LIVE_BLOCK")
-        
+
     if market_data.get("platform", "").lower() == "kalshi":
         _log_decision(features, prediction, None, None, None, "KALSHI_SPORTS_MAPPING_NOT_IMPLEMENTED")
         return
-        
-    # 2. Build TradeCandidate
-    # We want to map the generic model prediction to a YES/NO execution side
-    # For this scaffolding, assume we are always buying YES on team_a for demonstration
+
+    if real_orderbook_timestamp is None or real_received_timestamp is None:
+        _log_decision(features, prediction, None, None, None, "MISSING_ORDERBOOK_TIMESTAMP")
+        return
+    if getattr(real_orderbook_timestamp, "tzinfo", None) is None or getattr(real_received_timestamp, "tzinfo", None) is None:
+        _log_decision(features, prediction, None, None, None, "NAIVE_ORDERBOOK_TIMESTAMP")
+        return
+    if visible_depth is None or float(visible_depth) <= 0:
+        _log_decision(features, prediction, None, None, None, "INSUFFICIENT_DEPTH")
+        return
+
+    # 2. Build TradeCandidate (YES on selected contract outcome)
     side = "YES"
-    executable_cost = best_ask + fee_per_share + 0.005 # with slippage
-    
+    executable_cost = best_ask + fee_per_share + 0.005  # with slippage
+
     if executable_cost >= 1.0:
         _log_decision(features, prediction, None, None, None, "EFFECTIVE_COST_NOT_TRADABLE")
         return
-        
+
     candidate = TradeCandidate(
         strategy="sports_quant_v1",
         platform=market_data.get("platform", "polymarket"),
@@ -93,13 +112,13 @@ def sync_sports_market(
         model_prob=prediction.model_prob,
         market_prob=prediction.market_prob,
         executable_cost=executable_cost,
-        best_bid=best_ask - 0.02, # mock spread
+        best_bid=best_ask - 0.02,
         best_ask=best_ask,
         spread=0.02,
-        visible_depth=visible_depth,
+        visible_depth=float(visible_depth),
         fee_per_share=fee_per_share,
         slippage_buffer=0.005,
-        max_shares_by_depth=visible_depth,
+        max_shares_by_depth=float(visible_depth),
         max_shares_by_risk=1e9,
         bankroll=bankroll,
         event_exposure_cap=0.05 * bankroll,
@@ -107,7 +126,7 @@ def sync_sports_market(
         timestamp=datetime.now(timezone.utc),
         metadata=features.sport_specific,
         received_timestamp=real_received_timestamp,
-        orderbook_timestamp=real_orderbook_timestamp
+        orderbook_timestamp=real_orderbook_timestamp,
     )
     
     # 3. Binary Kelly Sizing
@@ -130,7 +149,6 @@ def sync_sports_market(
         orderbook_timestamp=real_orderbook_timestamp,
         received_timestamp=real_received_timestamp,
         mode=mode,
-        allow_assumed_fresh_orderbook_for_shadow=True
     )
     
     if fill.rejection_reason:

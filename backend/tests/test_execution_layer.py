@@ -82,8 +82,13 @@ class TestExecutionLayer(unittest.TestCase):
 
     def test_missing_orderbook_timestamp_rejected(self):
         now = datetime.now(timezone.utc)
-        naive_dt = datetime.now()
-        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+        with self.assertRaisesRegex(ValueError, "MISSING_ORDERBOOK_TIMESTAMP"):
+            validate_orderbook_freshness(None, now)
+
+    def test_naive_orderbook_timestamp_rejected(self):
+        now = datetime.now(timezone.utc)
+        naive_dt = datetime.now()  # naive
+        with self.assertRaisesRegex(ValueError, "NAIVE_ORDERBOOK_TIMESTAMP"):
             validate_orderbook_freshness(naive_dt, now)
 
     # Reprice Check

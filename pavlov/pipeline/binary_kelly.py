@@ -27,14 +27,24 @@ def expected_binary_log_growth(
     p: float,
     c: float
 ) -> float:
-    """Expected log growth per unit bankroll."""
+    """Expected log growth for dollar-fraction Kelly.
+
+    ``f`` is dollars spent / bankroll (not share count). Binary contract
+    pays $1 if win, so relative wealth is:
+      win:  1 - f + f/c
+      lose: 1 - f
+    """
     if f <= 0:
         return 0.0
-    # wealth if win: 1 - f*c + f = 1 + f*(1-c)
-    # wealth if lose: 1 - f*c
-    if f*c >= 1.0:
-        return -float('inf')
-    return p * math.log(1.0 + f * (1.0 - c)) + (1.0 - p) * math.log(1.0 - f * c)
+    if c <= 0.0 or c >= 1.0:
+        return 0.0
+    if f >= 1.0:
+        return -float("inf")
+    wealth_if_win = 1.0 - f + f / c
+    wealth_if_loss = 1.0 - f
+    if wealth_if_win <= 0.0 or wealth_if_loss <= 0.0:
+        return -float("inf")
+    return p * math.log(wealth_if_win) + (1.0 - p) * math.log(wealth_if_loss)
 
 def size_binary_trade(
     candidate: TradeCandidate,

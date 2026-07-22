@@ -203,6 +203,8 @@ async def run_ml_phase() -> dict[str, int]:
         # running it here too doubled the work and the Actions minutes.
     except Exception as exc:
         print(f"  MLB Orchestrator failed: {exc}")
+        traceback.print_exc()
+        raise
 
     print("Running Polymarket autobet...")
     autobet_summary: dict = {}

@@ -202,12 +202,12 @@ class TestWeatherPipelineAudit(unittest.TestCase):
         self.assertAlmostEqual(q_exec[0], 0.40 + 0.07 * 0.40 * 0.60 + 0.005, places=5)
         self.assertEqual(depth[0], 25.0)
 
-    def test_execution_cost_shadow_default_depth_when_missing(self):
+    def test_execution_cost_no_assumed_depth_when_missing(self):
         raw_markets = [{"yes_ask": 0.35}]
         q_exec, depth = generate_executable_cost_vector(raw_markets, "polymarket")
         self.assertGreater(q_exec[0], 0.35)
         self.assertLess(q_exec[0], 1.0)
-        self.assertEqual(depth[0], 50.0)
+        self.assertEqual(depth[0], 0.0)
 
     def test_single_degree_bucket_bounds(self):
         from pavlov.pipeline.settlement_resolver import parse_bucket_bounds

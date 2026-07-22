@@ -17,9 +17,10 @@ async def run_validation():
     start_time = datetime.now()
     status_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sync_status.json")
 
-    # Fresh artifact files each run — avoids stale test rows polluting CI reports.
+    # Fresh decision/fill artifacts each run. Do NOT truncate CLV history —
+    # checkpoints must persist across GitHub runners.
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for name in ("sports_shadow_decisions.jsonl", "sports_paper_fills.jsonl", "sports_clv_tracking.jsonl"):
+    for name in ("sports_shadow_decisions.jsonl", "sports_paper_fills.jsonl"):
         path = os.path.join(repo_root, name)
         try:
             open(path, "w").close()

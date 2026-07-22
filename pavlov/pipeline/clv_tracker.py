@@ -41,6 +41,8 @@ def init_clv_record(
     )
 
 def log_clv_record(record: CLVRecord, filepath: str = "clv_tracking.jsonl") -> None:
+    from datetime import timedelta, timezone as tz
+
     data = {
         "trade_id": record.trade_id,
         "market_id": record.market_id,
@@ -61,3 +63,31 @@ def log_clv_record(record: CLVRecord, filepath: str = "clv_tracking.jsonl") -> N
     }
     with open(filepath, "a") as f:
         f.write(json.dumps(data) + "\n")
+    # Durable obligation for cross-runner checkpoints (fail soft)
+    try:
+        from backend.db import get_db
+
+        entry = record.entry_time
+        if entry.tzinfo is None:
+            entry = entry.replace(tzinfo=tz.utc)
+        now = datetime.now(tz.utc)
+        db = get_db()
+        db.table("clv_obligations").upsert(
+            {
+                "candidate_id": record.trade_id,
+                "market_id": record.market_id,
+                "outcome_id": record.outcome_id,
+                "side": record.side,
+                "entry_price": record.entry_price,
+                "entry_ts": entry.isoformat(),
+                "due_15m": (entry + timedelta(minutes=15)).isoformat(),
+                "due_1h": (entry + timedelta(hours=1)).isoformat(),
+                "status_15m": "pending",
+                "status_1h": "pending",
+                "status_close": "pending",
+                "updated_at": now.isoformat(),
+            },
+            on_conflict="candidate_id",
+        ).execute()
+    except Exception:
+        pass

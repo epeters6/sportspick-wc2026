@@ -42,7 +42,24 @@ class KalshiClient:
         raw_path = self.settings.KALSHI_PRIVATE_KEY_PATH
         if not raw_path:
             return None
-            
+
+        # SECURITY_NOTE: prefer a secrets manager / CI secret file outside the
+        # git tree. A repo-relative PEM path is a leak risk (archives, backups).
+        try:
+            abs_path = os.path.abspath(raw_path)
+            repo_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..")
+            )
+            if abs_path == repo_root or abs_path.startswith(repo_root + os.sep):
+                logger.warning(
+                    "KalshiClient: private key path is under the repository "
+                    f"({os.path.basename(abs_path)}). Prefer a secrets manager "
+                    "or an absolute path outside the repo; rotate the key if it "
+                    "was ever packaged in a zip or commit."
+                )
+        except Exception:
+            pass
+
         try:
             with open(raw_path, "rb") as fh:
                 raw_bytes = fh.read()
@@ -50,12 +67,16 @@ class KalshiClient:
                 raw_bytes = raw_bytes[3:]
             raw_bytes = raw_bytes.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
             text = raw_bytes.decode("ascii", errors="ignore").strip()
-            
+
             if not text.startswith("-----"):
                 b64_clean = "".join(text.split())
-                lines = [b64_clean[i:i+64] for i in range(0, len(b64_clean), 64)]
-                text = "-----BEGIN RSA PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END RSA PRIVATE KEY-----\n"
-                
+                lines = [b64_clean[i : i + 64] for i in range(0, len(b64_clean), 64)]
+                text = (
+                    "-----BEGIN RSA PRIVATE KEY-----\n"
+                    + "\n".join(lines)
+                    + "\n-----END RSA PRIVATE KEY-----\n"
+                )
+
             pem_bytes = text.encode("utf-8")
             key = serialization.load_pem_private_key(pem_bytes, password=None)
             if isinstance(key, RSAPrivateKey):

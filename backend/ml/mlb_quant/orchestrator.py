@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1131,7 +1131,7 @@ def load_existing_manifest() -> dict[str, Any]:
 
 def setup_daily_slate() -> None:
     existing_manifest = load_existing_manifest()
-    today = datetime.now()
+    today = datetime.now(timezone.utc)
     today_str = today.strftime("%Y-%m-%d")
 
     today_starters = fetch_today_starters(today_str)
@@ -1252,11 +1252,15 @@ def setup_daily_slate() -> None:
                     "line_move_abs": 0.0,
                     "last_move_delta": 0.0,
                     "book_count": 0,
-                    "line_last_updated_utc": datetime.utcnow().isoformat(),
+                    "line_last_updated_utc": datetime.now(timezone.utc).isoformat(),
                 }
 
             manifest[p_key] = {
+                # Explicit contract — shadow must not infer moneyline from question text.
+                "contract_type": "pitcher_outs",
+                "prop_side": "UNDER",  # engine selects UNDER/OVER later; default documented
                 "name": pitcher_name,
+                "pitcher_id": pitcher_id,
                 "team": pitcher_team,
                 "opponent": opponent_team,
                 "pitch_hand": pitch_hand,
@@ -1274,12 +1278,19 @@ def setup_daily_slate() -> None:
                     "home_away": matchup.get("home_away", "unknown"),
                     "venue_team": venue_team,
                     "game_pk": game_pk,
+                    "scheduled_start_utc": matchup.get("scheduled_start_utc")
+                    or matchup.get("game_datetime")
+                    or matchup.get("officialDate"),
                 },
                 "weather_impact": environment_context.get("weather_impact", "Normal"),
                 "prediction": None,
                 "slate_date": today_str,
                 "starter_profile": profile,
-                "manifest_updated_at_utc": datetime.utcnow().isoformat(),
+                "model_version": "mlb_pitcher_outs_v4",
+                "feature_version": "mlb_quant_manifest_v1",
+                "coefficient_source": "under_model_state.json",
+                "calibration_status": "uncalibrated_shadow",
+                "manifest_updated_at_utc": datetime.now(timezone.utc).isoformat(),
             }
             print(
                 f"OK {pitcher_name} | T{tier} ({tier_reason}) | "
@@ -1291,14 +1302,17 @@ def setup_daily_slate() -> None:
     try:
         from backend.db import get_db
         db = get_db()
-        from datetime import datetime
         db.table("mlb_model_state").upsert({
             "state_key": "manifest",
             "state_value": manifest,
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }, on_conflict="state_key").execute()
     except Exception as e:
+        logger.warning(f"Manifest DB upsert failed — writing local file only: {e}")
         atomic_write_json(MANIFEST_PATH, manifest)
+        print("--- manifest.json written locally (DB upsert failed) ---")
+        return
+    atomic_write_json(MANIFEST_PATH, manifest)
     print("--- manifest.json created successfully ---")
     print(
         f"Tiers => T1:{tier_counts[1]} T2:{tier_counts[2]} T3:{tier_counts[3]} | "
