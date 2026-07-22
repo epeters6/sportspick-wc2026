@@ -13,11 +13,12 @@ from pavlov.pipeline.trade_candidate import SizedOrder, TradeCandidate
 
 
 def _candidate(depth: float = 100.0) -> TradeCandidate:
+    now = datetime.now(timezone.utc)
     return TradeCandidate(
         strategy="test",
         platform="polymarket",
         market_id="m1",
-        outcome_id="yes",
+        outcome_id="yes_token_abc",
         event_id="e1",
         side="YES",
         model_prob=0.6,
@@ -34,8 +35,10 @@ def _candidate(depth: float = 100.0) -> TradeCandidate:
         bankroll=1000.0,
         event_exposure_cap=20.0,
         bucket_or_outcome_exposure_cap=10.0,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=now,
         metadata={},
+        received_timestamp=now,
+        orderbook_timestamp=now,
     )
 
 

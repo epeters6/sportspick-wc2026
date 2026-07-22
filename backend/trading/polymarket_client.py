@@ -232,14 +232,20 @@ class PolymarketClient:
         except Exception as exc:
             logger.error(f"Failed to audit Polymarket positions: {exc}")
 
-    async def get_book_depth(self, token_id: str, side: str = "sell") -> tuple[float | None, float]:
+    async def get_top_of_book(self, token_id: str) -> dict:
         """
-        Fetch the CLOB order book for a token and return:
-          (best_price_for_taker, available_size_at_top_levels)
+        Fetch real CLOB top-of-book for a token.
 
-        side='sell' means the book's asks (what a BUYER would pay/take).
-        Returns (None, 0.0) on failure — caller should treat as no liquidity.
+        Returns best_bid/best_ask, top-level sizes (shares), and book timestamp.
+        No fabricated spreads or outcome-price fallbacks.
         """
+        empty = {
+            "best_bid": None,
+            "best_ask": None,
+            "bid_size": 0.0,
+            "ask_size": 0.0,
+            "book_timestamp": None,
+        }
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.get(f"{CLOB_BASE}/book", params={"token_id": token_id})
@@ -247,23 +253,57 @@ class PolymarketClient:
                 book = r.json()
         except Exception as exc:
             logger.debug(f"CLOB book fetch failed for {token_id}: {exc}")
-            return None, 0.0
+            return empty
 
-        # A buyer consumes the asks (lowest first)
-        levels = book.get("asks") if side == "sell" else book.get("bids")
-        if not levels:
-            return None, 0.0
-
-        # asks come sorted; aggregate the top 3 levels for a depth estimate
         try:
-            sorted_levels = sorted(levels, key=lambda x: float(x["price"]),
-                                   reverse=(side != "sell"))
-            best_price = float(sorted_levels[0]["price"])
-            depth = sum(float(l["size"]) * float(l["price"]) for l in sorted_levels[:3])
-            return best_price, depth
-        except (KeyError, ValueError, IndexError) as exc:
-            logger.debug(f"Failed to parse CLOB book for {token_id}: {exc}")
-            return None, 0.0
+            asks = sorted(book.get("asks") or [], key=lambda x: float(x["price"]))
+            bids = sorted(
+                book.get("bids") or [], key=lambda x: float(x["price"]), reverse=True
+            )
+            best_ask = float(asks[0]["price"]) if asks else None
+            ask_size = float(asks[0]["size"]) if asks else 0.0
+            best_bid = float(bids[0]["price"]) if bids else None
+            bid_size = float(bids[0]["size"]) if bids else 0.0
+            book_ts = None
+            raw_ts = book.get("timestamp") or book.get("last_trade_price_timestamp")
+            if raw_ts is not None:
+                try:
+                    # Polymarket often returns epoch ms or seconds
+                    ts_f = float(raw_ts)
+                    if ts_f > 1e12:
+                        ts_f /= 1000.0
+                    book_ts = datetime.fromtimestamp(ts_f, tz=timezone.utc)
+                except (TypeError, ValueError, OSError):
+                    try:
+                        book_ts = datetime.fromisoformat(
+                            str(raw_ts).replace("Z", "+00:00")
+                        )
+                    except ValueError:
+                        book_ts = None
+            return {
+                "best_bid": best_bid,
+                "best_ask": best_ask,
+                "bid_size": bid_size,
+                "ask_size": ask_size,
+                "book_timestamp": book_ts,
+            }
+        except (KeyError, ValueError, IndexError, TypeError) as exc:
+            logger.debug(f"Failed to parse CLOB top-of-book for {token_id}: {exc}")
+            return empty
+
+    async def get_book_depth(self, token_id: str, side: str = "sell") -> tuple[float | None, float]:
+        """
+        Fetch the CLOB order book for a token and return:
+          (best_price_for_taker, available_size_at_top_levels)
+
+        side='sell' means the book's asks (what a BUYER would pay/take).
+        Returns (None, 0.0) on failure — caller should treat as no liquidity.
+        Depth is top-of-book share size (not fabricated notional).
+        """
+        book = await self.get_top_of_book(token_id)
+        if side == "sell":
+            return book.get("best_ask"), float(book.get("ask_size") or 0.0)
+        return book.get("best_bid"), float(book.get("bid_size") or 0.0)
 
     async def get_vwap(self, token_id: str, target_size: float = 500.0, side: str = "sell") -> float | None:
         """

@@ -7,12 +7,21 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
-import pybaseball as pyb
 import requests
 
 logger = logging.getLogger(__name__)
 
-pyb.cache.enable()
+# Lazy: pybaseball is heavy and not needed for import-time symbol checks / unit tests.
+pyb = None
+
+
+def _pyb():
+    global pyb
+    if pyb is None:
+        import pybaseball as _pyb_mod
+        _pyb_mod.cache.enable()
+        pyb = _pyb_mod
+    return pyb
 
 _QUANT_DIR = Path(__file__).resolve().parent
 MANIFEST_PATH = _QUANT_DIR / "manifest.json"
@@ -494,7 +503,7 @@ def load_umpire_overrides() -> dict[str, float]:
 
 def fetch_team_offense_context(start_date: str, end_date: str) -> dict[str, dict[str, float]]:
     try:
-        df = pyb.batting_stats_range(start_date, end_date, qual=0)
+        df = _pyb().batting_stats_range(start_date, end_date, qual=0)
     except Exception:
         return {}
     if df.empty:
@@ -546,7 +555,7 @@ def fetch_team_offense_context(start_date: str, end_date: str) -> dict[str, dict
 def fetch_recent_bullpen_data() -> pd.DataFrame:
     today = datetime.now()
     try:
-        return pyb.pitching_stats_range(
+        return _pyb().pitching_stats_range(
             (today - timedelta(days=3)).strftime("%Y-%m-%d"),
             (today - timedelta(days=1)).strftime("%Y-%m-%d"),
             qual=0,
@@ -988,7 +997,7 @@ def get_pitcher_baseline_profile_and_context(
     season_lookup: dict[str, pd.Series],
 ) -> tuple[Optional[dict[str, dict[str, float]]], Optional[int], dict[str, float], dict[str, float], str]:
     first, last = name.split(" ", 1)
-    lookup = pyb.playerid_lookup(last, first)
+    lookup = _pyb().playerid_lookup(last, first)
     if lookup.empty or "key_mlbam" not in lookup.columns:
         return None, None, {}, {}, "R"
 
@@ -1003,7 +1012,7 @@ def get_pitcher_baseline_profile_and_context(
         throws = "R"
 
     end_date = datetime.now().strftime("%Y-%m-%d")
-    data = pyb.statcast_pitcher(BASELINE_LOOKBACK_START, end_date, player_id=p_id)
+    data = _pyb().statcast_pitcher(BASELINE_LOOKBACK_START, end_date, player_id=p_id)
     if data.empty:
         return None, p_id, {}, {}, throws
 
@@ -1146,7 +1155,7 @@ def setup_daily_slate() -> None:
     umpire_cache: dict[int, str] = {}
 
     try:
-        season_pitching = pyb.pitching_stats_range(BASELINE_LOOKBACK_START, today_str, qual=0)
+        season_pitching = _pyb().pitching_stats_range(BASELINE_LOOKBACK_START, today_str, qual=0)
     except Exception:
         season_pitching = pd.DataFrame()
     season_lookup: dict[str, pd.Series] = {}

@@ -10,6 +10,31 @@ from pavlov.pipeline.risk_caps import RiskCaps
 import os
 import json
 
+
+def _call_sync(market_data, features, best_ask, fee_per_share, visible_depth, bankroll, risk_caps, mode="shadow", **extra):
+    """Supply valid exchange timestamps + top-of-book fields for evidence fills."""
+    now = datetime.now(timezone.utc)
+    md = dict(market_data or {})
+    if md.get("platform") == "test":
+        md["platform"] = "polymarket"
+    md.setdefault("outcome_id", "tok_test")
+    sync_sports_market(
+        md,
+        features,
+        best_ask,
+        fee_per_share,
+        visible_depth,
+        bankroll,
+        risk_caps,
+        mode=mode,
+        best_bid=extra.get("best_bid", max(0.01, float(best_ask) - 0.02) if best_ask is not None else 0.01),
+        spread=extra.get("spread", 0.02),
+        outcome_id=extra.get("outcome_id", md["outcome_id"]),
+        real_orderbook_timestamp=extra.get("real_orderbook_timestamp", now),
+        real_received_timestamp=extra.get("real_received_timestamp", now),
+    )
+
+
 def make_base_features(
     market_prob=0.5,
     sport="MLB",
@@ -213,7 +238,7 @@ class TestSportsQuantRebuildPart2(unittest.TestCase):
         f = make_base_features()
         f.market_prob_baseline = None
         caps = RiskCaps(0.02, 0.01, 0.1, 0.5, 0.05, 0.1, 0.0, 0.0)
-        sync_sports_market({"platform": "test"}, f, 0.2, 0.0, 100, 1000, caps, mode="shadow")
+        _call_sync({"platform": "test"}, f, 0.2, 0.0, 100, 1000, caps, mode="shadow")
         with open("sports_shadow_decisions.jsonl", "r") as ff:
             dec = json.loads(ff.readlines()[-1])
             self.assertEqual(dec["rejection_reason"], "MISSING_MARKET_BASELINE")
@@ -223,7 +248,7 @@ class TestSportsQuantRebuildPart2(unittest.TestCase):
         f = make_base_features()
         f.market_prob_baseline = 0.5
         caps = RiskCaps(0.02, 0.01, 0.1, 0.5, 0.05, 0.1, 0.0, 0.0)
-        sync_sports_market({"platform": "test"}, f, 1.2, 0.0, 100, 1000, caps, mode="shadow")
+        _call_sync({"platform": "test"}, f, 1.2, 0.0, 100, 1000, caps, mode="shadow")
         with open("sports_shadow_decisions.jsonl", "r") as ff:
             dec = json.loads(ff.readlines()[-1])
             self.assertEqual(dec["rejection_reason"], "EFFECTIVE_COST_NOT_TRADABLE")
@@ -232,7 +257,7 @@ class TestSportsQuantRebuildPart2(unittest.TestCase):
     def test_sports_effective_cost_above_one_rejected(self):
         f = make_base_features()
         caps = RiskCaps(0.02, 0.01, 0.1, 0.5, 0.05, 0.1, 0.0, 0.0)
-        sync_sports_market({"platform": "test"}, f, 0.99, 0.05, 100, 1000, caps, mode="shadow")
+        _call_sync({"platform": "test"}, f, 0.99, 0.05, 100, 1000, caps, mode="shadow")
         with open("sports_shadow_decisions.jsonl", "r") as ff:
             dec = json.loads(ff.readlines()[-1])
             self.assertEqual(dec["rejection_reason"], "EFFECTIVE_COST_NOT_TRADABLE")
@@ -242,7 +267,7 @@ class TestSportsQuantRebuildPart2(unittest.TestCase):
         f.market_prob_baseline = 0.5
         # zero bankroll => zero sized order
         caps = RiskCaps(0.02, 0.01, 0.1, 0.5, 0.05, 0.1, 0.0, 0.0)
-        sync_sports_market({"platform": "test"}, f, 0.5, 0.0, 100, 0, caps, mode="shadow")
+        _call_sync({"platform": "test"}, f, 0.5, 0.0, 100, 0, caps, mode="shadow")
         with open("sports_shadow_decisions.jsonl", "r") as ff:
             dec = json.loads(ff.readlines()[-1])
             self.assertIsNone(dec["paper_fill"])
@@ -260,7 +285,7 @@ class TestSportsQuantRebuildPart2(unittest.TestCase):
         f = make_base_features()
         f.market_prob_baseline = 0.2
         caps = RiskCaps(0.02, 0.01, 0.1, 0.5, 0.05, 0.1, 0.0, 0.0)
-        sync_sports_market({"platform": "test"}, f, 0.2, 0.0, 100, 1000, caps, mode="shadow")
+        _call_sync({"platform": "test"}, f, 0.2, 0.0, 100, 1000, caps, mode="shadow")
         with open("sports_shadow_decisions.jsonl", "r") as ff:
             dec = json.loads(ff.readlines()[-1])
             self.assertIn("model_type", dec)

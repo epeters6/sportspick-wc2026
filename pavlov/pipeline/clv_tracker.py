@@ -2,10 +2,10 @@ from dataclasses import dataclass
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 import json
-import os
 import logging
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class CLVRecord:
@@ -27,7 +27,11 @@ class CLVRecord:
     clv_update_error: Optional[str] = None
 
 
-def _upsert_clv_obligation(record: CLVRecord, platform: Optional[str] = None) -> None:
+def _upsert_clv_obligation(
+    record: CLVRecord,
+    platform: Optional[str] = None,
+    due_close: Optional[datetime] = None,
+) -> None:
     """Durable CLV checkpoint stub in Supabase. Fail soft if unavailable."""
     try:
         from backend.db import get_db
@@ -35,6 +39,9 @@ def _upsert_clv_obligation(record: CLVRecord, platform: Optional[str] = None) ->
         entry = record.entry_time
         if entry.tzinfo is None:
             entry = entry.replace(tzinfo=timezone.utc)
+        close = due_close
+        if close is not None and close.tzinfo is None:
+            close = close.replace(tzinfo=timezone.utc)
         row = {
             "candidate_id": record.trade_id,
             "platform": platform or "unknown",
@@ -45,7 +52,7 @@ def _upsert_clv_obligation(record: CLVRecord, platform: Optional[str] = None) ->
             "entry_ts": entry.isoformat(),
             "due_15m": (entry + timedelta(minutes=15)).isoformat(),
             "due_1h": (entry + timedelta(hours=1)).isoformat(),
-            "due_close": None,
+            "due_close": close.isoformat() if close is not None else None,
             "status_15m": "pending",
             "status_1h": "pending",
             "status_close": "pending",
@@ -63,6 +70,7 @@ def init_clv_record(
     entry_price: float,
     entry_time: datetime,
     platform: Optional[str] = None,
+    due_close: Optional[datetime] = None,
 ) -> CLVRecord:
     rec = CLVRecord(
         trade_id=trade_id,
@@ -72,7 +80,7 @@ def init_clv_record(
         entry_price=entry_price,
         entry_time=entry_time,
     )
-    _upsert_clv_obligation(rec, platform=platform)
+    _upsert_clv_obligation(rec, platform=platform, due_close=due_close)
     return rec
 
 
@@ -93,7 +101,7 @@ def log_clv_record(record: CLVRecord, filepath: str = "clv_tracking.jsonl") -> N
         "missing_market_price_checkpoint": record.missing_market_price_checkpoint,
         "missing_market_price_reason": record.missing_market_price_reason,
         "last_clv_update_attempt": record.last_clv_update_attempt,
-        "clv_update_error": record.clv_update_error
+        "clv_update_error": record.clv_update_error,
     }
     with open(filepath, "a") as f:
         f.write(json.dumps(data) + "\n")

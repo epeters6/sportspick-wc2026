@@ -1,4 +1,7 @@
-"""Focused Phase 2 repair tests: duplicate ids, CLV stub, analysis honesty."""
+"""Focused Phase 2 repair tests: duplicate ids, CLV stub, analysis honesty.
+
+These tests must not require real Supabase secrets at import time.
+"""
 from __future__ import annotations
 
 import os
@@ -73,8 +76,11 @@ class TestClvObligationUpsert(unittest.TestCase):
 
 class TestSettlementResolutionSource(unittest.TestCase):
     def test_apply_resolution_stores_source(self):
-        from backend.trading.weather_settlement import _apply_resolution
+        # Import settlement helper only after confirming module import is secret-free.
+        # poly_client is lazy; get_db is not called at import.
+        import backend.trading.weather_settlement as ws
 
+        self.assertTrue(callable(ws._apply_resolution))
         db = MagicMock()
         db.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock()
         bet = {
@@ -83,13 +89,49 @@ class TestSettlementResolutionSource(unittest.TestCase):
             "metadata": {"station": "KNYC"},
         }
         now = datetime.now(timezone.utc)
-        ok = _apply_resolution(
+        ok = ws._apply_resolution(
             db, bet, "won", 1.5, now, "graded vs observed temp",
             resolution_source="station_actual",
         )
         self.assertTrue(ok)
         update_payload = db.table.return_value.update.call_args[0][0]
         self.assertEqual(update_payload["metadata"]["resolution_source"], "station_actual")
+
+
+class TestPitcherOutsNoLogisticFallback(unittest.TestCase):
+    def test_missing_prediction_rejects(self):
+        from backend.models.sports.run_shadow_mlb import _pitcher_outs_prob
+
+        p, meta = _pitcher_outs_prob({"prop_line": 17.5}, "UNDER")
+        self.assertEqual(p, 0.0)
+        self.assertEqual(meta.get("rejection"), "PITCHER_OUTS_PRED_MISSING")
+
+    def test_engine_prediction_used(self):
+        from backend.models.sports.run_shadow_mlb import _pitcher_outs_prob
+
+        p, meta = _pitcher_outs_prob(
+            {"prediction": {"under_proba": 0.62, "over_proba": 0.38}},
+            "UNDER",
+        )
+        self.assertAlmostEqual(p, 0.62)
+        self.assertIsNone(meta.get("rejection"))
+        self.assertEqual(meta.get("prob_method"), "pitcher_outs_engine")
+
+
+class TestGuardianHaltFailClosed(unittest.TestCase):
+    def test_unreadable_supabase_fails_closed(self):
+        from backend.trading.live_toggle import _guardian_halted
+
+        with patch("backend.trading.live_toggle.get_db", side_effect=RuntimeError("boom")):
+            halted, state = _guardian_halted()
+        self.assertTrue(halted)
+        self.assertEqual(state.get("source"), "fail_closed")
+
+
+class TestLiveRemainsDisabled(unittest.TestCase):
+    def test_env_locks_off(self):
+        self.assertNotEqual(os.environ.get("POLYMARKET_LIVE_ENABLED", "false").lower(), "true")
+        self.assertNotEqual(os.environ.get("LIVE_TRADING_ENABLED", "false").lower(), "true")
 
 
 if __name__ == "__main__":

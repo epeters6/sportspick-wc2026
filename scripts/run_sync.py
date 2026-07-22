@@ -146,13 +146,9 @@ async def run_ml_phase() -> dict[str, int]:
     print(f"  picks resolved={resolved_picks}")
 
     print("Snapshotting market lines (CLV)...")
-    snapped = 0
-    try:
-        snapped = await snapshot_pick_market_probs()
-        compute_average_clv()
-        print(f"  {snapped} picks snapshotted")
-    except Exception as exc:
-        print(f"  CLV snapshot skipped: {exc}")
+    snapped = await snapshot_pick_market_probs()
+    compute_average_clv()
+    print(f"  {snapped} picks snapshotted")
 
     print("Updating ML scores...")
     sync_influencer_pick_counts()
@@ -209,15 +205,12 @@ async def run_ml_phase() -> dict[str, int]:
     print("Running Polymarket autobet...")
     autobet_summary: dict = {}
     try:
-        # --- GUARDIAN HEALTH CHECK ---
+        # --- GUARDIAN HEALTH CHECK (required — fail closed) ---
         print("  Running Guardian Health Check...")
-        try:
-            from scripts.guardian_health import check_health
-            check_health()
-        except Exception as exc:
-            print(f"  Guardian health check failed (Continuing anyway): {exc}")
-            
-        # --- TREASURY & ARBITRAGE (Phase 4) ---
+        from scripts.guardian_health import check_health
+        check_health()
+
+        # --- TREASURY & ARBITRAGE (optional) ---
         print("  Running Treasury & Arb Scans...")
         try:
             from backend.trading.treasury import check_treasury_health
@@ -225,9 +218,9 @@ async def run_ml_phase() -> dict[str, int]:
             check_treasury_health()
             run_arb_scan()
         except Exception as exc:
-            print(f"  Treasury/Arb execution failed: {exc}")
+            print(f"  Treasury/Arb warning (continuing): {exc}")
 
-        # autobet (live vs paper dictated by config)
+        # autobet (live vs paper dictated by config) — placement is required path
         autobet_summary = await run_autobet()
         print(
             f"  [{autobet_summary.get('mode')}] "
@@ -235,43 +228,38 @@ async def run_ml_phase() -> dict[str, int]:
             f"rejected={autobet_summary.get('rejected', 0)}"
         )
     except Exception as exc:
-        print(f"  Autobet placement skipped: {exc}")
-
-    try:
-        from backend.trading.autobet import update_closing_prices
-        clv_updated = await update_closing_prices()
-        print(f"  clv updated={clv_updated} open bets")
-    except Exception as exc:
-        print(f"  Closing-price CLV update failed (continuing to settlement): {exc}")
+        print(f"  Autobet/Guardian failed: {exc}")
         traceback.print_exc()
+        raise
 
-    try:
-        from backend.trading.autobet import resolve_autobets
-        ab_resolved = resolve_autobets()
-        print(f"  autobets resolved={ab_resolved}")
-    except Exception as exc:
-        print(f"  Autobet resolution failed: {exc}")
-        traceback.print_exc()
+    # CLV closing prices + settlement are required (fail CI)
+    from backend.trading.autobet import update_closing_prices, resolve_autobets
+    clv_updated = await update_closing_prices()
+    print(f"  clv updated={clv_updated} open bets")
 
-    try:
-        from backend.trading.weather_settlement import resolve_weather_autobets
-        w_resolved = await resolve_weather_autobets()
-        print(f"  weather bets resolved={w_resolved}")
-    except Exception as exc:
-        print(f"  Weather autobet resolution failed: {exc}")
+    ab_resolved = resolve_autobets()
+    print(f"  autobets resolved={ab_resolved}")
 
-    try:
-        from backend.ml.weather_verification import backfill_actuals
-        wv_backfilled = backfill_actuals()
-        print(f"  weather verification backfilled={wv_backfilled}")
-    except Exception as exc:
-        print(f"  Weather verification backfill failed: {exc}")
+    from backend.trading.weather_settlement import resolve_weather_autobets
+    w_resolved = await resolve_weather_autobets()
+    print(f"  weather bets resolved={w_resolved}")
+
+    from backend.ml.weather_verification import backfill_actuals
+    wv_backfilled = backfill_actuals()
+    print(f"  weather verification backfilled={wv_backfilled}")
+
+    # Optional alerts — warn only
     print("Sending Discord alerts...")
-    alerts = await send_consensus_alerts()
-    signal_sent = 0
-    if autobet_summary.get("signals"):
-        signal_sent = await send_autobet_signals(autobet_summary["signals"])
-    print(f"  {alerts} consensus alerts, {signal_sent} autobet signals sent")
+    try:
+        alerts = await send_consensus_alerts()
+        signal_sent = 0
+        if autobet_summary.get("signals"):
+            signal_sent = await send_autobet_signals(autobet_summary["signals"])
+        print(f"  {alerts} consensus alerts, {signal_sent} autobet signals sent")
+    except Exception as exc:
+        print(f"  Discord alerts warning (continuing): {exc}")
+        alerts = 0
+        signal_sent = 0
 
     return {
         "linked": linked_wc + linked_mlb,

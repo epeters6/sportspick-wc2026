@@ -173,28 +173,37 @@ def _authorize_admin(
     return False, "unknown", "JWT subject not in LIVE_TRADING_ADMIN_ALLOWLIST", _STATUS_FORBIDDEN
 
 
-def _guardian_halted() -> tuple[bool, dict[str, Any]]:
-    """If halted, reject enable. Unreadable halt file fails closed."""
+def _guardian_halted(db=None) -> tuple[bool, dict[str, Any]]:
+    """Read durable Guardian halt from Supabase. Fail closed on any read error."""
     try:
-        from scripts.guardian_health import HALT_FILE
-    except Exception:
-        HALT_FILE = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            ".guardian_halt.json",
+        client = db or get_db()
+        res = (
+            client.table("app_settings")
+            .select("value")
+            .eq("key", "guardian_halt")
+            .limit(1)
+            .execute()
         )
-
-    if not os.path.exists(HALT_FILE):
-        return False, {"halted": False, "reasons": [], "updated_at": None}
-
-    try:
-        import json
-
-        with open(HALT_FILE, "r", encoding="utf-8") as fh:
-            state = json.load(fh) or {}
-        return bool(state.get("halted")), state
+        rows = res.data or []
+        if not rows:
+            # No durable halt recorded — treat as clear (local file is not authoritative).
+            return False, {"halted": False, "reasons": [], "updated_at": None, "source": "supabase"}
+        value = rows[0].get("value") or {}
+        if not isinstance(value, dict):
+            return True, {
+                "halted": True,
+                "reasons": ["guardian_halt value malformed"],
+                "source": "supabase",
+            }
+        halted = bool(value.get("halted"))
+        return halted, {**value, "source": "supabase"}
     except Exception as exc:
         logger.warning(f"live_toggle guardian halt read failed (rejecting enable): {exc}")
-        return True, {"halted": True, "reasons": [f"halt file unreadable: {exc}"]}
+        return True, {
+            "halted": True,
+            "reasons": [f"guardian halt unreadable (fail closed): {exc}"],
+            "source": "fail_closed",
+        }
 
 
 def _github_live_blocked() -> str | None:
@@ -353,7 +362,7 @@ def request_live_toggle(
             "actor": effective_actor,
         }
 
-    halted, guardian_state = _guardian_halted()
+    halted, guardian_state = _guardian_halted(db)
     if halted:
         reasons = guardian_state.get("reasons") or ["Guardian circuit breaker tripped"]
         reason = f"Guardian halted: {'; '.join(str(r) for r in reasons)}"

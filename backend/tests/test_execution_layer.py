@@ -15,11 +15,12 @@ def make_candidate(p=0.6, c=0.5, bankroll=1000.0, depth=100.0):
     # best_ask = (c - 0.005) / 1.02
     best_ask = (c - 0.005) / 1.02
     fee = 0.02 * best_ask
+    now = datetime.now(timezone.utc)
     return TradeCandidate(
         strategy="test",
         platform="polymarket",
         market_id="m1",
-        outcome_id="yes",
+        outcome_id="yes_token_abc",
         event_id="e1",
         side="YES",
         model_prob=p,
@@ -36,8 +37,10 @@ def make_candidate(p=0.6, c=0.5, bankroll=1000.0, depth=100.0):
         bankroll=bankroll,
         event_exposure_cap=0.02*bankroll,
         bucket_or_outcome_exposure_cap=0.01*bankroll,
-        timestamp=datetime.now(timezone.utc),
-        metadata={}
+        timestamp=now,
+        metadata={},
+        received_timestamp=now,
+        orderbook_timestamp=now,
     )
 
 def make_risk_caps():

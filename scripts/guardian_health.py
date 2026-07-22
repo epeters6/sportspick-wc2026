@@ -198,7 +198,8 @@ def check_health():
             on_conflict="key",
         ).execute()
     except Exception as exc:
-        logger.warning(f"Guardian durable write failed: {exc}")
+        logger.error(f"Guardian durable write failed (required): {exc}")
+        raise
 
     if state["halted"]:
         print(f"⚠️ GUARDIAN HALT TRIGGERED:")

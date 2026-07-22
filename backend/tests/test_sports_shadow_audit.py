@@ -3,6 +3,9 @@ import sys
 import os
 from datetime import datetime, timezone
 
+# External scrape integration is opt-in via RUN_EXTERNAL_SYNC_INTEGRATION=1
+# and is skipped by default in unit CI.
+
 class TestSportsShadowAudit(unittest.TestCase):
     def test_new_mlb_quant_orchestrator_imports(self):
         import backend.ml.mlb_quant.orchestrator as orchestrator
@@ -50,16 +53,19 @@ class TestSportsShadowAudit(unittest.TestCase):
         # However predict_sports_probability will return None model_prob for unknown type,
         # so it will early return. But it definitely won't call live order.
         res = sync_sports_market(
-            market_data={"platform": "test"},
+            market_data={"platform": "test", "outcome_id": "tok_test"},
             features=features,
             best_ask=0.45,
+            best_bid=0.43,
+            spread=0.02,
             fee_per_share=0.01,
             visible_depth=1000,
             bankroll=1000,
             risk_caps=caps,
             mode="shadow",
             real_orderbook_timestamp=datetime.now(timezone.utc),
-            real_received_timestamp=datetime.now(timezone.utc)
+            real_received_timestamp=datetime.now(timezone.utc),
+            outcome_id="tok_test",
         )
         self.assertIsNone(res)
 
@@ -103,16 +109,19 @@ class TestSportsShadowAudit(unittest.TestCase):
             # However sync_sports_market itself has an assert for submit_live_orders = False if mode != live,
             # so we just call it with mode="live". Wait, sync_sports_market does not have a hard failure for mode="live" at the top EXCEPT for submit_live_orders = True if mode == live. Wait, actually I just wrote `if mode != "live": assert not submit_live_orders`. So passing mode="live" will proceed to the model check.
             sync_sports_market(
-                market_data={"platform": "test"},
+                market_data={"platform": "test", "outcome_id": "tok_live"},
                 features=features,
                 best_ask=0.45,
+                best_bid=0.43,
+                spread=0.02,
                 fee_per_share=0.01,
                 visible_depth=1000,
                 bankroll=1000,
                 risk_caps=caps,
                 mode="live",
                 real_orderbook_timestamp=datetime.now(timezone.utc),
-                real_received_timestamp=datetime.now(timezone.utc)
+                real_received_timestamp=datetime.now(timezone.utc),
+                outcome_id="tok_live",
             )
         self.assertEqual(str(context.exception), "UNCALIBRATED_MODEL_LIVE_BLOCK")
 
@@ -139,16 +148,19 @@ class TestSportsShadowAudit(unittest.TestCase):
             os.remove("sports_shadow_decisions.jsonl")
             
         sync_sports_market(
-            market_data={"platform": "kalshi"},
+            market_data={"platform": "kalshi", "outcome_id": "yes"},
             features=features,
             best_ask=0.45,
+            best_bid=0.43,
+            spread=0.02,
             fee_per_share=0.01,
             visible_depth=1000,
             bankroll=1000,
             risk_caps=caps,
             mode="shadow",
             real_orderbook_timestamp=datetime.now(timezone.utc),
-            real_received_timestamp=datetime.now(timezone.utc)
+            real_received_timestamp=datetime.now(timezone.utc),
+            outcome_id="yes",
         )
         
         with open("sports_shadow_decisions.jsonl", "r") as f:
@@ -184,7 +196,8 @@ class TestSportsShadowAudit(unittest.TestCase):
         # Request 100 shares, but depth is only 50
         order = SizedOrder(candidate=candidate, target_shares=100.0, target_cost=50.0, limit_price=0.5, expected_log_growth_delta=0.01, rejection_reason=None)
         
-        fill = simulate_paper_fill(order, datetime.now(timezone.utc), datetime.now(timezone.utc))
+        now = datetime.now(timezone.utc)
+        fill = simulate_paper_fill(order, now, now)
         self.assertTrue(fill.is_partial)
         self.assertFalse(fill.is_full_fill)
         self.assertEqual(fill.filled_shares, 50.0)
@@ -256,9 +269,10 @@ class TestSportsShadowAudit(unittest.TestCase):
         caps = RiskCaps(max_event_exposure_pct=0.05, max_outcome_exposure_pct=0.02, max_strategy_exposure_pct=0.1, max_platform_exposure_pct=0.2, max_daily_loss_pct=0.05, max_weekly_loss_pct=0.1, min_net_edge=0.015, min_log_growth_delta=0.001)
         
         sync_sports_market(
-            market_data={"platform": "test"}, features=features, best_ask=0.45, fee_per_share=0.01, visible_depth=1000,
+            market_data={"platform": "test", "outcome_id": "tok_ob"}, features=features, best_ask=0.45,
+            best_bid=0.43, spread=0.02, fee_per_share=0.01, visible_depth=1000,
             bankroll=1000, risk_caps=caps, mode="shadow", real_orderbook_timestamp=datetime.now(timezone.utc),
-            real_received_timestamp=None
+            real_received_timestamp=None, outcome_id="tok_ob",
         )
         
         with open("orderbook_snapshots.jsonl", "r") as f:
@@ -271,20 +285,67 @@ class TestSportsShadowAudit(unittest.TestCase):
         self.assertIn("is_stale", data)
         
     def test_sync_status_written_on_success(self):
-        import subprocess
-        import os
+        """Deterministic: mock scrape phase — no external network."""
+        import asyncio
         import json
+        import os
+        from unittest.mock import AsyncMock, patch
+
         status_file = "sync_status.json"
-        if os.path.exists(status_file): os.remove(status_file)
-        
-        # Call the script that we modified to write sync_status.json
-        subprocess.run([sys.executable, "scripts/run_sync.py", "--scrape-only"], check=True, env={**os.environ, "SYNC_FAST": "1", "SYNC_SKIP_YT_SEARCH": "1"})
-        
+        if os.path.exists(status_file):
+            os.remove(status_file)
+
+        fake_stats = {
+            "wc": 1, "mlb": 1, "covers": 0, "yt": 0,
+            "an": 0, "pw": 0, "tw": 0, "tt": 0,
+        }
+        with patch("sys.argv", ["run_sync.py", "--scrape-only"]):
+            with patch("backend.trading.live_toggle.is_live_mode", return_value=False):
+                with patch(
+                    "scripts.run_sync.run_scrape_phase",
+                    new=AsyncMock(return_value=fake_stats),
+                ):
+                    import scripts.run_sync as run_sync
+
+                    asyncio.run(run_sync.main())
+
         self.assertTrue(os.path.exists(status_file))
         with open(status_file, "r") as f:
             data = json.load(f)
         self.assertEqual(data["last_exit_code"], 0)
         self.assertEqual(data["last_status"], "success")
+        self.assertEqual(data["mode"], "shadow")
+
+    @unittest.skipUnless(
+        os.environ.get("RUN_EXTERNAL_SYNC_INTEGRATION") == "1",
+        "External scrape integration — set RUN_EXTERNAL_SYNC_INTEGRATION=1; excluded from unit CI",
+    )
+    def test_sync_status_written_on_success_external_scrape(self):
+        """Bounded external integration (opt-in only; not unit CI)."""
+        import subprocess
+        import json
+
+        status_file = "sync_status.json"
+        if os.path.exists(status_file):
+            os.remove(status_file)
+        env = {
+            **os.environ,
+            "SYNC_FAST": "1",
+            "SYNC_SKIP_YT_SEARCH": "1",
+            "POLYMARKET_LIVE_ENABLED": "false",
+            "LIVE_TRADING_ENABLED": "false",
+        }
+        res = subprocess.run(
+            [sys.executable, "scripts/run_sync.py", "--scrape-only"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-2000:] if res.stderr else "")
+        with open(status_file, "r") as f:
+            data = json.load(f)
+        self.assertEqual(data["last_exit_code"], 0)
         self.assertEqual(data["mode"], "shadow")
         
     def test_sync_status_written_on_failure(self):

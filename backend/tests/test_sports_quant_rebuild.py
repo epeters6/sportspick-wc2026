@@ -6,6 +6,32 @@ from pavlov.pipeline.source_quality import SourceQualityRecord, estimate_source_
 from pavlov.pipeline.mlb_model import build_mlb_features, predict_mlb_probability
 from pavlov.pipeline.soccer_model import build_soccer_features, predict_soccer_3way_probabilities, predict_soccer_binary_contract
 from pavlov.pipeline.sports_backtest_metrics import log_loss, brier_score, calibration_bins, mean_clv
+from backend.models.sports.sync_sports import sync_sports_market
+
+
+def _call_sync(market_data, features, best_ask, fee_per_share, visible_depth, bankroll, risk_caps, mode="shadow", **extra):
+    """Supply valid exchange timestamps + top-of-book fields for evidence fills."""
+    now = datetime.now(timezone.utc)
+    md = dict(market_data or {})
+    if md.get("platform") == "test":
+        md["platform"] = "polymarket"
+    md.setdefault("outcome_id", "tok_test")
+    sync_sports_market(
+        md,
+        features,
+        best_ask,
+        fee_per_share,
+        visible_depth,
+        bankroll,
+        risk_caps,
+        mode=mode,
+        best_bid=extra.get("best_bid", max(0.01, float(best_ask) - 0.02) if best_ask is not None else 0.01),
+        spread=extra.get("spread", 0.02),
+        outcome_id=extra.get("outcome_id", md["outcome_id"]),
+        real_orderbook_timestamp=extra.get("real_orderbook_timestamp", now),
+        real_received_timestamp=extra.get("real_received_timestamp", now),
+    )
+
 
 def make_base_features(
     market_prob=0.5,
@@ -257,13 +283,13 @@ class TestSportsQuantRebuild(unittest.TestCase):
         # let's boost elo_diff
         f.elo_diff = 10000 
         
-        sync_sports_market({"platform": "test"}, f, 0.2, 0.0, 100, 1000, caps, mode="shadow", real_received_timestamp=datetime.now(timezone.utc))
+        _call_sync({"platform": "test"}, f, 0.2, 0.0, 100, 1000, caps, mode="shadow", real_received_timestamp=datetime.now(timezone.utc))
         
         import json
         with open("sports_shadow_decisions.jsonl", "r") as ff:
             decision = json.loads(ff.readlines()[-1])
             self.assertIsNotNone(decision.get("sized_order"))
-            self.assertEqual(decision["sized_order"]["candidate"]["platform"], "test")
+            self.assertEqual(decision["sized_order"]["candidate"]["platform"], "polymarket")
 
     def test_sports_signal_uses_executable_cost_not_mid(self):
         from pavlov.pipeline.risk_caps import RiskCaps
@@ -276,7 +302,7 @@ class TestSportsQuantRebuild(unittest.TestCase):
         caps = RiskCaps(0.02, 0.01, 0.1, 0.5, 0.05, 0.1, 0.0, 0.0)
         
         # mid would theoretically be 0.2. ask is 0.22, fee 0.01. executable cost should be ~0.235 (with 0.005 slippage)
-        sync_sports_market({"platform": "test"}, f, 0.22, 0.01, 100, 1000, caps, mode="shadow", real_received_timestamp=datetime.now(timezone.utc))
+        _call_sync({"platform": "test"}, f, 0.22, 0.01, 100, 1000, caps, mode="shadow", real_received_timestamp=datetime.now(timezone.utc))
         
         with open("sports_shadow_decisions.jsonl", "r") as ff:
             decision = json.loads(ff.readlines()[-1])
@@ -294,7 +320,7 @@ class TestSportsQuantRebuild(unittest.TestCase):
         
         # predict_sports_probability baseline will output model_prob ~ 0.5. 
         # best_ask 0.55 => negative edge.
-        sync_sports_market({"platform": "test"}, f, 0.55, 0.0, 100, 1000, caps, mode="shadow", real_received_timestamp=datetime.now(timezone.utc))
+        _call_sync({"platform": "test"}, f, 0.55, 0.0, 100, 1000, caps, mode="shadow", real_received_timestamp=datetime.now(timezone.utc))
         
         with open("sports_shadow_decisions.jsonl", "r") as ff:
             decision = json.loads(ff.readlines()[-1])
@@ -316,7 +342,7 @@ class TestSportsQuantRebuild(unittest.TestCase):
         f.elo_diff = 10000 
         caps = RiskCaps(0.02, 0.01, 0.1, 0.5, 0.05, 0.1, 0.0, 0.0)
         
-        sync_sports_market({"platform": "test"}, f, 0.2, 0.0, 100, 1000, caps, mode="shadow", real_received_timestamp=datetime.now(timezone.utc))
+        _call_sync({"platform": "test"}, f, 0.2, 0.0, 100, 1000, caps, mode="shadow", real_received_timestamp=datetime.now(timezone.utc))
         
         self.assertTrue(os.path.exists("sports_paper_fills.jsonl"))
 
@@ -331,7 +357,7 @@ class TestSportsQuantRebuild(unittest.TestCase):
         f.elo_diff = 10000 
         caps = RiskCaps(0.02, 0.01, 0.1, 0.5, 0.05, 0.1, 0.0, 0.0)
         
-        sync_sports_market({"platform": "test"}, f, 0.2, 0.0, 100, 1000, caps, mode="shadow", real_received_timestamp=datetime.now(timezone.utc))
+        _call_sync({"platform": "test"}, f, 0.2, 0.0, 100, 1000, caps, mode="shadow", real_received_timestamp=datetime.now(timezone.utc))
         
         self.assertTrue(os.path.exists("sports_clv_tracking.jsonl"))
 

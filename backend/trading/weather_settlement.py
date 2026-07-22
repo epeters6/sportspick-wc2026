@@ -9,10 +9,15 @@ from backend.trading.kalshi_client import KalshiClient
 import os
 import sys
 
-# Add pavlov to path for poly_client
+# Add pavlov to path for poly_client (lazy — avoid requiring secrets at import)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../pavlov")))
-os.environ["PAVLOV_BYPASS_CONFIG"] = "1"
-from polymarket import poly_client
+
+
+def _poly_client():
+    """Lazy import so unit tests can load settlement helpers without trading secrets."""
+    os.environ.setdefault("PAVLOV_BYPASS_CONFIG", "1")
+    from polymarket import poly_client as _pc
+    return _pc
 
 # Kalshi tickers are typically uppercase: KXHIGHTDC-26JUL06-T84
 _KALSHI_TICKER_RE = re.compile(r'^[A-Z]{2,}[A-Z0-9-]+$')
@@ -137,6 +142,7 @@ def _grade_bet_against_actual(bet: dict, market_date: datetime) -> tuple[str, fl
 
 def _ensure_poly_configured():
     """Ensure poly_client can make unauthenticated requests for settlement checks."""
+    poly_client = _poly_client()
     if not poly_client.poly_configured():
         # Override to allow reading public settlement data without trading keys
         poly_client.poly_configured = lambda: True
@@ -144,11 +150,12 @@ def _ensure_poly_configured():
             from polymarket_us import PolymarketUS
             return PolymarketUS(key_id="dummy", secret_key="dummy")
         poly_client.get_client = mock_get_client
+    return poly_client
 
 
 async def check_polymarket_resolution(slug: str) -> dict | None:
     """Check Polymarket US API for market resolution using poly_client."""
-    _ensure_poly_configured()
+    poly_client = _ensure_poly_configured()
     try:
         # get_market_result returns 'yes' or 'no' if settled, else None
         res = poly_client.get_market_result(slug)

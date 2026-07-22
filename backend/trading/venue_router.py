@@ -61,5 +61,16 @@ class VenueRouter:
         else:
             return await self.poly.get_book_depth(token_id=token_id, side=side)
 
+    async def get_top_of_book(
+        self,
+        venue: str,
+        token_id: str,
+        market_id: str,
+    ) -> dict:
+        """Real top-of-book (bid/ask/size/timestamp). No fabricated fallbacks."""
+        if venue.lower() == "kalshi":
+            return await self.kalshi.get_top_of_book(token_id=token_id, market_id=market_id)
+        return await self.poly.get_top_of_book(token_id=token_id)
+
     # Note: Order execution/splitting logic would go here, 
     # but for now we rely on autobet to select the venue and place the order.

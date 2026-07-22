@@ -53,9 +53,13 @@ class TestMlbOrchestratorSetup(unittest.TestCase):
                                         orch, "load_tier_overrides", return_value=({}, {})
                                     ):
                                         with mock.patch.object(
-                                            orch.pyb,
-                                            "pitching_stats_range",
-                                            side_effect=RuntimeError("skip"),
+                                            orch,
+                                            "_pyb",
+                                            return_value=mock.Mock(
+                                                pitching_stats_range=mock.Mock(
+                                                    side_effect=RuntimeError("skip")
+                                                )
+                                            ),
                                         ):
                                             with mock.patch(
                                                 "backend.db.get_db",

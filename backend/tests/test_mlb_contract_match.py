@@ -7,11 +7,16 @@ from types import SimpleNamespace
 from backend.models.sports.mlb_contract_match import match_pitcher_outs_contract
 
 
-def _mkt(question: str, outcomes: list[str], market_id: str = "m1"):
+def _mkt(question: str, outcomes: list[str], market_id: str = "m1", **extra):
     return SimpleNamespace(
         question=question,
         market_id=market_id,
-        outcomes=[SimpleNamespace(name=o, price=0.45, best_ask=0.46) for o in outcomes],
+        slug=extra.get("slug", ""),
+        end_date=extra.get("end_date"),
+        outcomes=[
+            SimpleNamespace(name=o, price=0.45, best_ask=0.46, token_id=f"tok_{o}")
+            for o in outcomes
+        ],
     )
 
 
@@ -19,7 +24,7 @@ class TestMlbContractMatch(unittest.TestCase):
     def test_correct_pitcher_line_side(self):
         markets = [
             _mkt(
-                "Will Spencer Strider record over/under 17.5 outs?",
+                "Will Spencer Strider record over/under 17.5 outs? ATL vs NYM 2026-07-21",
                 ["Over", "Under"],
             )
         ]
@@ -51,10 +56,28 @@ class TestMlbContractMatch(unittest.TestCase):
         )
         self.assertEqual(m.rejection_reason, "NO_MATCHING_TARGET_CONTRACT")
 
+    def test_date_mismatch_rejected(self):
+        markets = [
+            _mkt(
+                "Spencer Strider outs 17.5 ATL vs NYM 2026-07-20",
+                ["Over", "Under"],
+            )
+        ]
+        m = match_pitcher_outs_contract(
+            markets=markets,
+            pitcher_name="Spencer Strider",
+            team="ATL",
+            opponent="NYM",
+            slate_date="2026-07-21",
+            prop_line=17.5,
+            prop_side="UNDER",
+        )
+        self.assertEqual(m.rejection_reason, "DATE_MISMATCH")
+
     def test_moneyline_not_substituted(self):
         markets = [
             _mkt("Braves vs Mets moneyline", ["Braves", "Mets"]),
-            _mkt("Spencer Strider outs 17.5", ["Over", "Under"]),
+            _mkt("Spencer Strider outs 17.5 ATL NYM 2026-07-21", ["Over", "Under"]),
         ]
         m = match_pitcher_outs_contract(
             markets=markets,
@@ -71,7 +94,7 @@ class TestMlbContractMatch(unittest.TestCase):
 
     def test_ambiguous_outcome_no_yes_fallback(self):
         markets = [
-            _mkt("Spencer Strider outs 17.5", ["Team A", "Team B"]),
+            _mkt("Spencer Strider outs 17.5 ATL NYM 2026-07-21", ["Team A", "Team B"]),
         ]
         m = match_pitcher_outs_contract(
             markets=markets,
@@ -84,8 +107,27 @@ class TestMlbContractMatch(unittest.TestCase):
         )
         self.assertEqual(m.rejection_reason, "AMBIGUOUS_OUTCOME_NO_YES_FALLBACK")
 
+    def test_yes_no_only_when_question_encodes_direction(self):
+        markets = [
+            _mkt(
+                "Will Spencer Strider go under 17.5 outs? ATL vs NYM 2026-07-21",
+                ["Yes", "No"],
+            )
+        ]
+        m = match_pitcher_outs_contract(
+            markets=markets,
+            pitcher_name="Spencer Strider",
+            team="ATL",
+            opponent="NYM",
+            slate_date="2026-07-21",
+            prop_line=17.5,
+            prop_side="UNDER",
+        )
+        self.assertIsNone(m.rejection_reason)
+        self.assertEqual(m.outcome.name, "Yes")
+
     def test_line_mismatch_rejected(self):
-        markets = [_mkt("Spencer Strider outs 14.5", ["Over", "Under"])]
+        markets = [_mkt("Spencer Strider outs 14.5 ATL NYM 2026-07-21", ["Over", "Under"])]
         m = match_pitcher_outs_contract(
             markets=markets,
             pitcher_name="Spencer Strider",

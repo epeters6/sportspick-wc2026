@@ -189,36 +189,50 @@ class KalshiClient:
             logger.debug(f"Could not parse Kalshi market: {exc}")
             return None
 
-    async def get_book_depth(self, token_id: str, market_id: str, side: str = "sell") -> tuple[float | None, float]:
-        """
-        Fetch Kalshi order book depth.
-        Kalshi order books are fetched per market. token_id here is 'yes' or 'no'.
-        """
+    async def get_top_of_book(self, token_id: str, market_id: str) -> dict:
+        """Real Kalshi top-of-book for yes/no token. No fabricated bids/spreads."""
+        empty = {
+            "best_bid": None,
+            "best_ask": None,
+            "bid_size": 0.0,
+            "ask_size": 0.0,
+            "book_timestamp": None,
+        }
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 book = await self._get(client, f"/markets/{market_id}/orderbook")
         except Exception as exc:
             logger.debug(f"Kalshi book fetch failed for {market_id}: {exc}")
-            return None, 0.0
+            return empty
 
-        kalshi_side = "yes" if token_id.lower() == "yes" else "no"
-        book_key = f"{kalshi_side}_asks" if side == "sell" else f"{kalshi_side}_bids"
-        levels = book.get("orderbook", {}).get(book_key, [])
-        
-        if not levels:
-            return None, 0.0
+        kalshi_side = "yes" if str(token_id).lower() in {"yes", "y"} else "no"
+        ob = book.get("orderbook", {}) if isinstance(book, dict) else {}
+        asks = ob.get(f"{kalshi_side}_asks") or []
+        bids = ob.get(f"{kalshi_side}_bids") or []
+        try:
+            best_ask = float(asks[0][0]) / 100.0 if asks else None
+            ask_size = float(asks[0][1]) if asks else 0.0
+            best_bid = float(bids[0][0]) / 100.0 if bids else None
+            bid_size = float(bids[0][1]) if bids else 0.0
+        except (TypeError, ValueError, IndexError):
+            return empty
+        return {
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "bid_size": bid_size,
+            "ask_size": ask_size,
+            # Kalshi orderbook payload has no exchange timestamp — do not invent one.
+            "book_timestamp": None,
+        }
 
-        # Kalshi returns levels as [price_cents, quantity] pairs.
-        # Aggregate top 3 levels like Polymarket, in USDC notional
-        # (price in dollars x contracts) so risk liquidity gates compare
-        # like-for-like with Polymarket book depth.
-        total_size_usdc = 0.0
-        best_price = None
-        for i, level in enumerate(levels[:3]):
-            price, qty = level[0], level[1]
-            if i == 0:
-                best_price = price / 100.0
-            total_size_usdc += (price / 100.0) * qty
-
-        return best_price, total_size_usdc
+    async def get_book_depth(self, token_id: str, market_id: str, side: str = "sell") -> tuple[float | None, float]:
+        """
+        Fetch Kalshi order book depth.
+        Kalshi order books are fetched per market. token_id here is 'yes' or 'no'.
+        Depth is top-of-book contract size (shares), not fabricated notional.
+        """
+        book = await self.get_top_of_book(token_id=token_id, market_id=market_id)
+        if side == "sell":
+            return book.get("best_ask"), float(book.get("ask_size") or 0.0)
+        return book.get("best_bid"), float(book.get("bid_size") or 0.0)
 

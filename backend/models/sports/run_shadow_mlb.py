@@ -10,6 +10,7 @@ from backend.db import get_db
 from backend.trading.venue_router import VenueRouter
 from pavlov.pipeline.sports_features import SportsEventFeatures
 from pavlov.pipeline.risk_caps import RiskCaps
+from pavlov.pipeline.fee_model import estimate_fee_per_share
 from backend.models.sports.sync_sports import sync_sports_market
 from backend.models.sports.mlb_contract_match import match_pitcher_outs_contract
 from backend.trading.autobet import _current_bankroll
@@ -80,8 +81,8 @@ def _resolve_event_times(
 
 def _pitcher_outs_prob(data: dict, side: str) -> tuple[float, dict]:
     """
-    Use pitcher-outs directional model when available; do not silently swap to moneyline Elo.
-    Coefficients/weights untouched — only wiring.
+    Require the pitcher-outs engine / manifest to supply under/over probabilities.
+    No hard-coded expected-outs logistic fallback.
     """
     meta = {
         "model_version": data.get("model_version") or "mlb_pitcher_outs_v4",
@@ -89,46 +90,18 @@ def _pitcher_outs_prob(data: dict, side: str) -> tuple[float, dict]:
         "coefficient_source": data.get("coefficient_source") or "under_model_state.json",
         "calibration_status": data.get("calibration_status") or "uncalibrated_shadow",
     }
-    try:
-        from backend.ml.mlb_quant.mlb_pitcher_fatigue_engine_v4 import (
-            load_model_state,
-            build_feature_vector,
-        )
-    except Exception as exc:
-        logger.debug(f"Pitcher outs engine unavailable: {exc}")
-        return 0.0, {**meta, "rejection": "PITCHER_OUTS_MODEL_UNAVAILABLE"}
 
-    # Prefer any prediction already attached to manifest
-    pred = data.get("prediction") or {}
+    pred = data.get("prediction")
     if isinstance(pred, dict):
         under_p = pred.get("under_proba")
         over_p = pred.get("over_proba")
         if under_p is not None and over_p is not None:
             p = float(under_p if side == "UNDER" else over_p)
-            return p, meta
+            if p <= 0.0 or p >= 1.0:
+                return 0.0, {**meta, "rejection": "PITCHER_OUTS_PRED_OUT_OF_RANGE"}
+            return p, {**meta, "prob_method": "pitcher_outs_engine"}
 
-    # Fall back: baseline expected outs vs line as a simple logistic proxy WITHOUT
-    # changing stored coefficients — uses expected_outs_baseline from profile only.
-    try:
-        profile = data.get("starter_profile") or data.get("advanced_context") or {}
-        expected = float(
-            profile.get("expected_outs_baseline")
-            or (data.get("baseline") or {}).get("expected_outs_baseline")
-            or 15.0
-        )
-        line = float(data.get("prop_line") or 17.5)
-        # Soft distance → probability; complementary for OVER/UNDER
-        import math
-
-        gap = expected - line
-        # Positive gap => more outs than line => OVER more likely
-        over_p = 1.0 / (1.0 + math.exp(-0.35 * gap))
-        under_p = 1.0 - over_p
-        p = under_p if side == "UNDER" else over_p
-        return float(p), {**meta, "prob_method": "expected_outs_vs_line_logit"}
-    except Exception as exc:
-        logger.debug(f"Pitcher outs prob fallback failed: {exc}")
-        return 0.0, {**meta, "rejection": "PITCHER_OUTS_PROB_FAILED"}
+    return 0.0, {**meta, "rejection": "PITCHER_OUTS_PRED_MISSING"}
 
 
 async def run_mlb_shadow_execution():
@@ -184,7 +157,6 @@ async def run_mlb_shadow_execution():
 
         contract_type = data.get("contract_type") or "pitcher_outs"
         if contract_type != "pitcher_outs":
-            # Moneyline (or other) paths must be separate manifests — do not mix.
             logger.info(f"SKIP_NON_PITCHER_OUTS_CONTRACT: {p_key} type={contract_type}")
             rejected += 1
             continue
@@ -199,7 +171,6 @@ async def run_mlb_shadow_execution():
             rejected += 1
             continue
 
-        # Search by pitcher name — not raw team abbreviation substring as primary key
         markets = await router.fetch_markets(search=str(pitcher), limit=30)
         if not markets:
             markets = await router.fetch_markets(search=f"{pitcher} outs", limit=30)
@@ -223,6 +194,11 @@ async def run_mlb_shadow_execution():
         target_market = matched.market
         outcome = matched.outcome
         side = matched.side
+        token_id = getattr(outcome, "token_id", None)
+        if not token_id:
+            logger.info(f"MISSING_OUTCOME_TOKEN_ID: {pitcher}")
+            rejected += 1
+            continue
 
         ctx = data.get("matchup_context") or {}
         times = _resolve_event_times(
@@ -246,8 +222,53 @@ async def run_mlb_shadow_execution():
             rejected += 1
             continue
 
-        # Encode pitcher-outs features into SportsEventFeatures.sport_specific
-        # so they reach the probability path / audit trail (coefficients unchanged).
+        venue = getattr(target_market, "venue", None) or "polymarket"
+        book = await router.get_top_of_book(
+            venue=venue,
+            token_id=str(token_id),
+            market_id=target_market.market_id,
+        )
+        best_ask = book.get("best_ask")
+        best_bid = book.get("best_bid")
+        ask_size = float(book.get("ask_size") or 0.0)
+        book_ts = book.get("book_timestamp") or getattr(
+            target_market, "exchange_timestamp", None
+        )
+        received_ts = datetime.now(timezone.utc)
+
+        # No outcome.price / liquidity / fabricated bid / fixed-spread fallbacks
+        if best_ask is None or best_bid is None:
+            logger.info(f"MISSING_TOP_OF_BOOK: {pitcher} market={target_market.market_id}")
+            rejected += 1
+            continue
+        if ask_size <= 0:
+            logger.info(f"INSUFFICIENT_DEPTH: {pitcher} market={target_market.market_id}")
+            rejected += 1
+            continue
+        if book_ts is None:
+            logger.info(
+                f"MISSING_ORDERBOOK_TIMESTAMP: {pitcher} market={target_market.market_id}"
+            )
+            rejected += 1
+            continue
+        if getattr(book_ts, "tzinfo", None) is None:
+            logger.info(f"NAIVE_ORDERBOOK_TIMESTAMP: {pitcher}")
+            rejected += 1
+            continue
+
+        spread = float(best_ask) - float(best_bid)
+        if spread < 0:
+            logger.info(f"INVALID_SPREAD: {pitcher}")
+            rejected += 1
+            continue
+
+        try:
+            fee_per_share = estimate_fee_per_share(venue, float(best_ask), 1.0)
+        except ValueError as exc:
+            logger.info(f"{exc}: {pitcher}")
+            rejected += 1
+            continue
+
         features = SportsEventFeatures(
             sport="MLB",
             league="mlb",
@@ -257,8 +278,8 @@ async def run_mlb_shadow_execution():
             team_b=f"{side}_{prop_line}",
             start_time=start_time,
             snapshot_time=snapshot_time,
-            market_prob_baseline=outcome.price,
-            market_price_source="polymarket",
+            market_prob_baseline=float(best_ask),
+            market_price_source=venue,
             elo_team_a=1500.0,
             elo_team_b=1500.0,
             elo_diff=0.0,
@@ -278,6 +299,7 @@ async def run_mlb_shadow_execution():
                 "prop_line": prop_line,
                 "prop_side": side,
                 "model_prob_override": model_prob,
+                "outcome_token_id": str(token_id),
                 "manager_hook_score": (data.get("advanced_context") or {}).get(
                     "manager_hook_score", 0
                 ),
@@ -285,42 +307,25 @@ async def run_mlb_shadow_execution():
             },
         )
 
-        best_ask = outcome.best_ask or outcome.price
-        visible_depth = getattr(outcome, "ask_size", None) or getattr(
-            target_market, "liquidity", None
-        )
-        if visible_depth is None or float(visible_depth) <= 0:
-            logger.info(f"INSUFFICIENT_DEPTH: {pitcher} market={target_market.market_id}")
-            rejected += 1
-            continue
-
-        real_received = getattr(target_market, "received_timestamp", None)
-        real_exch = getattr(target_market, "exchange_timestamp", None) or getattr(
-            target_market, "orderbook_timestamp", None
-        )
-        # Never invent timestamps for evidence fills
-        if real_received is None or real_exch is None:
-            logger.info(
-                f"MISSING_ORDERBOOK_TIMESTAMP: {pitcher} market={target_market.market_id}"
-            )
-            rejected += 1
-            continue
-
         sync_sports_market(
             market_data={
-                "platform": target_market.venue,
+                "platform": venue,
                 "contract_type": "pitcher_outs",
                 "model_prob_override": model_prob,
+                "outcome_id": str(token_id),
             },
             features=features,
-            best_ask=best_ask,
-            fee_per_share=0.01,
-            visible_depth=float(visible_depth),
+            best_ask=float(best_ask),
+            best_bid=float(best_bid),
+            spread=spread,
+            fee_per_share=fee_per_share,
+            visible_depth=ask_size,
             bankroll=bankroll,
             risk_caps=risk_caps,
             mode="shadow",
-            real_orderbook_timestamp=real_exch,
-            real_received_timestamp=real_received,
+            real_orderbook_timestamp=book_ts,
+            real_received_timestamp=received_ts,
+            outcome_id=str(token_id),
         )
         processed += 1
 
