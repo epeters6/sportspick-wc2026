@@ -866,6 +866,7 @@ async def update_closing_prices() -> int:
     """
     from backend.trading.venue_router import VenueRouter
     from collections import defaultdict
+    from loguru import logger
     
     db = get_db()
     
@@ -878,14 +879,24 @@ async def update_closing_prices() -> int:
         .data or []
     )
     
-    # Process simulated bets
-    sim_bets = (
-        db.table("simulated_bets")
-        .select("id, sport, market_id, outcome_name, market_price")
-        .eq("status", "open")
-        .execute()
-        .data or []
-    )
+    # simulated_bets schema has no sport/status/market_id/outcome_name —
+    # never let a bad select block autobet CLV or settlement.
+    sim_bets: list[dict] = []
+    try:
+        sim_probe = (
+            db.table("simulated_bets")
+            .select("id, closing_price, clv")
+            .is_("resolved_at", "null")
+            .limit(1)
+            .execute()
+        )
+        if sim_probe.data:
+            logger.info(
+                "Skipping simulated_bets closing-price update "
+                "(table has no market_id/sport columns)"
+            )
+    except Exception as exc:
+        logger.warning(f"simulated_bets CLV query skipped: {exc}")
     
     if not open_bets and not sim_bets:
         return 0
@@ -929,8 +940,7 @@ async def update_closing_prices() -> int:
                         }).eq("id", bet["id"]).execute()
                         updated_count += 1
                     except Exception as exc:
-                        logger.debug(f"Failed to update CLV for {table_name} {bet['id']}: {exc}")
-                        
+                        logger.warning(f"CLV update failed for {table_name} {bet.get('id')}: {exc}")
     return updated_count
 
 

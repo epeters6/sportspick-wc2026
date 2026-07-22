@@ -114,10 +114,10 @@ async def sync_weather_predictions():
     except Exception as e:
         logger.warning(f"Failed to fetch Polymarket weather markets: {e}")
 
-        try:
-            _ensure_weather_pipeline_importable()
-            from pavlov.pipeline import kalshi_client
-            kalshi_markets = kalshi_client.get_weather_markets()
+    try:
+        _ensure_weather_pipeline_importable()
+        from pavlov.pipeline import kalshi_client
+        kalshi_markets = kalshi_client.get_weather_markets()
         for m in kalshi_markets:
             m["_platform"] = "kalshi"
         markets.extend(kalshi_markets)
@@ -439,7 +439,31 @@ async def sync_weather_predictions():
                 
             if shares <= 0:
                 continue
-                
+
+            station_id = events[0].settlement_station
+            candidate_id = weather_candidate_id(
+                platform, station_id, date_str, metric, event.market_id, mode
+            )
+            legacy_key = f"{event.market_id}:yes:{mode}"
+            # Duplicate check BEFORE fill / CLV / PaperFill so artifacts match DB
+            if candidate_id in open_candidate_ids or legacy_key in open_legacy_keys:
+                logger.info(
+                    f"Decision rejection DUPLICATE_OPEN_POSITION candidate_id={candidate_id}"
+                )
+                shadow_record.setdefault("rejections", []).append(
+                    {"candidate_id": candidate_id, "reason": "DUPLICATE_OPEN_POSITION"}
+                )
+                shadow_record["paper_orders"].append({
+                    "candidate_id": candidate_id,
+                    "bucket_id": event.market_id,
+                    "side": "YES",
+                    "shares": shares,
+                    "rejection_reason": "DUPLICATE_OPEN_POSITION",
+                })
+                if not shadow_record.get("rejection_reason"):
+                    shadow_record["rejection_reason"] = "DUPLICATE_OPEN_POSITION"
+                continue
+
             exposure_tracker[virtual_match_id] = current_exposure + stake
             
             # Convert to shared Execution schema
@@ -466,7 +490,7 @@ async def sync_weather_predictions():
                 event_exposure_cap=max_allowed,
                 bucket_or_outcome_exposure_cap=max_allowed,
                 timestamp=datetime.now(timezone.utc),
-                metadata={"p_adj": P_adj[i]}
+                metadata={"p_adj": P_adj[i], "candidate_id": candidate_id}
             )
             
             sized_order = SizedOrder(
@@ -476,27 +500,6 @@ async def sync_weather_predictions():
                 limit_price=q_i,
                 expected_log_growth_delta=0.0 # Logged at portfolio level
             )
-
-            candidate_id = f"{platform}:{events[0].settlement_station}:{date_str}:{metric}:{event.market_id}:yes:{mode}"
-            # Duplicate check BEFORE fill / CLV logging so artifacts reconcile with DB bets
-            existing = (
-                db.table("autobets")
-                .select("id")
-                .eq("market_id", event.market_id)
-                .eq("outcome_name", "yes")
-                .eq("mode", mode)
-                .eq("status", "open")
-                .execute()
-            )
-            if existing.data:
-                logger.info(f"DUPLICATE_OPEN_POSITION: {candidate_id}")
-                shadow_record.setdefault("rejections", []).append(
-                    {"candidate_id": candidate_id, "reason": "DUPLICATE_OPEN_POSITION"}
-                )
-                exposure_tracker[virtual_match_id] = max(
-                    0.0, exposure_tracker.get(virtual_match_id, 0.0) - stake
-                )
-                continue
 
             # Save generic execution shadow order
             with open("execution_shadow_orders.jsonl", "a") as f:
@@ -521,7 +524,6 @@ async def sync_weather_predictions():
                 orderbook_timestamp=real_orderbook_timestamp,
                 received_timestamp=real_received_timestamp,
                 mode=mode,
-                allow_assumed_fresh_orderbook_for_shadow=False,
             )
             
             paper_order = {
@@ -560,7 +562,8 @@ async def sync_weather_predictions():
                 outcome_id="yes",
                 side="YES",
                 entry_price=fill.limit_price,
-                entry_time=datetime.now(timezone.utc)
+                entry_time=datetime.now(timezone.utc),
+                platform=platform,
             )
             log_clv_record(clv_rec)
 
@@ -596,7 +599,7 @@ async def sync_weather_predictions():
                     # Everything settlement needs to grade this bet against
                     # observed temps if the exchange never reports resolution
                     "metric": metric,
-                    "station": events[0].settlement_station,
+                    "station": station_id,
                     "city": city,
                     "target_date": date_str,
                     "bucket_low_f": event.bucket_low_f if event.bucket_low_f != float("-inf") else None,
@@ -609,6 +612,8 @@ async def sync_weather_predictions():
             try:
                 db.table("autobets").insert(record).execute()
                 bets_placed += 1
+                open_candidate_ids.add(candidate_id)
+                open_legacy_keys.add(legacy_key)
             except Exception as e:
                 # Retry without optional columns when migrations are pending
                 msg = str(e)
@@ -619,6 +624,8 @@ async def sync_weather_predictions():
                 try:
                     db.table("autobets").insert(slim).execute()
                     bets_placed += 1
+                    open_candidate_ids.add(candidate_id)
+                    open_legacy_keys.add(legacy_key)
                     logger.warning(f"Weather autobet recorded with slim schema ({e})")
                 except Exception as e2:
                     logger.error(f"Failed to record weather autobet: {e2}")

@@ -162,7 +162,8 @@ def sync_sports_market(
         outcome_id=features.team_a,
         side=side,
         entry_price=fill.limit_price, # or best ask
-        entry_time=datetime.now(timezone.utc)
+        entry_time=datetime.now(timezone.utc),
+        platform=getattr(features, "platform", None) or "unknown",
     )
     log_clv_record(clv_record, "sports_clv_tracking.jsonl")
     

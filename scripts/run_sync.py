@@ -238,16 +238,21 @@ async def run_ml_phase() -> dict[str, int]:
         print(f"  Autobet placement skipped: {exc}")
 
     try:
-        from backend.trading.autobet import resolve_autobets, update_closing_prices
-        
+        from backend.trading.autobet import update_closing_prices
         clv_updated = await update_closing_prices()
         print(f"  clv updated={clv_updated} open bets")
-        
+    except Exception as exc:
+        print(f"  Closing-price CLV update failed (continuing to settlement): {exc}")
+        traceback.print_exc()
+
+    try:
+        from backend.trading.autobet import resolve_autobets
         ab_resolved = resolve_autobets()
         print(f"  autobets resolved={ab_resolved}")
     except Exception as exc:
         print(f"  Autobet resolution failed: {exc}")
-        
+        traceback.print_exc()
+
     try:
         from backend.trading.weather_settlement import resolve_weather_autobets
         w_resolved = await resolve_weather_autobets()

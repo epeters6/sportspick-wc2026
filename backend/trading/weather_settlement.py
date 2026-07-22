@@ -84,7 +84,7 @@ def _grade_bet_against_actual(bet: dict, market_date: datetime) -> tuple[str, fl
             city_name, metric_word, label = m.group(1), m.group(2), m.group(3)
             metric = metric_word.lower()
             try:
-                from pipeline.station_mapper import STATION_MAP
+                from pavlov.pipeline.station_mapper import STATION_MAP
                 station = station or (STATION_MAP.get(city_name) or {}).get("station")
             except Exception:
                 pass
@@ -249,7 +249,7 @@ def _actuals_ready_to_grade(bet: dict, now: datetime) -> bool:
 
     try:
         from zoneinfo import ZoneInfo
-        from pipeline.station_mapper import get_tz_for_city
+        from pavlov.pipeline.station_mapper import get_tz_for_city
         if city:
             local_now = now.astimezone(ZoneInfo(get_tz_for_city(city)))
         else:
@@ -270,16 +270,44 @@ def _actuals_ready_to_grade(bet: dict, now: datetime) -> bool:
     return local_now.hour >= 21
 
 
-def _apply_resolution(db, bet: dict, new_status: str, new_pnl: float, now: datetime, note: str) -> bool:
+def _apply_resolution(
+    db,
+    bet: dict,
+    new_status: str,
+    new_pnl: float,
+    now: datetime,
+    note: str,
+    resolution_source: str | None = None,
+) -> bool:
+    meta = bet.get("metadata") or {}
+    if isinstance(meta, str):
+        try:
+            import json
+            meta = json.loads(meta)
+        except (ValueError, TypeError):
+            meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    meta = dict(meta)
+    src = resolution_source
+    if not src:
+        if "observed temp" in (note or ""):
+            src = "station_actual"
+        elif (note or "").startswith("exchange:"):
+            src = note
+        else:
+            src = note or "unknown"
+    meta["resolution_source"] = src
     try:
         db.table("autobets").update({
             "status": new_status,
             "pnl": new_pnl,
             "resolved_at": now.isoformat(),
+            "metadata": meta,
         }).eq("id", bet["id"]).execute()
         logger.info(
             f"Resolved weather bet {bet['id'][:8]} [{bet.get('market_id')}] "
-            f"-> {new_status} (PnL: {new_pnl}; {note})"
+            f"-> {new_status} (PnL: {new_pnl}; {note}; source={src})"
         )
         return True
     except Exception as e:

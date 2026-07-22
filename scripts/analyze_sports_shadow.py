@@ -5,8 +5,9 @@ import statistics
 
 def run_analysis(decisions_file="sports_shadow_decisions.jsonl", fills_file="sports_paper_fills.jsonl", clv_file="sports_clv_tracking.jsonl"):
     if not os.path.exists(decisions_file):
-        print(f"File {decisions_file} not found.")
-        return {}
+        raise FileNotFoundError(
+            f"Missing sports shadow decisions manifest: {decisions_file}"
+        )
 
     total_predictions = 0
     total_rejections = 0

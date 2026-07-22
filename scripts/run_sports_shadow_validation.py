@@ -64,7 +64,12 @@ async def run_validation():
 
         # 3. Run analysis
         logger.info("Phase 3: Running Shadow Analysis...")
-        report = run_analysis()
+        decisions_path = os.path.join(repo_root, "sports_shadow_decisions.jsonl")
+        if not os.path.exists(decisions_path):
+            raise FileNotFoundError(
+                f"Missing sports shadow decisions manifest: {decisions_path}"
+            )
+        report = run_analysis(decisions_file=decisions_path)
 
         # 4. Write timestamped report
         today_str = datetime.now().strftime("%Y-%m-%d")
