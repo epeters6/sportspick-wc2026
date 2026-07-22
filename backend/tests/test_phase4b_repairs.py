@@ -15,7 +15,6 @@ from backend.ml.mlb_quant_legacy import (
 from backend.models.sports.run_shadow_mlb import (
     DUPLICATE_SHADOW_EXPOSURE,
     _dedupe_poly_markets,
-    durable_open_shadow_event_exposure,
     run_mlb_moneyline_shadow,
 )
 from backend.tests.clv_test_isolation import isolate_clv_db
@@ -132,20 +131,19 @@ class TestMlbQuantGameIdentity(unittest.TestCase):
 
 
 class TestDurableShadowExposure(unittest.TestCase):
-    def test_open_exposure_sums_stake_from_clv(self):
-        db = MagicMock()
-        db.table.return_value.select.return_value.like.return_value.execute.return_value.data = [
-            {
-                "candidate_id": "sports_mlb_ml_2026-07-22_atl_sd_1",
-                "entry_price": 0.5,
-                "metadata": {"stake": 40.0, "event_id": "mlb_ml_2026-07-22_atl_sd"},
-            }
-        ]
-        stake = durable_open_shadow_event_exposure(db, "mlb_ml_2026-07-22_atl_sd")
-        self.assertEqual(stake, 40.0)
+    def test_stake_uses_effective_cost_times_shares(self):
+        from backend.models.sports.run_shadow_mlb import obligation_stake_dollars
 
-    def test_two_runs_same_event_create_one_position(self):
-        """Second scheduled run must not paper-fill when event cap is already used."""
+        row = {
+            "entry_price": 0.50,  # market fill (understated if used alone)
+            "entry_effective_cost": 0.5265,
+            "metadata": {"shares": 40.0, "stake": 20.0},  # legacy market×shares
+        }
+        # Must prefer effective_cost × shares (= 21.06), not metadata.stake
+        self.assertAlmostEqual(obligation_stake_dollars(row), 40.0 * 0.5265)
+
+    def test_prior_2pct_outcome_blocks_second_fill(self):
+        """A prior position at the 2% outcome cap must block another fill."""
         start = datetime.now(timezone.utc) + timedelta(hours=6)
         slate = [
             {
@@ -156,8 +154,6 @@ class TestDurableShadowExposure(unittest.TestCase):
                 "game_pk": 716001,
             }
         ]
-        event_id = "mlb_ml_2026-07-22_Atlanta Braves_San Diego Padres"
-        # Canonical event_id depends on _canonical — compute via helper path
         from backend.trading.market_matcher import _canonical
 
         event_id = (
@@ -165,21 +161,26 @@ class TestDurableShadowExposure(unittest.TestCase):
             f"{_canonical('Atlanta Braves') or 'Atlanta Braves'}_"
             f"{_canonical('San Diego Padres') or 'San Diego Padres'}"
         )
-
-        db = MagicMock()
-        # First durable lookup: empty; second: full stake occupying cap
-        empty = MagicMock()
-        empty.data = []
-        full = MagicMock()
-        full.data = [
+        bankroll = 1000.0
+        # Exactly 2% outcome cap consumed via effective_cost × shares
+        prior = MagicMock()
+        prior.data = [
             {
                 "candidate_id": f"sports_{event_id}_1",
-                "entry_price": 0.5,
-                "metadata": {"stake": 1000.0},  # >> 5% of bankroll=1000 → inf cap block
+                "outcome_id": "yes",
+                "entry_price": 0.40,
+                "entry_effective_cost": 0.50,
+                "metadata": {"shares": 40.0},  # 40 * 0.50 = $20 = 2% of 1000
             }
         ]
+        empty = MagicMock()
+        empty.data = []
+
+        db = MagicMock()
+        # Run1: event lookup empty, outcome lookup empty
+        # Run2: event lookup prior (20 < 50 event cap), outcome lookup prior → block
         like_chain = MagicMock()
-        like_chain.execute.side_effect = [empty, full]
+        like_chain.execute.side_effect = [empty, empty, prior, prior]
         db.table.return_value.select.return_value.like.return_value = like_chain
 
         kalshi_mkt = SimpleNamespace(
@@ -195,8 +196,6 @@ class TestDurableShadowExposure(unittest.TestCase):
             ],
         )
         book_ts = datetime.now(timezone.utc)
-        recv = book_ts
-
         router = MagicMock()
         router.kalshi.fetch_mlb_game_markets = AsyncMock(return_value=[kalshi_mkt])
         router.poly.fetch_markets = AsyncMock(return_value=[])
@@ -206,11 +205,9 @@ class TestDurableShadowExposure(unittest.TestCase):
                 "best_bid": 0.38,
                 "ask_size": 500.0,
                 "book_timestamp": book_ts,
-                "received_timestamp": recv,
-                "timestamp_source": "orderbook_timestamp",
+                "received_timestamp": book_ts,
             }
         )
-
         sync_calls = []
 
         def fake_sync(**kwargs):
@@ -242,22 +239,146 @@ class TestDurableShadowExposure(unittest.TestCase):
         ):
             r1 = asyncio.run(
                 run_mlb_moneyline_shadow(
-                    router=router, db=db, bankroll=1000.0, slate=slate
+                    router=router, db=db, bankroll=bankroll, slate=slate
                 )
             )
             r2 = asyncio.run(
                 run_mlb_moneyline_shadow(
-                    router=router, db=db, bankroll=1000.0, slate=slate
+                    router=router, db=db, bankroll=bankroll, slate=slate
                 )
             )
 
         self.assertEqual(r1["processed"], 1)
         self.assertEqual(len(sync_calls), 1)
+        # Second fill must hit outcome-cap duplicate, not invent another position
         self.assertEqual(r2["processed"], 0)
         self.assertIn(
             DUPLICATE_SHADOW_EXPOSURE,
             r2["by_venue"]["kalshi"]["rejection_reasons"],
         )
+        # Caps passed into sync must shrink remaining outcome room on first fill
+        caps = sync_calls[0]["risk_caps"]
+        self.assertAlmostEqual(caps.max_outcome_exposure_pct, 0.02)
+
+    def test_winning_book_refresh_zero_depth_rejects(self):
+        from backend.models.sports.run_shadow_mlb import WINNING_BOOK_REFRESH_FAILED
+
+        start = datetime.now(timezone.utc) + timedelta(hours=6)
+        slate = [
+            {
+                "home_team": "Atlanta Braves",
+                "away_team": "San Diego Padres",
+                "slate_date": "2026-07-22",
+                "scheduled_start_utc": start.isoformat(),
+                "game_pk": 716001,
+            }
+        ]
+        db = MagicMock()
+        empty = MagicMock()
+        empty.data = []
+        db.table.return_value.select.return_value.like.return_value.execute.return_value = empty
+
+        kalshi_mkt = SimpleNamespace(
+            question="Will the Braves win?",
+            market_id="KXMLBGAME-26JUL22ATLSD-ATL",
+            slug="KXMLBGAME-26JUL22ATLSD-ATL",
+            end_date="2026-07-22",
+            venue="kalshi",
+            yes_proposition_team="Atlanta Braves",
+            outcomes=[
+                SimpleNamespace(name="Yes", token_id="yes", price=0.40),
+                SimpleNamespace(name="No", token_id="no", price=0.60),
+            ],
+        )
+        book_ts = datetime.now(timezone.utc)
+        good = {
+            "best_ask": 0.40,
+            "best_bid": 0.38,
+            "ask_size": 500.0,
+            "book_timestamp": book_ts,
+            "received_timestamp": book_ts,
+        }
+        bad_refresh = {
+            "best_ask": 0.40,
+            "best_bid": 0.38,
+            "ask_size": 0.0,  # zero refreshed depth → fail closed
+            "book_timestamp": book_ts,
+            "received_timestamp": book_ts,
+        }
+        router = MagicMock()
+        router.kalshi.fetch_mlb_game_markets = AsyncMock(return_value=[kalshi_mkt])
+        router.poly.fetch_markets = AsyncMock(return_value=[])
+        # evaluate home + away, then refresh
+        router.get_top_of_book = AsyncMock(side_effect=[good, good, bad_refresh])
+
+        with isolate_clv_db(), patch(
+            "backend.models.sports.run_shadow_mlb._moneyline_probs",
+            return_value=(
+                {"home_prob": 0.65, "away_prob": 0.35, "game_pk": 716001},
+                {
+                    "model_version": "t",
+                    "feature_version": "t",
+                    "coefficient_source": "t",
+                    "calibration_status": "uncalibrated_shadow",
+                },
+            ),
+        ), patch(
+            "backend.models.sports.run_shadow_mlb.sync_sports_market",
+        ) as sync_mock, patch(
+            "backend.models.sports.run_shadow_mlb.estimate_fee_per_share",
+            return_value=0.01,
+        ):
+            result = asyncio.run(
+                run_mlb_moneyline_shadow(
+                    router=router, db=db, bankroll=1000.0, slate=slate
+                )
+            )
+
+        sync_mock.assert_not_called()
+        self.assertEqual(result["processed"], 0)
+        self.assertIn(
+            WINNING_BOOK_REFRESH_FAILED,
+            result["by_venue"]["kalshi"]["rejection_reasons"],
+        )
+
+
+class TestClvExclusionAndAnalyze(unittest.TestCase):
+    def test_exclude_only_exact_contaminated_ids(self):
+        from scripts.analyze_sports_shadow import (
+            CLV_EVAL_EXCLUDE_CANDIDATE_IDS,
+            _clv_excluded,
+            summarize_durable_clv,
+        )
+
+        bad = (
+            "sports_mlb_ml_2026-07-23_Atlanta Braves_San Diego Padres_1784721409"
+        )
+        good = (
+            "sports_mlb_ml_2026-07-23_Cleveland Guardians_Minnesota Twins_1784731893"
+        )
+        self.assertIn(bad, CLV_EVAL_EXCLUDE_CANDIDATE_IDS)
+        self.assertTrue(_clv_excluded(bad))
+        self.assertFalse(_clv_excluded(good))
+        summary = summarize_durable_clv(
+            [
+                {
+                    "candidate_id": bad,
+                    "status_15m": "unavailable",
+                    "entry_price": 0.5,
+                },
+                {
+                    "candidate_id": good,
+                    "status_15m": "observed",
+                    "obs_15m_price": 0.55,
+                    "entry_market_price": 0.50,
+                    "status_1h": "pending",
+                    "status_close": "pending",
+                },
+            ]
+        )
+        self.assertEqual(summary["clv_records_excluded_reused_prob"], 1)
+        self.assertEqual(summary["clv_records_evaluated"], 1)
+        self.assertAlmostEqual(summary["average_clv_15m"], 0.05)
 
 
 class TestPolymarketDedupeAndTimestamp(unittest.TestCase):

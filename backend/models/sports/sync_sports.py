@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 from loguru import logger
 from pavlov.pipeline.sports_features import SportsEventFeatures
@@ -260,7 +260,13 @@ def sync_sports_market(
         )
 
     # 5. CLV Tracking — market fill vs effective cost stored separately
-    stake = float(fill.filled_shares) * float(fill.simulated_fill_price)
+    # Stake for exposure = effective cost × shares (not market fill × shares).
+    stake = float(fill.filled_shares) * float(fill.limit_price)
+    close_lead = timedelta(minutes=5)
+    event_start = features.start_time
+    due_close = (
+        (event_start - close_lead) if event_start is not None else None
+    )
     clv_meta = {
         "event_id": features.event_id,
         "mode": mode,
@@ -268,6 +274,10 @@ def sync_sports_market(
         "stake": stake,
         "shares": float(fill.filled_shares),
         "notional": stake,
+        "entry_effective_cost": float(fill.limit_price),
+        "entry_market_price": float(fill.simulated_fill_price),
+        "event_start_utc": event_start.isoformat() if event_start is not None else None,
+        "close_lead_minutes": 5,
         "exclude_from_clv_eval": bool(
             (features.sport_specific or {}).get("exclude_from_clv_eval")
         ),
@@ -282,7 +292,7 @@ def sync_sports_market(
         entry_price=fill.simulated_fill_price,
         entry_time=datetime.now(timezone.utc),
         platform=market_data.get("platform") or "unknown",
-        due_close=features.start_time,
+        due_close=due_close,
         entry_market_price=fill.simulated_fill_price,
         entry_effective_cost=fill.limit_price,
         metadata=clv_meta,

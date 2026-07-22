@@ -39,27 +39,57 @@ class TestAnalyzeSportsShadow(unittest.TestCase):
             os.remove(self.clv_file)
 
     def test_analyze_sports_shadow_reads_jsonl(self):
-        report = run_analysis(self.decisions_file, self.fills_file, self.clv_file)
+        report = run_analysis(
+            self.decisions_file, self.fills_file, self.clv_file, clv_obligations=[]
+        )
         self.assertEqual(report["total_predictions"], 2)
 
     def test_analyze_sports_shadow_counts_rejections(self):
-        report = run_analysis(self.decisions_file, self.fills_file, self.clv_file)
+        report = run_analysis(
+            self.decisions_file, self.fills_file, self.clv_file, clv_obligations=[]
+        )
         self.assertEqual(report["total_rejections"], 1)
         self.assertEqual(report["rejection_reason_counts"]["EDGE_GONE"], 1)
 
     def test_analyze_sports_shadow_counts_would_trade(self):
-        report = run_analysis(self.decisions_file, self.fills_file, self.clv_file)
+        report = run_analysis(
+            self.decisions_file, self.fills_file, self.clv_file, clv_obligations=[]
+        )
         self.assertEqual(report["total_would_trade"], 1)
 
     def test_analyze_sports_shadow_groups_by_market_type(self):
-        report = run_analysis(self.decisions_file, self.fills_file, self.clv_file)
+        report = run_analysis(
+            self.decisions_file, self.fills_file, self.clv_file, clv_obligations=[]
+        )
         self.assertEqual(report["groups"]["by_market_type"]["moneyline"], 1)
         self.assertEqual(report["groups"]["by_market_type"]["prop"], 1)
 
     def test_analyze_sports_shadow_handles_missing_clv(self):
-        # self.clv_file does not exist here because it's not created in setUp
-        report = run_analysis(self.decisions_file, self.fills_file, self.clv_file)
+        report = run_analysis(
+            self.decisions_file, self.fills_file, self.clv_file, clv_obligations=[]
+        )
         self.assertEqual(report["average_clv_15m"], 0)
+        self.assertEqual(report["clv_source"], "supabase_clv_obligations")
+
+    def test_analyze_reads_durable_clv_not_jsonl(self):
+        report = run_analysis(
+            self.decisions_file,
+            self.fills_file,
+            self.clv_file,
+            clv_obligations=[
+                {
+                    "candidate_id": "sports_ok_1",
+                    "status_15m": "observed",
+                    "obs_15m_price": 0.60,
+                    "entry_market_price": 0.50,
+                    "status_1h": "pending",
+                    "status_close": "pending",
+                }
+            ],
+            export_clv_path=None,
+        )
+        self.assertAlmostEqual(report["average_clv_15m"], 0.10)
+        self.assertEqual(report["clv_observed_15m_n"], 1)
 
 if __name__ == "__main__":
     unittest.main()

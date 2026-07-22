@@ -172,8 +172,13 @@ async def update_clv_checkpoints(
         save_clv_records(records, filepath)
 
 
-FetchPriceResult = tuple[Optional[float], Optional[datetime]]
-FetchPriceFn = Callable[[str, str, str], Awaitable[FetchPriceResult | float | None]]
+FetchPriceResult = tuple[Optional[float], Optional[datetime], Optional[datetime]]
+# (executable_price, book_timestamp, received_timestamp)
+FetchPriceFn = Callable[
+    [str, str, str], Awaitable[FetchPriceResult | float | None | tuple]
+]
+
+_CLOSE_LEAD = timedelta(minutes=5)
 
 
 async def _normalize_fetch(
@@ -182,17 +187,59 @@ async def _normalize_fetch(
     outcome_id: str,
     side: str,
 ) -> FetchPriceResult:
-    """Normalize fetch_price returns to (executable_price, book_ts)."""
+    """Normalize fetch_price returns to (price, book_ts, received_ts)."""
     result = await fetch_price(market_id, outcome_id, side)
     if result is None:
-        return None, None
+        return None, None, None
     if isinstance(result, (int, float)):
-        return float(result), None
+        return float(result), None, None
     if isinstance(result, tuple):
         price = result[0] if len(result) > 0 else None
         book_ts = result[1] if len(result) > 1 else None
-        return (float(price) if price is not None else None), _parse_ts(book_ts)
-    return None, None
+        received_ts = result[2] if len(result) > 2 else None
+        return (
+            (float(price) if price is not None else None),
+            _parse_ts(book_ts),
+            _parse_ts(received_ts),
+        )
+    return None, None, None
+
+
+def _event_start_for_close(row: dict, due: datetime, meta: dict) -> datetime:
+    """First-pitch time for close checkpoint (due_close is typically T−5m)."""
+    start = _parse_ts(meta.get("event_start_utc")) or _parse_ts(row.get("due_close_event_start"))
+    if start is not None:
+        return start
+    # Legacy rows stored due_close = first pitch; new rows store due_close = T−5m.
+    # Prefer metadata; otherwise assume due is already the lead-adjusted time.
+    lead = meta.get("close_lead_minutes")
+    if lead is not None:
+        return due + timedelta(minutes=float(lead))
+    # Heuristic: if due looks like first pitch (legacy), use due; else due + 5m.
+    return due + _CLOSE_LEAD
+
+
+def _accept_book_for_platform(
+    platform: str,
+    price: Optional[float],
+    book_ts: Optional[datetime],
+    received_ts: Optional[datetime],
+) -> tuple[bool, Optional[str]]:
+    """
+    Polymarket requires CLOB book_ts. Kalshi shadow may use receipt-only.
+    Returns (ok, reject_reason).
+    """
+    if price is None or not (0.0 < float(price) < 1.0):
+        return False, None
+    plat = (platform or "").lower()
+    if plat == "polymarket":
+        if book_ts is None:
+            return False, "MISSING_ORDERBOOK_TIMESTAMP"
+        return True, None
+    # Kalshi / unknown: prefer book_ts; allow receipt fallback for shadow freshness
+    if book_ts is None and received_ts is None:
+        return False, "MISSING_RECEIVED_TIMESTAMP"
+    return True, None
 
 
 def count_clv_obligations(db=None) -> dict[str, int]:
@@ -228,13 +275,12 @@ async def update_clv_obligations(
     """
     Consume pending clv_obligations rows and write 15m / 1h / close observations.
 
-    ``fetch_price(market_id, outcome_id, side)`` must return the side-correct
-    executable price for the purchased outcome token (ask when buying YES/token).
-    May return ``(price, book_timestamp)`` or bare ``price``.
+    ``fetch_price`` should return ``(price, book_timestamp, received_timestamp)``.
+    ``obs_*_ts`` / receipt metadata use the HTTP fetch-boundary received_timestamp
+    when present — never a single batch wall-clock for all rows.
 
-    Observations received after ``due + overdue_grace`` are marked unavailable
-    even when a current book price is available — never label a late price as
-    a timely 15m/1h checkpoint.
+    Close observations are only accepted in the pre-start window
+    (``due_close`` … first pitch). Any post-start book is rejected.
     """
     from backend.db import get_db
 
@@ -260,6 +306,7 @@ async def update_clv_obligations(
         market_id = row.get("market_id") or ""
         outcome_id = row.get("outcome_id") or ""
         side = (row.get("side") or "YES").upper()
+        platform = (row.get("platform") or "").lower()
         patch: dict[str, Any] = {"updated_at": now.isoformat()}
         touched = False
         meta = dict(row.get("metadata") or {})
@@ -274,10 +321,8 @@ async def update_clv_obligations(
                 continue
             due = _parse_ts(row.get(due_key))
             if due is None:
-                # close may be unset until event time known — skip without failing
                 if checkpoint == "close":
                     continue
-                # 15m/1h should always have due times; mark unavailable if missing
                 patch[status_col] = "unavailable"
                 patch[obs_ts_col] = now.isoformat()
                 meta[f"{checkpoint}_reason"] = "MISSING_DUE_TIME"
@@ -286,16 +331,42 @@ async def update_clv_obligations(
                 touched = True
                 stats["unavailable"] += 1
                 continue
-            if now < due:
-                continue
+
+            event_start = None
+            if checkpoint == "close":
+                event_start = _event_start_for_close(row, due, meta)
+                # Legacy: due_close was first pitch → treat due as event_start and
+                # open the window at T−5m.
+                if meta.get("event_start_utc") is None and meta.get("close_lead_minutes") is None:
+                    # Ambiguous legacy: if due == stored first pitch, window is [due-5m, due)
+                    event_start = due
+                    due = event_start - _CLOSE_LEAD
+                if now < due:
+                    continue
+                if now >= event_start:
+                    patch[status_col] = "unavailable"
+                    patch[obs_ts_col] = now.isoformat()
+                    meta[f"{checkpoint}_reason"] = "POST_START"
+                    meta[f"{checkpoint}_receipt_ts"] = now.isoformat()
+                    meta[f"{checkpoint}_event_start_utc"] = event_start.isoformat()
+                    patch["metadata"] = meta
+                    touched = True
+                    stats["unavailable"] += 1
+                    logger.warning(
+                        f"CLV close unavailable (post-start) for {candidate_id}"
+                    )
+                    continue
+            else:
+                if now < due:
+                    continue
 
             delay = now - due
-            # Overdue beyond grace: reject even if a current price is available.
-            if delay > overdue_grace:
-                price_probe = None
-                book_ts_probe = None
+
+            # 15m/1h: overdue beyond grace → unavailable even if price available
+            if checkpoint != "close" and delay > overdue_grace:
+                price_probe = book_ts_probe = recv_probe = None
                 try:
-                    price_probe, book_ts_probe = await _normalize_fetch(
+                    price_probe, book_ts_probe, recv_probe = await _normalize_fetch(
                         fetch_price, market_id, outcome_id, side
                     )
                 except Exception as exc:
@@ -303,14 +374,16 @@ async def update_clv_obligations(
                         f"CLV overdue probe error {candidate_id} {checkpoint}: {exc}"
                     )
                     stats["errors"] += 1
+                receipt = recv_probe or now
                 patch[status_col] = "unavailable"
-                patch[obs_ts_col] = now.isoformat()
+                patch[obs_ts_col] = receipt.isoformat()
                 meta[f"{checkpoint}_reason"] = "OBSERVATION_OVERDUE"
-                meta[f"{checkpoint}_obs_delay_seconds"] = delay.total_seconds()
-                meta[f"{checkpoint}_receipt_ts"] = now.isoformat()
+                meta[f"{checkpoint}_obs_delay_seconds"] = (
+                    receipt - due
+                ).total_seconds()
+                meta[f"{checkpoint}_receipt_ts"] = receipt.isoformat()
                 meta[f"{checkpoint}_price_available_but_late"] = (
-                    price_probe is not None
-                    and 0.0 < float(price_probe) < 1.0
+                    price_probe is not None and 0.0 < float(price_probe) < 1.0
                 )
                 if price_probe is not None:
                     meta[f"{checkpoint}_late_price_not_accepted"] = float(price_probe)
@@ -320,43 +393,79 @@ async def update_clv_obligations(
                 touched = True
                 stats["unavailable"] += 1
                 logger.warning(
-                    f"CLV {checkpoint} unavailable (overdue "
-                    f"{delay.total_seconds():.0f}s) for {candidate_id}; "
+                    f"CLV {checkpoint} unavailable (overdue) for {candidate_id}; "
                     f"price_available={meta[f'{checkpoint}_price_available_but_late']}"
                 )
                 continue
 
             try:
-                price, book_ts = await _normalize_fetch(
+                price, book_ts, received_ts = await _normalize_fetch(
                     fetch_price, market_id, outcome_id, side
                 )
             except Exception as exc:
                 logger.warning(
                     f"CLV fetch error {candidate_id} {checkpoint}: {exc}"
                 )
-                price, book_ts = None, None
+                price, book_ts, received_ts = None, None, None
                 stats["errors"] += 1
 
-            if price is not None and 0.0 < float(price) < 1.0:
+            receipt = received_ts or now
+            # Reject every post-start book for close (and any stamp after first pitch)
+            if checkpoint == "close" and event_start is not None:
+                stamp = book_ts or received_ts
+                if stamp is not None and stamp >= event_start:
+                    patch[status_col] = "unavailable"
+                    patch[obs_ts_col] = receipt.isoformat()
+                    meta[f"{checkpoint}_reason"] = "POST_START_BOOK"
+                    meta[f"{checkpoint}_receipt_ts"] = receipt.isoformat()
+                    meta[f"{checkpoint}_event_start_utc"] = event_start.isoformat()
+                    if book_ts is not None:
+                        meta[f"{checkpoint}_rejected_book_ts"] = book_ts.isoformat()
+                    patch["metadata"] = meta
+                    touched = True
+                    stats["unavailable"] += 1
+                    logger.warning(
+                        f"CLV close rejected post-start book for {candidate_id}"
+                    )
+                    continue
+
+            ok, reject_reason = _accept_book_for_platform(
+                platform, price, book_ts, received_ts
+            )
+            if ok and price is not None:
                 patch[status_col] = "observed"
                 patch[price_col] = float(price)
-                patch[obs_ts_col] = now.isoformat()
+                patch[obs_ts_col] = receipt.isoformat()
                 if book_ts is not None:
                     patch[book_ts_col] = book_ts.isoformat()
                 meta[f"{checkpoint}_reason"] = "OBSERVED"
-                meta[f"{checkpoint}_obs_delay_seconds"] = delay.total_seconds()
-                meta[f"{checkpoint}_receipt_ts"] = now.isoformat()
+                meta[f"{checkpoint}_obs_delay_seconds"] = (
+                    receipt - due
+                ).total_seconds()
+                meta[f"{checkpoint}_receipt_ts"] = receipt.isoformat()
                 meta[f"{checkpoint}_book_ts_source"] = (
-                    "orderbook_timestamp" if book_ts is not None else "missing"
+                    "orderbook_timestamp" if book_ts is not None else "received_timestamp"
                 )
                 patch["metadata"] = meta
                 touched = True
                 stats["updated"] += 1
                 logger.info(
                     f"CLV {checkpoint} observed for {candidate_id}: {price} "
-                    f"(delay={delay.total_seconds():.0f}s)"
+                    f"(receipt={receipt.isoformat()})"
                 )
-            # else: still within grace — leave pending and retry next cycle
+            elif reject_reason == "MISSING_ORDERBOOK_TIMESTAMP" and platform == "polymarket":
+                # Within grace for 15m/1h: leave pending so a later stamp can land.
+                # For close (window ends at first pitch), mark unavailable if no stamp.
+                if checkpoint == "close":
+                    patch[status_col] = "unavailable"
+                    patch[obs_ts_col] = receipt.isoformat()
+                    meta[f"{checkpoint}_reason"] = reject_reason
+                    meta[f"{checkpoint}_receipt_ts"] = receipt.isoformat()
+                    patch["metadata"] = meta
+                    touched = True
+                    stats["unavailable"] += 1
+                # else: leave pending
+            # else: still within grace / no price — leave pending
 
         if touched:
             try:

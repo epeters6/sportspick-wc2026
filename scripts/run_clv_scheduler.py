@@ -24,7 +24,7 @@ async def _fetch_executable_price(
     Side-correct executable price for the purchased outcome token.
 
     Buying YES/token → take the ask (side='sell' on the book).
-    Returns (price, book_timestamp) or (None, None).
+    Returns (price, book_timestamp, received_timestamp).
     """
     venue = "kalshi" if str(market_id).upper().startswith("KX") else "polymarket"
     try:
@@ -33,15 +33,15 @@ async def _fetch_executable_price(
             token_id=outcome_id,
             market_id=market_id,
         )
-        # Executable for a buyer of this outcome is the ask
         price = book.get("best_ask")
         book_ts = book.get("book_timestamp")
+        received_ts = book.get("received_timestamp")
         if price is None:
-            return None, None
-        return float(price), book_ts
+            return None, book_ts, received_ts
+        return float(price), book_ts, received_ts
     except Exception as e:
         logger.warning(f"Failed to fetch price for CLV {market_id} {outcome_id}: {e}")
-        return None, None
+        return None, None, None
 
 
 async def run_scheduler(once: bool = False):

@@ -47,12 +47,16 @@ PREGAME_MODEL_UNAVAILABLE = "PREGAME_MODEL_UNAVAILABLE"
 MLB_SHADOW_ZERO_PROCESSED = "MLB_SHADOW_ZERO_PROCESSED"
 MLB_MONEYLINE_MANIFEST_EMPTY = "MLB_MONEYLINE_MANIFEST_EMPTY"
 DUPLICATE_SHADOW_EXPOSURE = "DUPLICATE_SHADOW_EXPOSURE"
+WINNING_BOOK_REFRESH_FAILED = "WINNING_BOOK_REFRESH_FAILED"
 MLB_QUANT_GAME_IDENTITY_AMBIGUOUS = MlbQuantGameIdentityAmbiguous.CODE
 
-# Contaminated Phase-4 fills that reused today's model prob for tomorrow's slate.
-# Exclude from CLV / calibration evaluation until replaced by identity-correct fills.
-CLV_EVAL_EXCLUDE_EVENT_PREFIXES = (
-    "mlb_ml_2026-07-23_",  # ATL-SD / TOR-TB reuse evidence
+# Exact Phase-4 contaminated candidate_ids (reused Jul-22 probs on Jul-23 slate).
+# Do not exclude other Jul-23 identity-correct obligations.
+CLV_EVAL_EXCLUDE_CANDIDATE_IDS = frozenset(
+    {
+        "sports_mlb_ml_2026-07-23_Toronto Blue Jays_Tampa Bay Rays_1784721382",
+        "sports_mlb_ml_2026-07-23_Atlanta Braves_San Diego Padres_1784721409",
+    }
 )
 
 COEFFICIENT_SOURCE = "mlb_quant_legacy.calculate_win_probability"
@@ -224,21 +228,40 @@ def _parse_game_pk(external_id: Any, match_id: Any = None) -> int | str | None:
     return s or None
 
 
-def durable_open_shadow_event_exposure(db, event_id: str) -> float:
+def obligation_stake_dollars(row: dict) -> float:
     """
-    Sum open paper/shadow stake for an event across venues from durable CLV rows.
+    Durable stake = entry_effective_cost × shares (not market fill × shares).
 
-    Uses candidate_id prefix ``sports_{event_id}`` and/or metadata.event_id.
+    Falls back to metadata.stake only when effective cost/shares are missing;
+    unknown size occupies the full remaining slot (inf).
     """
+    meta = row.get("metadata") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    shares = meta.get("shares")
+    eff = row.get("entry_effective_cost")
+    if eff is None:
+        eff = meta.get("entry_effective_cost")
+    if shares is not None and eff is not None:
+        return float(shares) * float(eff)
+    if meta.get("stake") is not None:
+        return float(meta["stake"])
+    if shares is not None and row.get("entry_price") is not None:
+        # Last resort — understated vs effective cost; still better than zero
+        return float(shares) * float(row["entry_price"])
+    return float("inf")
+
+
+def _durable_shadow_obligation_rows(db, event_id: str) -> list[dict]:
     if db is None or not event_id:
-        return 0.0
-    total = 0.0
-    seen: set[str] = set()
+        return []
     try:
         prefix = f"sports_{event_id}"
-        rows = (
+        return (
             db.table("clv_obligations")
-            .select("candidate_id, entry_price, metadata")
+            .select(
+                "candidate_id, outcome_id, entry_price, entry_effective_cost, metadata"
+            )
             .like("candidate_id", f"{prefix}%")
             .execute()
             .data
@@ -246,29 +269,45 @@ def durable_open_shadow_event_exposure(db, event_id: str) -> float:
         )
     except Exception as exc:
         logger.warning(f"Durable shadow exposure lookup failed: {exc}")
-        rows = []
+        return []
 
-    for row in rows:
+
+def durable_open_shadow_event_exposure(db, event_id: str) -> float:
+    """Sum open paper/shadow stake for an event across venues (durable CLV)."""
+    total = 0.0
+    seen: set[str] = set()
+    for row in _durable_shadow_obligation_rows(db, event_id):
         cid = str(row.get("candidate_id") or "")
         if cid in seen:
             continue
         seen.add(cid)
-        meta = row.get("metadata") or {}
-        if not isinstance(meta, dict):
-            meta = {}
-        stake = meta.get("stake")
-        if stake is None:
-            # Fallback: entry_price * shares if stored; else treat as occupying full
-            # event slot so we do not double-fill when stake metadata is missing.
-            shares = meta.get("shares")
-            if shares is not None and row.get("entry_price") is not None:
-                stake = float(shares) * float(row["entry_price"])
-            else:
-                stake = float(meta.get("notional") or 0.0)
-                if stake <= 0:
-                    # Unknown prior size — occupy the event to prevent duplicate fills
-                    return float("inf")
-        total += float(stake)
+        stake = obligation_stake_dollars(row)
+        if stake == float("inf"):
+            return float("inf")
+        total += stake
+    return total
+
+
+def durable_open_shadow_outcome_exposure(
+    db, event_id: str, outcome_id: str | None
+) -> float:
+    """Sum open stake on a specific outcome token within an event."""
+    if not outcome_id:
+        return 0.0
+    want = str(outcome_id)
+    total = 0.0
+    seen: set[str] = set()
+    for row in _durable_shadow_obligation_rows(db, event_id):
+        if str(row.get("outcome_id") or "") != want:
+            continue
+        cid = str(row.get("candidate_id") or "")
+        if cid in seen:
+            continue
+        seen.add(cid)
+        stake = obligation_stake_dollars(row)
+        if stake == float("inf"):
+            return float("inf")
+        total += stake
     return total
 
 
@@ -683,11 +722,11 @@ async def run_mlb_moneyline_shadow(
 
         open_stake = durable_open_shadow_event_exposure(db, event_id)
         event_cap = float(risk_caps.get_event_exposure_cap_dollars(bankroll))
-        remaining_cap = event_cap - float(open_stake)
-        if remaining_cap <= 0:
+        remaining_event_cap = event_cap - float(open_stake)
+        if remaining_event_cap <= 0:
             logger.info(
                 f"{DUPLICATE_SHADOW_EXPOSURE}: {event_id} "
-                f"open_stake={open_stake} cap={event_cap}"
+                f"open_stake={open_stake} event_cap={event_cap}"
             )
             poly_stats.reject(DUPLICATE_SHADOW_EXPOSURE)
             kalshi_stats.reject(DUPLICATE_SHADOW_EXPOSURE)
@@ -697,7 +736,7 @@ async def run_mlb_moneyline_shadow(
         if open_stake > 0:
             logger.info(
                 f"REPEAT_SHADOW_PREDICTION: {event_id} open_stake={open_stake} "
-                f"remaining_cap={remaining_cap:.2f}"
+                f"remaining_event_cap={remaining_event_cap:.2f}"
             )
 
         # Shared once-per-run universes; filter/match per game (no per-game re-search)
@@ -769,43 +808,83 @@ async def run_mlb_moneyline_shadow(
                 f"best_net_edge={best['net_edge']:.4f}"
             )
 
-        # Re-fetch the selected winning book immediately before sizing
+        # Re-fetch the selected winning book immediately before sizing.
+        # Fail closed: never reuse the older discovery book on refresh failure.
         try:
             fresh = await router.get_top_of_book(
                 venue=best["venue"],
                 token_id=best["token_id"],
                 market_id=best["market"].market_id,
             )
-            if fresh.get("best_ask") is not None and fresh.get("best_bid") is not None:
-                best["best_ask"] = float(fresh["best_ask"])
-                best["best_bid"] = float(fresh["best_bid"])
-                best["spread"] = best["best_ask"] - best["best_bid"]
-                best["ask_size"] = float(fresh.get("ask_size") or best["ask_size"])
-                best["book_ts"] = fresh.get("book_timestamp")
-                if fresh.get("received_timestamp") is not None:
-                    best["received_ts"] = fresh["received_timestamp"]
-                best["effective_cost"] = _executable_cost(best["venue"], best["best_ask"])
-                best["net_edge"] = float(best["model_prob"]) - best["effective_cost"]
-                if best["venue"] == "polymarket" and best["book_ts"] is None:
-                    logger.info(
-                        f"MISSING_ORDERBOOK_TIMESTAMP after re-fetch: {home} vs {away}"
-                    )
-                    poly_stats.reject("MISSING_ORDERBOOK_TIMESTAMP")
-                    rejected += 1
-                    continue
-                if best["net_edge"] <= 0:
-                    logger.info(
-                        f"NO_POSITIVE_NET_EDGE after re-fetch: {home} vs {away} "
-                        f"net_edge={best['net_edge']:.4f}"
-                    )
-                    rejected += 1
-                    exposed_events.add(event_id)
-                    continue
-                best["allow_received_timestamp_shadow"] = (
-                    best["book_ts"] is None and best["venue"] == "kalshi"
-                )
         except Exception as exc:
-            logger.warning(f"Winning-book re-fetch failed ({best['venue']}): {exc}")
+            logger.warning(
+                f"{WINNING_BOOK_REFRESH_FAILED} ({best['venue']}): {exc}"
+            )
+            stats = poly_stats if best["venue"] == "polymarket" else kalshi_stats
+            stats.reject(WINNING_BOOK_REFRESH_FAILED)
+            rejected += 1
+            continue
+
+        fresh_ask = fresh.get("best_ask")
+        fresh_bid = fresh.get("best_bid")
+        fresh_depth = float(fresh.get("ask_size") or 0.0)
+        fresh_book_ts = fresh.get("book_timestamp")
+        fresh_recv = fresh.get("received_timestamp")
+        if (
+            fresh_ask is None
+            or fresh_bid is None
+            or fresh_depth <= 0.0
+            or fresh_recv is None
+            or (best["venue"] == "polymarket" and fresh_book_ts is None)
+        ):
+            logger.info(
+                f"{WINNING_BOOK_REFRESH_FAILED}: {home} vs {away} "
+                f"venue={best['venue']} ask={fresh_ask} bid={fresh_bid} "
+                f"depth={fresh_depth} book_ts={fresh_book_ts}"
+            )
+            stats = poly_stats if best["venue"] == "polymarket" else kalshi_stats
+            stats.reject(WINNING_BOOK_REFRESH_FAILED)
+            rejected += 1
+            continue
+
+        best["best_ask"] = float(fresh_ask)
+        best["best_bid"] = float(fresh_bid)
+        best["spread"] = best["best_ask"] - best["best_bid"]
+        best["ask_size"] = fresh_depth
+        best["book_ts"] = fresh_book_ts
+        best["received_ts"] = fresh_recv
+        best["effective_cost"] = _executable_cost(best["venue"], best["best_ask"])
+        best["net_edge"] = float(best["model_prob"]) - best["effective_cost"]
+        best["allow_received_timestamp_shadow"] = (
+            best["book_ts"] is None and best["venue"] == "kalshi"
+        )
+        best["timestamp_source"] = (
+            "orderbook_timestamp" if best["book_ts"] is not None else "received_timestamp"
+        )
+        if best["net_edge"] <= 0:
+            logger.info(
+                f"NO_POSITIVE_NET_EDGE after re-fetch: {home} vs {away} "
+                f"net_edge={best['net_edge']:.4f}"
+            )
+            rejected += 1
+            exposed_events.add(event_id)
+            continue
+
+        open_outcome = durable_open_shadow_outcome_exposure(
+            db, event_id, best["token_id"]
+        )
+        outcome_cap = float(risk_caps.get_outcome_exposure_cap_dollars(bankroll))
+        remaining_outcome_cap = outcome_cap - float(open_outcome)
+        if remaining_outcome_cap <= 0:
+            logger.info(
+                f"{DUPLICATE_SHADOW_EXPOSURE}: {event_id} outcome={best['token_id']} "
+                f"open_outcome={open_outcome} outcome_cap={outcome_cap}"
+            )
+            stats = poly_stats if best["venue"] == "polymarket" else kalshi_stats
+            stats.reject(DUPLICATE_SHADOW_EXPOSURE)
+            exposed_events.add(event_id)
+            rejected += 1
+            continue
 
         meta = best["model_meta"]
         venue = best["venue"]
@@ -813,10 +892,14 @@ async def run_mlb_moneyline_shadow(
         fee = estimate_fee_per_share(venue, best["best_ask"], 1.0)
         # Snapshot = selected book receipt (not pre-discovery wall clock)
         snapshot_time = best["received_ts"]
-        # Shrink event exposure cap to remaining durable capacity
+        # Shrink caps to remaining durable event/outcome capacity
         run_caps = RiskCaps(
-            max_event_exposure_pct=max(remaining_cap / bankroll, 1e-9) if bankroll > 0 else 0.0,
-            max_outcome_exposure_pct=risk_caps.max_outcome_exposure_pct,
+            max_event_exposure_pct=(
+                max(remaining_event_cap / bankroll, 1e-9) if bankroll > 0 else 0.0
+            ),
+            max_outcome_exposure_pct=(
+                max(remaining_outcome_cap / bankroll, 1e-9) if bankroll > 0 else 0.0
+            ),
             max_strategy_exposure_pct=risk_caps.max_strategy_exposure_pct,
             max_platform_exposure_pct=risk_caps.max_platform_exposure_pct,
             max_daily_loss_pct=risk_caps.max_daily_loss_pct,
@@ -856,9 +939,6 @@ async def run_mlb_moneyline_shadow(
                 "yes_proposition_team": best.get("yes_team"),
                 "slate_date": slate_date,
                 "game_pk": probs.get("game_pk") or game_pk,
-                "exclude_from_clv_eval": any(
-                    event_id.startswith(p) for p in CLV_EVAL_EXCLUDE_EVENT_PREFIXES
-                ),
                 **{
                     k: meta[k]
                     for k in (
