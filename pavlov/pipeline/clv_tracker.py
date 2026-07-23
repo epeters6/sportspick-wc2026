@@ -54,6 +54,7 @@ def _upsert_clv_obligation(
             close = close.replace(tzinfo=timezone.utc)
         market_px = float(record.entry_market_price)
         effective = float(record.entry_effective_cost)
+        meta = metadata or {}
         row = {
             "candidate_id": record.trade_id,
             "platform": platform or "unknown",
@@ -70,15 +71,44 @@ def _upsert_clv_obligation(
             "status_15m": "pending",
             "status_1h": "pending",
             "status_close": "pending",
-            "metadata": metadata or {},
+            "event_id": meta.get("event_id"),
+            "event_start": meta.get("event_start"),
+            "model_prob": meta.get("model_prob"),
+            "market_prob": meta.get("market_prob"),
+            "selected_team": meta.get("selected_team"),
+            "home_team": meta.get("home_team"),
+            "away_team": meta.get("away_team"),
+            "match_id": meta.get("match_id"),
+            "game_pk": meta.get("game_pk"),
+            "shares": meta.get("shares"),
+            "stake": meta.get("stake"),
+            "metadata": meta,
         }
-        # Soft-fail if new columns not yet migrated: retry without them
+        # Soft-fail if migrations are rolling out: retain legacy CLV durability.
         try:
             get_db().table("clv_obligations").upsert(row, on_conflict="candidate_id").execute()
         except Exception as col_exc:
-            if "entry_market_price" in str(col_exc) or "entry_effective_cost" in str(col_exc):
-                row.pop("entry_market_price", None)
-                row.pop("entry_effective_cost", None)
+            optional_columns = (
+                "entry_market_price",
+                "entry_effective_cost",
+                "event_id",
+                "event_start",
+                "model_prob",
+                "market_prob",
+                "selected_team",
+                "home_team",
+                "away_team",
+                "match_id",
+                "game_pk",
+                "shares",
+                "stake",
+            )
+            message = str(col_exc)
+            if "PGRST204" in message or "schema cache" in message or any(
+                name in message for name in optional_columns
+            ):
+                for name in optional_columns:
+                    row.pop(name, None)
                 get_db().table("clv_obligations").upsert(row, on_conflict="candidate_id").execute()
             else:
                 raise

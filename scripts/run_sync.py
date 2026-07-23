@@ -202,6 +202,18 @@ async def run_ml_phase() -> dict[str, int]:
         traceback.print_exc()
         raise
 
+    # Settlement must precede Guardian and every new placement decision.
+    from backend.trading.autobet import update_closing_prices, resolve_autobets
+    clv_updated = await update_closing_prices()
+    print(f"  clv updated={clv_updated} open bets")
+
+    ab_resolved = resolve_autobets()
+    print(f"  autobets resolved={ab_resolved}")
+
+    from backend.trading.weather_settlement import resolve_weather_autobets
+    w_resolved = await resolve_weather_autobets()
+    print(f"  weather bets resolved={w_resolved}")
+
     print("Running Polymarket autobet...")
     autobet_summary: dict = {}
     try:
@@ -231,18 +243,6 @@ async def run_ml_phase() -> dict[str, int]:
         print(f"  Autobet/Guardian failed: {exc}")
         traceback.print_exc()
         raise
-
-    # CLV closing prices + settlement are required (fail CI)
-    from backend.trading.autobet import update_closing_prices, resolve_autobets
-    clv_updated = await update_closing_prices()
-    print(f"  clv updated={clv_updated} open bets")
-
-    ab_resolved = resolve_autobets()
-    print(f"  autobets resolved={ab_resolved}")
-
-    from backend.trading.weather_settlement import resolve_weather_autobets
-    w_resolved = await resolve_weather_autobets()
-    print(f"  weather bets resolved={w_resolved}")
 
     from backend.ml.weather_verification import backfill_actuals
     wv_backfilled = backfill_actuals()

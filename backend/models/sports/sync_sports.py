@@ -269,6 +269,22 @@ def sync_sports_market(
     )
     clv_meta = {
         "event_id": features.event_id,
+        "event_start": features.start_time.isoformat(),
+        "model_prob": float(prediction.model_prob),
+        "market_prob": (
+            float(prediction.market_prob)
+            if prediction.market_prob is not None
+            else None
+        ),
+        "selected_team": (features.sport_specific or {}).get("selected_team"),
+        "home_team": features.team_a,
+        "away_team": features.team_b,
+        "match_id": (features.sport_specific or {}).get("match_id"),
+        "game_pk": (features.sport_specific or {}).get("game_pk"),
+        "model_type": prediction.model_type,
+        "model_version": prediction.model_version,
+        "coefficient_source": prediction.coefficient_source,
+        "calibration_status": prediction.calibration_status,
         "mode": mode,
         "platform": market_data.get("platform") or "unknown",
         "stake": stake,
@@ -282,7 +298,6 @@ def sync_sports_market(
             (features.sport_specific or {}).get("exclude_from_clv_eval")
         ),
         "slate_date": (features.sport_specific or {}).get("slate_date"),
-        "game_pk": (features.sport_specific or {}).get("game_pk"),
     }
     clv_record = init_clv_record(
         trade_id=f"sports_{features.event_id}_{int(datetime.now(timezone.utc).timestamp())}",

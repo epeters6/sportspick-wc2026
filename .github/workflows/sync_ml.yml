@@ -56,7 +56,10 @@ jobs:
 
       - name: Run ML-only sync
         run: python scripts/run_sync.py --ml-only
-        
+
+      - name: Settle prior sports shadow positions
+        run: python scripts/settle_sports_shadow.py --once
+
       - name: Run Sports Shadow Validation
         run: python scripts/run_sports_shadow_validation.py
 
@@ -78,4 +81,3 @@ jobs:
             orderbook_snapshots.jsonl
             sync_status.json
             reports/sports_shadow/*.json
-

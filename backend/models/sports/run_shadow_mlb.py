@@ -932,13 +932,18 @@ async def run_mlb_moneyline_shadow(
                 "market_type": "moneyline",
                 "strategy": "mlb_moneyline",
                 "model_type": MODEL_TYPE,
+                "match_id": game.get("match_id"),
+                "external_id": game.get("external_id"),
+                "game_pk": probs.get("game_pk") or game_pk,
+                "scheduled_start_utc": game.get("scheduled_start_utc"),
+                "home_team": home,
+                "away_team": away,
                 "selected_team": best["selected_team"],
                 "contract_side": best["side"],
                 "model_prob_override": best["model_prob"],
                 "outcome_token_id": best["token_id"],
                 "yes_proposition_team": best.get("yes_team"),
                 "slate_date": slate_date,
-                "game_pk": probs.get("game_pk") or game_pk,
                 **{
                     k: meta[k]
                     for k in (

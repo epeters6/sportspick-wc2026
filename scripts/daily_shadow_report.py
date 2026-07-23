@@ -1,18 +1,13 @@
-"""
-Daily shadow-betting results report → Discord.
-
-Summarizes the past 24h of settled autobets (paper AND live) per domain
-(MLB / World Cup football / weather), plus cumulative track record and the
-live-promotion gate status, and posts one Discord embed.
-
-Runs daily from GitHub Actions (see .github/workflows/daily_report.yml).
-"""
+"""Previous-ET-day settlement integrity report for Discord."""
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,191 +16,309 @@ from loguru import logger
 
 from backend.config import get_settings
 from backend.db import get_db
+from backend.trading.autobet_learning import (
+    assess_live_readiness,
+    settlement_integrity_datasets,
+)
 
-DOMAIN_LABELS = {
-    "mlb": "⚾ MLB",
-    "football": "⚽ World Cup",
-    "weather": "🌡️ Weather",
-    "other": "🎲 Other",
+REPORT_TZ = ZoneInfo("America/New_York")
+
+STRATEGY_LABELS = {
+    "legacy_consensus_mlb": "Legacy MLB — verified only",
+    "phase4_mlb_moneyline": "Phase 4 MLB moneyline — exact shadow outcomes",
+    "weather_high": "Weather high — verified only",
+    "weather_low": "Weather low — verified only",
+    "legacy_consensus_football": "Football — verified only",
 }
 
 
-def _domain(sport: str | None) -> str:
-    s = (sport or "").lower()
-    if "mlb" in s or "baseball" in s:
-        return "mlb"
-    if "football" in s or "soccer" in s:
-        return "football"
-    if "weather" in s:
-        return "weather"
-    return "other"
+def previous_local_day(now_utc: datetime) -> tuple[date, datetime, datetime]:
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    local_now = now_utc.astimezone(REPORT_TZ)
+    report_date = local_now.date() - timedelta(days=1)
+    start_local = datetime.combine(report_date, time.min, tzinfo=REPORT_TZ)
+    end_local = start_local + timedelta(days=1)
+    return (
+        report_date,
+        start_local.astimezone(timezone.utc),
+        end_local.astimezone(timezone.utc),
+    )
 
 
-def _agg(rows: list[dict]) -> dict[str, Any]:
-    wins = sum(1 for r in rows if r.get("status") == "won")
-    staked = sum(float(r.get("stake") or 0.0) for r in rows)
-    pnl = sum(float(r.get("pnl") or 0.0) for r in rows)
-    clv_vals = [float(r["clv"]) for r in rows if r.get("clv") is not None]
+def _strategy(row: dict) -> str:
+    if row.get("strategy"):
+        return str(row["strategy"])
+    sport = str(row.get("sport") or "").lower()
+    metadata = row.get("metadata") or {}
+    if sport == "weather":
+        metric = metadata.get("metric", "high") if isinstance(metadata, dict) else "high"
+        return f"weather_{metric}"
+    if "mlb" in sport or "baseball" in sport:
+        return "legacy_consensus_mlb"
+    if "football" in sport or "soccer" in sport:
+        return "legacy_consensus_football"
+    return "legacy_other"
+
+
+def _event_date(row: dict) -> str | None:
+    value = row.get("event_date")
+    return value.isoformat() if isinstance(value, date) else str(value)[:10] if value else None
+
+
+def _agg(rows: list[dict], *, excluded: int = 0) -> dict[str, Any]:
+    wins = sum(1 for row in rows if row.get("status") == "won")
+    losses = sum(1 for row in rows if row.get("status") == "lost")
+    staked = sum(float(row.get("stake") or 0.0) for row in rows)
+    pnl = sum(float(row.get("pnl") or 0.0) for row in rows)
     return {
-        "n": len(rows),
+        "verified": len(rows),
+        "excluded": excluded,
         "wins": wins,
-        "losses": len(rows) - wins,
+        "losses": losses,
         "staked": staked,
         "pnl": pnl,
-        "roi_pct": (pnl / staked * 100.0) if staked > 0 else 0.0,
-        "avg_clv": (sum(clv_vals) / len(clv_vals)) if clv_vals else None,
+        "roi_pct": pnl / staked * 100.0 if staked else None,
     }
 
 
-def _fmt_line(label: str, a: dict[str, Any]) -> str:
-    if a["n"] == 0:
-        return f"{label}: no settled bets"
-    clv = f" · CLV `{a['avg_clv']:+.3f}`" if a["avg_clv"] is not None else ""
+def _fmt_line(label: str, aggregate: dict[str, Any], *, phase: str) -> str:
+    roi = (
+        f"{aggregate['roi_pct']:+.1f}%"
+        if aggregate["roi_pct"] is not None
+        else "n/a"
+    )
     return (
-        f"{label}: **{a['wins']}-{a['losses']}** · "
-        f"P&L `${a['pnl']:+.2f}` · ROI `{a['roi_pct']:+.1f}%`{clv}"
+        f"**{label}** ({phase})\n"
+        f"{aggregate['wins']}-{aggregate['losses']} · "
+        f"verified `{aggregate['verified']}` · excluded `{aggregate['excluded']}` · "
+        f"risked `${aggregate['staked']:.2f}` · "
+        f"P&L `${aggregate['pnl']:+.2f}` · ROI `{roi}`"
     )
 
 
-def build_report() -> dict[str, Any]:
-    db = get_db()
-    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-
-    settled_24h = (
-        db.table("autobets")
-        .select("sport, mode, status, stake, pnl, clv, resolved_at")
-        .in_("status", ["won", "lost"])
-        .gte("resolved_at", since)
-        .execute()
-        .data or []
-    )
-    all_settled = (
-        db.table("autobets")
-        .select("sport, mode, status, stake, pnl, clv")
-        .in_("status", ["won", "lost"])
-        .execute()
-        .data or []
-    )
-    open_bets = (
-        db.table("autobets")
-        .select("id, mode")
-        .eq("status", "open")
-        .execute()
-        .data or []
-    )
-
-    by_domain_24h: dict[str, list[dict]] = {}
-    for r in settled_24h:
-        by_domain_24h.setdefault(_domain(r.get("sport")), []).append(r)
-
-    live_24h = [r for r in settled_24h if (r.get("mode") or "paper") == "live"]
-
-    # Promotion gate + guardian status
-    readiness: dict[str, Any] = {}
+def _fetch_phase4_rows(
+    db,
+    start_utc: datetime,
+    end_utc: datetime,
+) -> list[dict]:
     try:
-        from backend.trading.autobet_learning import assess_live_readiness
-        readiness = assess_live_readiness(db)
+        rows = (
+            db.table("clv_obligations")
+            .select(
+                "candidate_id, event_start, settlement_status, settlement_result, "
+                "settlement_pnl, stake, model_prob, market_prob, settlement_source"
+            )
+            .in_("settlement_status", ["won", "lost"])
+            .gte("event_start", start_utc.isoformat())
+            .lt("event_start", end_utc.isoformat())
+            .execute()
+            .data
+            or []
+        )
     except Exception as exc:
-        logger.warning(f"Readiness check failed: {exc}")
+        logger.warning("Phase 4 outcome fetch failed: {}", exc)
+        return []
+    return [
+        {
+            **row,
+            "status": row.get("settlement_status"),
+            "pnl": row.get("settlement_pnl"),
+            "strategy": "phase4_mlb_moneyline",
+        }
+        for row in rows
+    ]
 
-    # Refresh guardian state — the committed halt file is stale on fresh CI checkouts.
-    guardian = {"halted": False, "reasons": []}
+
+def build_report(
+    *,
+    now_utc: datetime | None = None,
+    db=None,
+    refresh_guardian: bool = True,
+) -> dict[str, Any]:
+    now_utc = now_utc or datetime.now(timezone.utc)
+    report_date, start_utc, end_utc = previous_local_day(now_utc)
+    db = db or get_db()
+    datasets = settlement_integrity_datasets(db)
+    verified = [
+        row
+        for row in datasets["verified_rows"]
+        if _event_date(row) == report_date.isoformat()
+    ]
+    excluded = [
+        row
+        for row in datasets["invalid_rows"] + datasets["unverifiable_rows"]
+        if _event_date(row) == report_date.isoformat()
+    ]
+
+    by_strategy: dict[str, list[dict]] = {
+        name: [] for name in STRATEGY_LABELS
+    }
+    for row in verified:
+        strategy = _strategy(row)
+        if strategy in by_strategy:
+            by_strategy[strategy].append(row)
+    by_strategy["phase4_mlb_moneyline"] = _fetch_phase4_rows(
+        db, start_utc, end_utc
+    )
+
+    excluded_by_strategy: dict[str, int] = {
+        name: 0 for name in STRATEGY_LABELS
+    }
+    exclusion_reasons: dict[str, int] = {}
+    for row in excluded:
+        strategy = _strategy(row)
+        if strategy in excluded_by_strategy:
+            excluded_by_strategy[strategy] += 1
+        reason = str(row.get("_integrity_reason") or "UNKNOWN")
+        exclusion_reasons[reason] = exclusion_reasons.get(reason, 0) + 1
+
     try:
-        from scripts.guardian_health import check_health
-        check_health()
-    except Exception as exc:
-        logger.warning(f"Guardian refresh failed: {exc}")
-    halt_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".guardian_halt.json")
-    try:
-        import json
-        with open(halt_file) as f:
-            guardian = json.load(f)
+        open_count = len(
+            db.table("autobets")
+            .select("id")
+            .eq("status", "open")
+            .execute()
+            .data
+            or []
+        )
     except Exception:
-        pass
+        open_count = 0
+
+    guardian = {"halted": True, "reasons": ["GUARDIAN_STATUS_UNAVAILABLE"]}
+    if refresh_guardian:
+        try:
+            from scripts.guardian_health import check_health
+
+            guardian = check_health(emit=False)
+        except Exception as exc:
+            logger.warning("Guardian refresh failed: {}", exc)
+
+    try:
+        from backend.trading.live_toggle import is_live_mode
+
+        live_enabled = bool(is_live_mode())
+    except Exception:
+        live_enabled = False
 
     return {
-        "settled_24h": settled_24h,
-        "by_domain_24h": by_domain_24h,
-        "live_24h": live_24h,
-        "all_settled": all_settled,
-        "open_count": len(open_bets),
-        "readiness": readiness,
+        "report_date": report_date,
+        "window_start_utc": start_utc,
+        "window_end_utc": end_utc,
+        "by_strategy": by_strategy,
+        "excluded_by_strategy": excluded_by_strategy,
+        "integrity_excluded_count": len(excluded),
+        "integrity_exclusion_reasons": exclusion_reasons,
+        "open_count": open_count,
         "guardian": guardian,
+        "live_enabled": live_enabled,
+        "readiness": assess_live_readiness(db),
     }
 
 
 def build_embed(report: dict[str, Any]) -> dict[str, Any]:
-    day_agg = _agg(report["settled_24h"])
-    cum_agg = _agg(report["all_settled"])
-    readiness = report["readiness"]
-    guardian = report["guardian"]
-
-    lines = [_fmt_line("**Yesterday (all domains)**", day_agg), ""]
-    for key in ("mlb", "football", "weather", "other"):
-        rows = report["by_domain_24h"].get(key)
-        if rows:
-            lines.append(_fmt_line(DOMAIN_LABELS[key], _agg(rows)))
-    if report["live_24h"]:
+    report_date = report["report_date"]
+    start_utc = report["window_start_utc"]
+    end_utc = report["window_end_utc"]
+    lines = [
+        f"Report date: **{report_date.isoformat()} ET**",
+        (
+            f"Window: `{start_utc.isoformat()}` to `{end_utc.isoformat()}` "
+            "(previous ET calendar/event day)"
+        ),
+        "",
+    ]
+    for strategy in (
+        "legacy_consensus_mlb",
+        "phase4_mlb_moneyline",
+        "weather_high",
+        "weather_low",
+        "legacy_consensus_football",
+    ):
+        phase = "Phase 4" if strategy == "phase4_mlb_moneyline" else "legacy"
+        lines.append(
+            _fmt_line(
+                STRATEGY_LABELS[strategy],
+                _agg(
+                    report["by_strategy"].get(strategy, []),
+                    excluded=report["excluded_by_strategy"].get(strategy, 0),
+                ),
+                phase=phase,
+            )
+        )
         lines.append("")
-        lines.append(_fmt_line("💸 **LIVE bets**", _agg(report["live_24h"])))
 
-    lines.append("")
-    lines.append(_fmt_line("📈 **Cumulative (shadow track record)**", cum_agg))
-    lines.append(f"Open positions: **{report['open_count']}**")
+    reasons = report.get("integrity_exclusion_reasons") or {}
+    reason_text = ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())) or "none"
+    lines.extend(
+        [
+            f"Integrity exclusions: **{report['integrity_excluded_count']}** ({reason_text})",
+            f"Open positions: **{report['open_count']}**",
+            "Guardian status: **HALTED**"
+            if report["guardian"].get("halted")
+            else "Guardian status: **clear**",
+            "Live trading status: **ON**"
+            if report["live_enabled"]
+            else "Live trading status: **OFF**",
+            "",
+            "Legacy readiness calculation only: "
+            + report["readiness"].get("message", "unavailable"),
+            "Phase 4 live remains blocked until sports validation gates pass.",
+        ]
+    )
+    if report["guardian"].get("reasons"):
+        lines.append(
+            "Guardian reasons: " + "; ".join(report["guardian"].get("reasons") or [])
+        )
 
-    # Promotion gate
-    if readiness:
-        if readiness.get("live_ready"):
-            gate = "🟢 **READY FOR LIVE** — shadow record has proven effective."
-            try:
-                from backend.trading.live_toggle import is_live_mode
-                live_now = is_live_mode()
-            except Exception:
-                live_now = False
-            if not live_now:
-                gate += " Flip the Go Live toggle on the dashboard to start."
-        else:
-            gate = f"🟡 Shadow validation in progress — {readiness.get('message', '')}"
-        lines.append("")
-        lines.append(gate)
-
-    if guardian.get("halted"):
-        lines.append("🔴 **GUARDIAN HALT ACTIVE**: " + "; ".join(guardian.get("reasons") or ["unknown"]))
-
-    day_pnl = day_agg["pnl"]
-    color = 0x2ECC71 if day_pnl > 0 else (0xE74C3C if day_pnl < 0 else 0x95A5A6)
-
+    total_pnl = sum(
+        _agg(rows)["pnl"] for rows in report["by_strategy"].values()
+    )
+    color = 0x2ECC71 if total_pnl > 0 else 0xE74C3C if total_pnl < 0 else 0x95A5A6
     return {
-        "title": "📊 Daily Shadow Betting Report",
+        "title": "Daily Settlement Integrity Report",
         "description": "\n".join(lines),
         "color": color,
-        "footer": {"text": "SportsPick Quant • paper results until promotion gate passes"},
+        "footer": {
+            "text": "Legacy and Phase 4 results are intentionally separated"
+        },
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
-def send_report() -> bool:
-    settings = get_settings()
-    webhook_url = settings.discord_webhook_url
-    report = build_report()
-    embed = build_embed(report)
+def send_report(*, print_only: bool = False) -> bool:
+    embed = build_embed(build_report())
+    if print_only:
+        print(json.dumps(embed, indent=2))
+        return True
 
+    webhook_url = get_settings().discord_webhook_url
     if not webhook_url:
         logger.warning("DISCORD_WEBHOOK_URL not set — printing report instead")
-        print(embed["description"])
+        print(json.dumps(embed, indent=2))
         return False
-
-    payload = {
-        "username": "SportsPick Daily Report",
-        "embeds": [embed],
-    }
-    resp = httpx.post(webhook_url, json=payload, timeout=15)
-    if resp.status_code in (200, 204):
-        logger.info("Daily shadow report sent to Discord")
+    response = httpx.post(
+        webhook_url,
+        json={"username": "SportsPick Daily Report", "embeds": [embed]},
+        timeout=15,
+    )
+    if response.status_code in (200, 204):
+        logger.info("Daily settlement integrity report sent to Discord")
         return True
-    logger.error(f"Discord webhook returned {resp.status_code}: {resp.text[:200]}")
+    logger.error(
+        "Discord webhook returned {}: {}",
+        response.status_code,
+        response.text[:200],
+    )
     return False
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--print-only", action="store_true")
+    args = parser.parse_args(argv)
+    return 0 if send_report(print_only=args.print_only) else 1
+
+
 if __name__ == "__main__":
-    send_report()
+    raise SystemExit(main())

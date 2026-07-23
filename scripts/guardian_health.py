@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -12,7 +12,47 @@ logger = logging.getLogger(__name__)
 
 HALT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".guardian_halt.json")
 
-def check_health():
+
+def settlement_risk_summary(rows: list[dict]) -> tuple[dict[str, float], float, bool]:
+    """Conservative realized P&L plus the MLB identity-integrity signal."""
+    from backend.trading.settlement_integrity import (
+        SettlementCheck,
+        conservative_risk_pnl,
+        verify_match_linked_autobet,
+    )
+
+    by_sport: dict[str, float] = {}
+    total_pnl = 0.0
+    mlb_integrity_failed = False
+    for row in rows:
+        sport = (row.get("sport") or "unknown").split("_")[0]
+        match = row.get("matches")
+        if isinstance(match, list):
+            match = match[0] if len(match) == 1 else None
+        if isinstance(match, dict):
+            check = verify_match_linked_autobet(row, match)
+        else:
+            check = SettlementCheck(
+                False,
+                "SETTLEMENT_EVIDENCE_UNAVAILABLE",
+                None,
+                None,
+                None,
+                None,
+            )
+        if (
+            row.get("match_id")
+            and ("mlb" in sport.lower() or "baseball" in sport.lower())
+            and not check.valid
+        ):
+            mlb_integrity_failed = True
+        pnl = conservative_risk_pnl(row, check)
+        by_sport[sport] = by_sport.get(sport, 0.0) + pnl
+        total_pnl += pnl
+    return by_sport, total_pnl, mlb_integrity_failed
+
+
+def check_health(*, emit: bool = True):
     db = get_db()
     s = get_settings()
     
@@ -122,20 +162,26 @@ def check_health():
         seven_days_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
         settled = (
             db.table("autobets")
-            .select("sport, pnl, status, mode")
+            .select(
+                "id, match_id, sport, outcome_name, bet_type, bet_line, bet_subject, "
+                "status, pnl, stake, shares, market_price, resolved_at, "
+                "settlement_version, settlement_match_id, settlement_corrected_at, "
+                "matches:matches!autobets_match_id_fkey("
+                "id, sport, external_id, home_team, away_team, scheduled_at, "
+                "finished_at, winner, is_final, home_score, away_score, match_stats)"
+            )
             .gte("resolved_at", seven_days_ago)
             .in_("status", ["won", "lost"])
             .execute()
             .data
             or []
         )
-        by_sport: dict[str, float] = {}
-        total_pnl = 0.0
-        for row in settled:
-            pnl = float(row.get("pnl") or 0.0)
-            sport = (row.get("sport") or "unknown").split("_")[0]
-            by_sport[sport] = by_sport.get(sport, 0.0) + pnl
-            total_pnl += pnl
+        by_sport, total_pnl, mlb_integrity_failed = settlement_risk_summary(
+            settled
+        )
+
+        if mlb_integrity_failed:
+            halt_reasons.append("SETTLEMENT_INTEGRITY_HALT [mlb]")
 
         if bankroll > 0:
             for sport, pnl in by_sport.items():
@@ -201,7 +247,7 @@ def check_health():
         logger.error(f"Guardian durable write failed (required): {exc}")
         raise
 
-    if state["halted"]:
+    if emit and state["halted"]:
         print(f"⚠️ GUARDIAN HALT TRIGGERED:")
         for r in state["reasons"]:
             print(f"  - {r}")
@@ -209,8 +255,11 @@ def check_health():
             "\nRESUMPTION RULE: Halt persists across runners. "
             "Requires explicit audited resume after hard stop."
         )
-    else:
+    elif emit:
         print("✅ Guardian Health Check Passed.")
+
+    return state
+
 
 if __name__ == "__main__":
     check_health()

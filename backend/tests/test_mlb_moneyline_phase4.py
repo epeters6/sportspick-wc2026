@@ -454,6 +454,9 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
             {
                 "home_team": "New York Yankees",
                 "away_team": "Los Angeles Dodgers",
+                "match_id": "match-phase4-123",
+                "external_id": "mlb_123",
+                "game_pk": 123,
                 "slate_date": future.strftime("%Y-%m-%d"),
                 "scheduled_start_utc": future.isoformat(),
             }
@@ -465,9 +468,9 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
         )
         router = self._router(poly_markets=[poly_mkt])
 
-        with isolate_clv_db(), patch(
+        with isolate_clv_db() as clv_upsert, patch(
             "backend.models.sports.run_shadow_mlb.get_mlb_quant_probability",
-            return_value={"home_prob": 0.61, "away_prob": 0.39},
+            return_value={"home_prob": 0.61, "away_prob": 0.39, "game_pk": 123},
         ), patch(
             "backend.models.sports.run_shadow_mlb._resolve_event_times",
             return_value=(datetime.now(timezone.utc), future),
@@ -480,6 +483,12 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
         self.assertEqual(result["strategy"], "mlb_moneyline")
         self.assertGreaterEqual(result["slate_size"], 1)
         self.assertNotIn(PREGAME_MODEL_UNAVAILABLE, str(result))
+        self.assertTrue(clv_upsert.called)
+        metadata = clv_upsert.call_args.kwargs["metadata"]
+        self.assertEqual(metadata["match_id"], "match-phase4-123")
+        self.assertEqual(metadata["game_pk"], 123)
+        self.assertEqual(metadata["selected_team"], "New York Yankees")
+        self.assertAlmostEqual(metadata["model_prob"], 0.61)
 
     def test_selects_highest_positive_net_edge_not_cheapest_underdog(self):
         """Cheap underdog with worse/negative edge must not beat favorite."""

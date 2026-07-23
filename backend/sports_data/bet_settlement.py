@@ -117,12 +117,18 @@ def grade_pick(
         actual = match.get("winner")
         if actual is None:
             return None
-        if bt == "draw" or pw == "draw":
-            return "correct" if actual == "draw" else "incorrect"
         pw_c = _canonical(pw) or pw
         act_c = _canonical(actual) or actual
         home_c = _canonical(home_team) or home_team
         away_c = _canonical(away_team) or away_team
+        sport = str(match.get("sport") or "").lower()
+        valid_winners = {home_c, away_c}
+        if "mlb" not in sport and "baseball" not in sport:
+            valid_winners.add("draw")
+        if act_c not in valid_winners:
+            return None
+        if bt == "draw" or pw_c == "draw":
+            return "correct" if act_c == "draw" else "incorrect"
         if pw_c == act_c or pw == actual:
             return "correct"
         if pw_c == home_c and act_c == home_c:

@@ -7,6 +7,7 @@ market). Settled bets tighten/relax gates and gate live-mode promotion.
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +18,14 @@ def _binom_cdf(k: int, n: int, p: float) -> float:
 
 from backend.config import get_settings
 from backend.db import get_db
+from backend.trading.settlement_integrity import (
+    EXACT_MATCH_NOT_FINAL,
+    SETTLEMENT_DATA_INCOMPLETE,
+    SettlementCheck,
+    conservative_risk_pnl,
+    expected_autobet_pnl,
+    verify_match_linked_autobet,
+)
 
 PRICE_TIERS: list[tuple[float, float, str]] = [
     (0.0, 0.15, "longshot"),
@@ -47,11 +56,15 @@ UPSET_CONF_MIN = 0.65
 UPSET_MARKET_MAX = 0.20
 
 _SETTLED_CACHE: list[dict] | None = None
+_INVALID_CACHE: list[dict] = []
+_UNVERIFIABLE_CACHE: list[dict] = []
 
 
 def invalidate_learning_cache() -> None:
-    global _SETTLED_CACHE
+    global _SETTLED_CACHE, _INVALID_CACHE, _UNVERIFIABLE_CACHE
     _SETTLED_CACHE = None
+    _INVALID_CACHE = []
+    _UNVERIFIABLE_CACHE = []
 
 
 def price_tier(market_price: float) -> str:
@@ -88,19 +101,26 @@ def _finalize_agg(b: dict[str, Any]) -> None:
 
 
 def _fetch_settled_autobets(db=None, *, use_cache: bool = True) -> list[dict]:
-    global _SETTLED_CACHE
+    global _SETTLED_CACHE, _INVALID_CACHE, _UNVERIFIABLE_CACHE
     if use_cache and _SETTLED_CACHE is not None:
         return _SETTLED_CACHE
 
     db = db or get_db()
     base_cols = (
         "id, status, stake, pnl, market_price, edge, model_prob, clv, "
-        "resolved_at, created_at, mode, match_id, matches(sport)"
+        "resolved_at, created_at, mode, match_id, "
+        "matches:matches!autobets_match_id_fkey(sport)"
     )
-    extended_cols = base_cols.replace(
-        "model_prob, ",
-        "model_prob, raw_confidence, sport, ",
+    extended_cols = (
+        "id, status, stake, pnl, outcome_name, bet_type, bet_line, bet_subject, "
+        "shares, market_price, edge, model_prob, raw_confidence, clv, metadata, "
+        "sport, strategy, event_date, settlement_version, settlement_match_id, "
+        "settlement_corrected_at, resolved_at, created_at, mode, match_id, "
+        "matches:matches!autobets_match_id_fkey("
+        "id, sport, external_id, home_team, away_team, scheduled_at, "
+        "winner, is_final, home_score, away_score, match_stats)"
     )
+    schema_complete = False
     for cols in (extended_cols, base_cols):
         try:
             rows = (
@@ -111,6 +131,7 @@ def _fetch_settled_autobets(db=None, *, use_cache: bool = True) -> list[dict]:
                 .execute()
                 .data or []
             )
+            schema_complete = cols == extended_cols
             break
         except Exception as exc:
             if cols == base_cols:
@@ -123,10 +144,113 @@ def _fetch_settled_autobets(db=None, *, use_cache: bool = True) -> list[dict]:
 
     for r in rows:
         if not r.get("sport") and r.get("matches"):
-            r["sport"] = r["matches"].get("sport") or "football"
+            match = r["matches"]
+            if isinstance(match, list):
+                match = match[0] if len(match) == 1 else None
+            if isinstance(match, dict):
+                r["sport"] = match.get("sport") or "football"
+
+    verified_rows: list[dict] = []
+    invalid_rows: list[dict] = []
+    unverifiable_rows: list[dict] = []
+    for row in rows:
+        row = dict(row)
+        match = row.get("matches")
+        if isinstance(match, list):
+            match = match[0] if len(match) == 1 else None
+        if isinstance(match, dict):
+            row["matches"] = match
+            check = verify_match_linked_autobet(row, match)
+            row["_settlement_check"] = check
+            if check.valid:
+                row["pnl"] = check.expected_pnl
+                verified_rows.append(row)
+            elif check.reason in (EXACT_MATCH_NOT_FINAL, SETTLEMENT_DATA_INCOMPLETE):
+                row["_integrity_reason"] = check.reason
+                unverifiable_rows.append(row)
+            else:
+                row["_integrity_reason"] = check.reason
+                invalid_rows.append(row)
+            continue
+
+        sport = str(row.get("sport") or "").lower()
+        metadata = row.get("metadata") or {}
+        if isinstance(metadata, dict) and sport == "weather":
+            settlement = metadata.get("settlement") or {}
+            in_bucket = settlement.get("in_bucket")
+            if (
+                settlement.get("version") == "weather_actual_v2"
+                and isinstance(in_bucket, bool)
+            ):
+                backed_yes = str(row.get("outcome_name") or "yes").lower() == "yes"
+                won = in_bucket if backed_yes else not in_bucket
+                expected_status = "won" if won else "lost"
+                expected_pnl = expected_autobet_pnl(
+                    won=won,
+                    stake=float(row.get("stake") or 0.0),
+                    shares=float(row.get("shares") or 0.0),
+                    market_price=float(row.get("market_price") or 0.0),
+                )
+                if (
+                    row.get("status") == expected_status
+                    and row.get("pnl") is not None
+                    and abs(float(row["pnl"]) - expected_pnl) <= 0.0100001
+                ):
+                    row["pnl"] = expected_pnl
+                    verified_rows.append(row)
+                    continue
+                row["_integrity_reason"] = "WEATHER_SETTLEMENT_MISMATCH"
+                invalid_rows.append(row)
+                continue
+
+        row["_integrity_reason"] = (
+            "SETTLEMENT_SCHEMA_INCOMPLETE"
+            if not schema_complete
+            else "SETTLEMENT_EVIDENCE_UNAVAILABLE"
+        )
+        unverifiable_rows.append(row)
+
+    _INVALID_CACHE = invalid_rows
+    _UNVERIFIABLE_CACHE = unverifiable_rows
     if use_cache:
-        _SETTLED_CACHE = rows
+        _SETTLED_CACHE = verified_rows
+    return verified_rows
+
+
+def settlement_integrity_datasets(db=None) -> dict[str, list[dict]]:
+    """Return the three settlement populations used by learning and risk."""
+    verified = _fetch_settled_autobets(db, use_cache=db is None)
+    return {
+        "verified_rows": list(verified),
+        "invalid_rows": list(_INVALID_CACHE),
+        "unverifiable_rows": list(_UNVERIFIABLE_CACHE),
+    }
+
+
+def _conservative_settled_rows(db=None) -> list[dict]:
+    datasets = settlement_integrity_datasets(db)
+    rows = list(datasets["verified_rows"])
+    for row in datasets["invalid_rows"] + datasets["unverifiable_rows"]:
+        check = row.get("_settlement_check")
+        if not isinstance(check, SettlementCheck):
+            check = SettlementCheck(False, row.get("_integrity_reason"), None, None, None, None)
+        conservative = dict(row)
+        conservative["pnl"] = conservative_risk_pnl(row, check)
+        rows.append(conservative)
     return rows
+
+
+def _integrity_exclusions_for(sport: str | None = None) -> list[dict]:
+    excluded = list(_INVALID_CACHE) + list(_UNVERIFIABLE_CACHE)
+    if not sport:
+        return excluded
+    needle = sport.lower()
+    return [
+        row
+        for row in excluded
+        if needle in str(row.get("sport") or "").lower()
+        or needle in str(row.get("strategy") or "").lower()
+    ]
 
 
 def compute_tier_stats(db=None) -> dict[str, dict[str, Any]]:
@@ -289,7 +413,7 @@ def bankroll_curve(db=None) -> list[dict[str, Any]]:
     return curve
 
 
-def assess_live_readiness(db=None) -> dict[str, Any]:
+def _assess_live_readiness_unverified_legacy(db=None) -> dict[str, Any]:
     """Live mode requires enough settled paper bets with positive ROI."""
     s = get_settings()
     rows = _fetch_settled_autobets(db)
@@ -325,6 +449,107 @@ def assess_live_readiness(db=None) -> dict[str, Any]:
         "min_roi_required_pct": min_roi,
         "total_pnl": round(total_pnl, 2),
         "message": "Ready for live consideration" if ready else "; ".join(reasons),
+    }
+
+
+def assess_live_readiness(db=None) -> dict[str, Any]:
+    """Legacy readiness, scoped to verified MLB settlements only."""
+    s = get_settings()
+    datasets = settlement_integrity_datasets(db)
+    verified_rows = datasets["verified_rows"]
+    excluded_rows = datasets["invalid_rows"] + datasets["unverifiable_rows"]
+    paper_rows = [
+        r for r in verified_rows if (r.get("mode") or "paper") == "paper"
+    ]
+    paper_excluded = [
+        r for r in excluded_rows if (r.get("mode") or "paper") == "paper"
+    ]
+
+    def strategy_name(row: dict) -> str:
+        stored = row.get("strategy")
+        if stored:
+            return str(stored)
+        sport = str(row.get("sport") or "").lower()
+        if sport == "weather":
+            metadata = row.get("metadata") or {}
+            metric = metadata.get("metric", "high") if isinstance(metadata, dict) else "high"
+            return f"weather_{metric}"
+        if "mlb" in sport or "baseball" in sport:
+            return "legacy_consensus_mlb"
+        if "football" in sport or "soccer" in sport:
+            return "legacy_consensus_football"
+        return "legacy_other"
+
+    tracked_strategies = (
+        "legacy_consensus_mlb",
+        "weather_high",
+        "weather_low",
+        "legacy_consensus_football",
+    )
+    by_strategy: dict[str, dict[str, Any]] = {}
+    for strategy in tracked_strategies:
+        strategy_rows = [r for r in paper_rows if strategy_name(r) == strategy]
+        staked = sum(float(r.get("stake") or 0.0) for r in strategy_rows)
+        pnl = sum(float(r.get("pnl") or 0.0) for r in strategy_rows)
+        excluded = sum(1 for r in paper_excluded if strategy_name(r) == strategy)
+        by_strategy[strategy] = {
+            "verified_settled_bets": len(strategy_rows),
+            "integrity_excluded_count": excluded,
+            "total_staked": round(staked, 2),
+            "total_pnl": round(pnl, 2),
+            "roi_pct": round(pnl / staked * 100.0, 2) if staked else 0.0,
+        }
+
+    core_rows = [
+        r
+        for r in paper_rows
+        if strategy_name(r) == "legacy_consensus_mlb"
+        and "longshot" not in str(r.get("sport") or "")
+        and "tail" not in str(r.get("sport") or "")
+    ]
+    settled = len(core_rows)
+    total_staked = sum(float(r.get("stake") or 0.0) for r in core_rows)
+    total_pnl = sum(float(r.get("pnl") or 0.0) for r in core_rows)
+    roi_pct = total_pnl / total_staked * 100.0 if total_staked else 0.0
+
+    min_n = s.polymarket_live_min_settled_bets
+    min_roi = s.polymarket_live_min_roi_pct
+    integrity_reasons = Counter(
+        str(r.get("_integrity_reason") or "UNKNOWN") for r in paper_excluded
+    )
+    integrity_excluded_count = len(paper_excluded)
+    ready = (
+        settled >= min_n
+        and roi_pct > min_roi
+        and integrity_excluded_count == 0
+    )
+    reasons: list[str] = []
+    if settled < min_n:
+        reasons.append(f"need {min_n - settled} more verified MLB bets ({settled}/{min_n})")
+    if roi_pct <= min_roi:
+        reasons.append(f"verified MLB ROI {roi_pct:.1f}% must exceed {min_roi:.1f}%")
+    if integrity_excluded_count:
+        reasons.append(
+            f"{integrity_excluded_count} settled rows excluded by integrity checks"
+        )
+
+    return {
+        "live_ready": ready,
+        "settled_bets": settled,
+        "verified_settled_bets": settled,
+        "integrity_excluded_count": integrity_excluded_count,
+        "integrity_exclusion_reasons": dict(integrity_reasons),
+        "min_settled_required": min_n,
+        "paper_roi_pct": round(roi_pct, 2),
+        "min_roi_required_pct": min_roi,
+        "total_pnl": round(total_pnl, 2),
+        "by_strategy": by_strategy,
+        "phase4_mlb_live_ready": False,
+        "phase4_mlb_note": (
+            "Phase 4 MLB uses dedicated shadow-validation gates and is not "
+            "promoted by legacy autobets ROI."
+        ),
+        "message": "Ready for legacy live consideration" if ready else "; ".join(reasons),
     }
 
 
@@ -409,7 +634,8 @@ def gates_for_price(
     # checks so it cannot be bypassed by a tier that happens to look OK alone.
     live_bankroll = _get_live_bankroll()
     account_loss_7d_limit = live_bankroll * 0.12  # 12% of account in 7 days
-    all_settled = _fetch_settled_autobets()
+    all_settled = _conservative_settled_rows()
+    integrity_blocks_relaxation = bool(_integrity_exclusions_for(sport))
     from datetime import datetime, timezone, timedelta
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
     total_7d_loss = 0.0
@@ -444,7 +670,7 @@ def gates_for_price(
         )
     # ── End global breaker ──────────────────────────────────────────────────────
 
-    if paper and s.polymarket_paper_loose_gates:
+    if paper and s.polymarket_paper_loose_gates and not integrity_blocks_relaxation:
         min_edge = _PAPER_LOOSE_MIN_EDGE
         min_prob = _PAPER_LOOSE_MIN_PROB
         notes.append("paper loose gates")
@@ -518,7 +744,20 @@ def gates_for_price(
             # NOTE: polymarket_bankroll is a static config value by default;
             # we attempt to get the live balance from the Treasury Watchdog first.
             live_bankroll = _get_live_bankroll()
-            recent_7d_loss = -tier_stats.get("recent_7d_pnl", 0.0)
+            recent_tier_pnl = 0.0
+            for risk_row in all_settled:
+                if price_tier(risk_row.get("market_price") or 0.5) != tier:
+                    continue
+                risk_ts = risk_row.get("resolved_at") or risk_row.get("created_at")
+                try:
+                    risk_dt = datetime.fromisoformat(str(risk_ts).replace("Z", "+00:00"))
+                    if risk_dt.tzinfo is None:
+                        risk_dt = risk_dt.replace(tzinfo=timezone.utc)
+                    if risk_dt >= cutoff:
+                        recent_tier_pnl += float(risk_row.get("pnl") or 0.0)
+                except (TypeError, ValueError):
+                    recent_tier_pnl -= abs(float(risk_row.get("stake") or 0.0))
+            recent_7d_loss = -recent_tier_pnl
             max_allowed_loss = live_bankroll * 0.05
             
             if recent_7d_loss > max_allowed_loss:
@@ -539,7 +778,11 @@ def gates_for_price(
             min_prob = min(0.65, min_prob + 0.05)
             adjusted = True
             notes.append(f"{tier} penalty: {'; '.join(penalties)}")
-        elif roi_frac >= TIER_ROI_BONUS_THRESHOLD and settled_count >= MIN_TIER_SAMPLES * 2:
+        elif (
+            roi_frac >= TIER_ROI_BONUS_THRESHOLD
+            and settled_count >= MIN_TIER_SAMPLES * 2
+            and not integrity_blocks_relaxation
+        ):
             floor = get_settings().polymarket_paper_min_edge if paper else get_settings().polymarket_min_edge
             min_edge = max(min_edge - 0.005, floor)
             adjusted = True
@@ -563,7 +806,7 @@ def gates_for_price(
                 min_edge = min(0.12, min_edge + 0.01)
                 adjusted = True
                 notes.append(f"{sport} ROI {sport_stats['roi_pct']:.1f}%")
-        elif paper and sport == "mlb":
+        elif paper and sport == "mlb" and not integrity_blocks_relaxation:
             # No MLB paper track record yet — crowd picks often hug the market.
             min_edge = max(0.015, min_edge - 0.012)
             min_prob = max(0.20, min_prob - 0.05)

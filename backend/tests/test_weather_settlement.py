@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 from backend.trading.weather_settlement import (
     _actuals_ready_to_grade,
+    _apply_resolution,
     _city_and_metric_for_bet,
+    _grade_bet_against_actual,
     _target_date_for_bet,
 )
 
@@ -89,6 +92,41 @@ class TestWeatherSettlementReadiness(unittest.TestCase):
         bet = _bet(metadata={}, question="no date here", market_id="not-a-kalshi-ticker")
         now = datetime(2026, 7, 15, 12, 0, tzinfo=ZoneInfo("America/New_York"))
         self.assertFalse(_actuals_ready_to_grade(bet, now))
+
+    def test_actual_grade_and_resolution_store_temperature_provenance(self):
+        bet = _bet(stake=5.0, shares=10.0, market_price=0.5)
+        with patch(
+            "backend.ml.weather_verification.fetch_actual_extremes",
+            return_value={"high": 90.0, "low": 70.0},
+        ):
+            evidence = _grade_bet_against_actual(
+                bet,
+                datetime(2026, 7, 15, tzinfo=timezone.utc),
+            )
+        self.assertEqual(evidence["status"], "won")
+        self.assertEqual(evidence["actual_temp_f"], 90.0)
+        self.assertEqual(evidence["station"], "KNYC")
+        self.assertTrue(evidence["in_bucket"])
+
+        db = MagicMock()
+        db.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        now = datetime(2026, 7, 15, tzinfo=timezone.utc)
+        self.assertTrue(
+            _apply_resolution(
+                db,
+                bet,
+                evidence["status"],
+                evidence["pnl"],
+                now,
+                "graded vs observed temp",
+                settlement_evidence=evidence,
+            )
+        )
+        payload = db.table.return_value.update.call_args[0][0]
+        settlement = payload["metadata"]["settlement"]
+        self.assertEqual(settlement["version"], "weather_actual_v2")
+        self.assertEqual(settlement["source"], "station_actual")
+        self.assertEqual(settlement["actual_temp_f"], 90.0)
 
 
 if __name__ == "__main__":

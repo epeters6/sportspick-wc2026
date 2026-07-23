@@ -1,4 +1,5 @@
 import json
+import math
 import os
 from collections import defaultdict
 import statistics
@@ -31,7 +32,11 @@ def fetch_durable_clv_obligations(db=None) -> list[dict]:
                 "status_15m, status_1h, status_close, "
                 "obs_15m_price, obs_1h_price, obs_close_price, "
                 "obs_15m_ts, obs_1h_ts, obs_close_ts, "
-                "book_ts_15m, book_ts_1h, book_ts_close, metadata"
+                "book_ts_15m, book_ts_1h, book_ts_close, "
+                "event_id, event_start, model_prob, market_prob, selected_team, "
+                "home_team, away_team, match_id, game_pk, shares, stake, "
+                "settlement_status, settlement_result, settlement_pnl, settled_at, "
+                "settlement_source, metadata"
             )
             .execute()
             .data
@@ -113,6 +118,107 @@ def summarize_durable_clv(rows: list[dict]) -> dict[str, Any]:
         "clv_observed_1h_n": len(clv_1h_vals),
         "clv_source": "supabase_clv_obligations",
     }
+
+
+def _outcome_metrics(rows: list[dict]) -> dict[str, Any]:
+    observations: list[tuple[float, float, float]] = []
+    for row in rows:
+        if row.get("settlement_status") not in ("won", "lost"):
+            continue
+        if not isinstance(row.get("settlement_result"), bool):
+            continue
+        try:
+            model_p = float(row.get("model_prob"))
+            market_p = float(row.get("market_prob"))
+        except (TypeError, ValueError):
+            continue
+        if not (0.0 <= model_p <= 1.0 and 0.0 <= market_p <= 1.0):
+            continue
+        observations.append(
+            (model_p, market_p, 1.0 if row["settlement_result"] else 0.0)
+        )
+
+    n = len(observations)
+    if n == 0:
+        return {
+            "settled_model_n": 0,
+            "model_brier": None,
+            "market_brier": None,
+            "model_log_loss": None,
+            "market_log_loss": None,
+            "brier_delta_vs_market": None,
+            "log_loss_delta_vs_market": None,
+        }
+
+    def brier(index: int) -> float:
+        return sum((obs[index] - obs[2]) ** 2 for obs in observations) / n
+
+    def log_loss(index: int) -> float:
+        total = 0.0
+        for obs in observations:
+            probability = min(max(obs[index], 1e-6), 1.0 - 1e-6)
+            outcome = obs[2]
+            total += -(
+                outcome * math.log(probability)
+                + (1.0 - outcome) * math.log(1.0 - probability)
+            )
+        return total / n
+
+    model_brier = brier(0)
+    market_brier = brier(1)
+    model_log_loss = log_loss(0)
+    market_log_loss = log_loss(1)
+    return {
+        "settled_model_n": n,
+        "model_brier": model_brier,
+        "market_brier": market_brier,
+        "model_log_loss": model_log_loss,
+        "market_log_loss": market_log_loss,
+        "brier_delta_vs_market": model_brier - market_brier,
+        "log_loss_delta_vs_market": model_log_loss - market_log_loss,
+    }
+
+
+def summarize_settled_outcomes(rows: list[dict]) -> dict[str, Any]:
+    settled = [
+        row
+        for row in rows
+        if row.get("settlement_status") in ("won", "lost")
+    ]
+
+    def metadata_value(row: dict, key: str, default: str = "unknown") -> str:
+        metadata = row.get("metadata") or {}
+        value = metadata.get(key) if isinstance(metadata, dict) else None
+        return str(value or default)
+
+    def probability_bucket(row: dict) -> str:
+        try:
+            probability = float(row.get("model_prob"))
+        except (TypeError, ValueError):
+            return "unknown"
+        if probability < 0.40:
+            return "under_0.40"
+        if probability < 0.60:
+            return "0.40_to_0.60"
+        return "0.60_and_over"
+
+    groupers = {
+        "by_model_version": lambda row: metadata_value(row, "model_version"),
+        "by_platform": lambda row: str(row.get("platform") or "unknown"),
+        "by_probability_bucket": probability_bucket,
+        "by_selected_team": lambda row: str(row.get("selected_team") or "unknown"),
+        "by_side": lambda row: str(row.get("side") or "unknown"),
+    }
+    groups: dict[str, dict[str, Any]] = {}
+    for label, key_fn in groupers.items():
+        buckets: dict[str, list[dict]] = defaultdict(list)
+        for row in settled:
+            buckets[key_fn(row)].append(row)
+        groups[label] = {
+            key: _outcome_metrics(bucket_rows)
+            for key, bucket_rows in sorted(buckets.items())
+        }
+    return {**_outcome_metrics(settled), "settled_outcome_groups": groups}
 
 
 def run_analysis(
@@ -219,6 +325,7 @@ def run_analysis(
     if clv_obligations is None:
         clv_obligations = fetch_durable_clv_obligations(db=db)
     clv_summary = summarize_durable_clv(clv_obligations)
+    outcome_summary = summarize_settled_outcomes(clv_obligations)
     export_path = None
     if export_clv_path and clv_obligations:
         export_path = export_clv_obligations(clv_obligations, export_clv_path)
@@ -238,6 +345,7 @@ def run_analysis(
         "average_visible_depth": statistics.mean(visible_depths) if visible_depths else 0,
         "average_paper_fill_size": statistics.mean(paper_fill_sizes) if paper_fill_sizes else 0,
         **clv_summary,
+        **outcome_summary,
         "clv_export_path": export_path,
         "calibration_status_counts": dict(calibration_status_counts),
         "coefficient_source_counts": dict(coefficient_source_counts),

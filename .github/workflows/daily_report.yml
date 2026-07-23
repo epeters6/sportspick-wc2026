@@ -38,5 +38,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r scripts/requirements-worldcup.txt
 
+      - name: Check settlement integrity
+        run: python scripts/reconcile_autobet_settlements.py --dry-run --fail-on-mismatch
+
       - name: Send daily shadow report to Discord
         run: python scripts/daily_shadow_report.py

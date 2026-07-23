@@ -611,6 +611,8 @@ async def sync_weather_predictions():
                 "edge": P_adj[i] - q_i,
                 "raw_confidence": P_adj[i],
                 "sport": "weather",
+                "event_date": date_str,
+                "strategy": f"weather_{metric}",
                 # Effective fraction implied by the portfolio optimizer's sizing
                 "kelly_fraction": round(stake / bankroll, 4) if bankroll > 0 else 0.0,
                 "stake": stake,
@@ -646,7 +648,15 @@ async def sync_weather_predictions():
                 # Retry without optional columns when migrations are pending
                 msg = str(e)
                 slim = dict(record)
-                for col in ("metadata", "raw_confidence", "bet_type", "sport", "venue"):
+                for col in (
+                    "metadata",
+                    "raw_confidence",
+                    "bet_type",
+                    "sport",
+                    "venue",
+                    "event_date",
+                    "strategy",
+                ):
                     if col in msg or "PGRST204" in msg or "schema cache" in msg:
                         slim.pop(col, None)
                 try:

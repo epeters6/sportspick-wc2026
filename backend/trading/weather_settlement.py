@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from loguru import logger
 from backend.db import get_db
 from backend.trading.kalshi_client import KalshiClient
+from backend.trading.settlement_integrity import WEATHER_SETTLEMENT_VERSION
 
 import os
 import sys
@@ -57,7 +58,7 @@ def _kalshi_ticker_date(market_id: str) -> datetime | None:
 
 
 
-def _grade_bet_against_actual(bet: dict, market_date: datetime) -> tuple[str, float] | None:
+def _grade_bet_against_actual(bet: dict, market_date: datetime) -> dict | None:
     """Grade an unresolved weather bet against the observed station temperature.
 
     Returns (status, pnl) — ('won'|'lost', pnl) — or None if the actual
@@ -137,7 +138,17 @@ def _grade_bet_against_actual(bet: dict, market_date: datetime) -> tuple[str, fl
         f"Graded weather bet {bet['id'][:8]} vs actual {metric}={observed}°F "
         f"(bucket [{lo_v}, {hi_v}]) -> {'won' if won else 'lost'}"
     )
-    return ("won" if won else "lost", pnl)
+    return {
+        "status": "won" if won else "lost",
+        "pnl": pnl,
+        "actual_temp_f": float(observed),
+        "metric": metric,
+        "station": station,
+        "target_date": str(target_date)[:10],
+        "bucket_low_f": None if lo_v == float("-inf") else lo_v,
+        "bucket_high_f": None if hi_v == float("inf") else hi_v,
+        "in_bucket": in_bucket,
+    }
 
 
 def _ensure_poly_configured():
@@ -285,6 +296,7 @@ def _apply_resolution(
     now: datetime,
     note: str,
     resolution_source: str | None = None,
+    settlement_evidence: dict | None = None,
 ) -> bool:
     meta = bet.get("metadata") or {}
     if isinstance(meta, str):
@@ -305,13 +317,29 @@ def _apply_resolution(
         else:
             src = note or "unknown"
     meta["resolution_source"] = src
+    if settlement_evidence:
+        meta["settlement"] = {
+            "version": WEATHER_SETTLEMENT_VERSION,
+            "source": "station_actual",
+            "station": settlement_evidence.get("station"),
+            "target_date": settlement_evidence.get("target_date"),
+            "metric": settlement_evidence.get("metric"),
+            "actual_temp_f": settlement_evidence.get("actual_temp_f"),
+            "bucket_low_f": settlement_evidence.get("bucket_low_f"),
+            "bucket_high_f": settlement_evidence.get("bucket_high_f"),
+            "in_bucket": settlement_evidence.get("in_bucket"),
+            "graded_at": now.isoformat(),
+        }
+    update = {
+        "status": new_status,
+        "pnl": new_pnl,
+        "resolved_at": now.isoformat(),
+        "metadata": meta,
+    }
+    if settlement_evidence:
+        update["settlement_version"] = WEATHER_SETTLEMENT_VERSION
     try:
-        db.table("autobets").update({
-            "status": new_status,
-            "pnl": new_pnl,
-            "resolved_at": now.isoformat(),
-            "metadata": meta,
-        }).eq("id", bet["id"]).execute()
+        db.table("autobets").update(update).eq("id", bet["id"]).execute()
         logger.info(
             f"Resolved weather bet {bet['id'][:8]} [{bet.get('market_id')}] "
             f"-> {new_status} (PnL: {new_pnl}; {note}; source={src})"
@@ -365,8 +393,17 @@ async def resolve_weather_autobets() -> int:
         if actuals_ready:
             graded = _grade_bet_against_actual(bet, now)
             if graded is not None:
-                new_status, new_pnl = graded
-                if _apply_resolution(db, bet, new_status, new_pnl, now, "graded vs observed temp"):
+                new_status = graded["status"]
+                new_pnl = graded["pnl"]
+                if _apply_resolution(
+                    db,
+                    bet,
+                    new_status,
+                    new_pnl,
+                    now,
+                    "graded vs observed temp",
+                    settlement_evidence=graded,
+                ):
                     resolved_count += 1
                 continue
             # Day is done but observation fetch failed — wait; do not trust exchange.
@@ -446,12 +483,21 @@ async def resolve_weather_autobets() -> int:
             # isn't polluted with phantom losses.
             graded = _grade_bet_against_actual(bet, now)
             if graded is not None:
-                new_status, new_pnl = graded
+                new_status = graded["status"]
+                new_pnl = graded["pnl"]
                 grade_note = f"{reason}; graded vs observed temp"
             else:
                 new_status, new_pnl = "void", 0.0
                 grade_note = f"{reason}; unresolvable, voided"
-            if _apply_resolution(db, bet, new_status, new_pnl, now, grade_note):
+            if _apply_resolution(
+                db,
+                bet,
+                new_status,
+                new_pnl,
+                now,
+                grade_note,
+                settlement_evidence=graded,
+            ):
                 resolved_count += 1
 
 

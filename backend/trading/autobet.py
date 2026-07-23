@@ -37,6 +37,15 @@ from backend.trading.market_matcher import (
 from backend.trading.venue_router import VenueRouter
 from backend.trading.autobet_learning import gates_for_price, learning_summary, assess_live_readiness, invalidate_learning_cache
 from backend.trading.risk import size_position
+from backend.trading.settlement_integrity import (
+    EXACT_MATCH_NOT_FINAL,
+    EXACT_MATCH_NOT_FOUND,
+    SETTLEMENT_PNL_MISMATCH,
+    SETTLEMENT_STATUS_MISMATCH,
+    SETTLEMENT_VERSION,
+    conservative_risk_pnl,
+    verify_match_linked_autobet,
+)
 
 # Polymarket tag slugs / search terms to scan for relevant markets
 MARKET_TAGS = ["soccer", "sports", "mlb", "baseball"]
@@ -344,17 +353,54 @@ def normalize_open_autobet_stakes() -> int:
 
 
 def _current_bankroll(db) -> float:
-    """Live bankroll = configured bankroll + realised P&L from settled bets."""
+    """Configured bankroll plus verified or conservative realized P&L."""
     s = get_settings()
-    settled = (
-        db.table("autobets")
-        .select("pnl")
-        .not_.is_("resolved_at", "null")
-        .execute()
-        .data or []
-    )
-    realised = sum((r.get("pnl") or 0.0) for r in settled)
-    return s.polymarket_bankroll + realised
+    try:
+        settled = (
+            db.table("autobets")
+            .select(
+                "id, match_id, sport, outcome_name, status, pnl, stake, shares, "
+                "market_price, bet_type, bet_line, bet_subject, resolved_at, "
+                "settlement_version, settlement_match_id, settlement_corrected_at, "
+                "matches:matches!autobets_match_id_fkey("
+                "id, sport, external_id, home_team, away_team, scheduled_at, "
+                "finished_at, winner, is_final, home_score, away_score, match_stats)"
+            )
+            .not_.is_("resolved_at", "null")
+            .execute()
+            .data
+            or []
+        )
+        realised = 0.0
+        conservative_count = 0
+        for row in settled:
+            match = row.get("matches")
+            if isinstance(match, list):
+                match = match[0] if len(match) == 1 else None
+            if not isinstance(match, dict):
+                conservative_count += 1
+                realised += min(
+                    float(row.get("pnl") or 0.0),
+                    -abs(float(row.get("stake") or 0.0)),
+                )
+                continue
+            check = verify_match_linked_autobet(row, match)
+            if not check.valid:
+                conservative_count += 1
+            realised += conservative_risk_pnl(row, check)
+        if conservative_count:
+            logger.warning(
+                "Bankroll integrity: {}/{} settled rows treated conservatively",
+                conservative_count,
+                len(settled),
+            )
+        return s.polymarket_bankroll + realised
+    except Exception as exc:
+        logger.error(
+            "Bankroll integrity verification failed closed; using configured bankroll: {}",
+            exc,
+        )
+        return s.polymarket_bankroll
 
 
 def _open_exposures(db) -> tuple[float, dict[str, float]]:
@@ -622,8 +668,30 @@ def _record_autobet(
     """
     shares = round(sizing.stake / edge_res.market_price, 2) if edge_res.market_price > 0 else 0
     venue = getattr(market, "venue", None) or "polymarket"
+    event_date = None
+    try:
+        from zoneinfo import ZoneInfo
+
+        scheduled = datetime.fromisoformat(
+            str(match.get("scheduled_at")).replace("Z", "+00:00")
+        )
+        if scheduled.tzinfo is None:
+            scheduled = scheduled.replace(tzinfo=timezone.utc)
+        event_date = scheduled.astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    except (TypeError, ValueError):
+        pass
+    sport_lower = (sport_label or "").lower()
+    strategy = (
+        "legacy_consensus_mlb"
+        if "mlb" in sport_lower or "baseball" in sport_lower
+        else "legacy_consensus_football"
+        if "football" in sport_lower or "soccer" in sport_lower
+        else "legacy_other"
+    )
     record = {
         "match_id": match["id"],
+        "event_date": event_date,
+        "strategy": strategy,
         "market_id": market.market_id,
         "venue": venue,
         "market_slug": market.slug,
@@ -648,7 +716,16 @@ def _record_autobet(
         "metadata": {"venue": venue},
     }
     # Drop optional columns if migration not applied yet
-    optional = ("raw_confidence", "sport", "bet_type", "bet_line", "venue", "metadata")
+    optional = (
+        "raw_confidence",
+        "sport",
+        "bet_type",
+        "bet_line",
+        "venue",
+        "metadata",
+        "event_date",
+        "strategy",
+    )
 
     def _upsert(payload: dict) -> None:
         existing = (
@@ -702,34 +779,22 @@ def resolve_autobets() -> int:
         db.table("autobets")
         .select(
             "id, match_id, outcome_name, stake, shares, market_price, "
-            "bet_type, bet_line, bet_subject"
+            "bet_type, bet_line, bet_subject, sport, status, pnl, resolved_at, "
+            "settlement_version, settlement_match_id, settlement_corrected_at"
         )
         .eq("status", "open")
         .execute()
         .data or []
     )
-    if not open_bets:
-        return 0
-
     match_ids = list({b["match_id"] for b in open_bets if b.get("match_id")})
-    finished = (
-        db.table("matches")
-        .select("id, winner, is_final, home_score, away_score")
-        .in_("id", match_ids)
-        .eq("is_final", True)
-        .execute()
-        .data or []
-    )
-    finished_map = {m["id"]: m for m in finished}
-
-    # Fetch team names for open bets (handles duplicate match rows)
+    # Fetch only the exact linked match rows. Never search by team names.
     match_meta = {}
     if match_ids:
         meta_rows = (
             db.table("matches")
             .select(
-                "id, home_team, away_team, scheduled_at, winner, is_final, "
-                "home_score, away_score, match_stats"
+                "id, sport, external_id, home_team, away_team, scheduled_at, "
+                "finished_at, winner, is_final, home_score, away_score, match_stats"
             )
             .in_("id", match_ids)
             .execute()
@@ -737,70 +802,30 @@ def resolve_autobets() -> int:
         )
         match_meta = {m["id"]: m for m in meta_rows}
 
-    all_finished = (
-        db.table("matches")
-        .select(
-            "id, home_team, away_team, scheduled_at, winner, is_final, "
-            "home_score, away_score, match_stats"
-        )
-        .eq("is_final", True)
-        .execute()
-        .data or []
-    )
-
-    def _teams_match(a: dict, b: dict) -> bool:
-        ah = _canonical(a.get("home_team") or "") or (a.get("home_team") or "").lower()
-        aw = _canonical(a.get("away_team") or "") or (a.get("away_team") or "").lower()
-        bh = _canonical(b.get("home_team") or "") or (b.get("home_team") or "").lower()
-        bw = _canonical(b.get("away_team") or "") or (b.get("away_team") or "").lower()
-        return {ah, aw} == {bh, bw}
-
-    def _find_finished(meta: dict) -> dict | None:
-        candidates: list[dict] = []
-        direct = finished_map.get(meta["id"])
-        if direct:
-            candidates.append(direct)
-        for fm in all_finished:
-            if fm["id"] != meta["id"] and _teams_match(meta, fm):
-                candidates.append(fm)
-        if not candidates:
-            return None
-        for c in candidates:
-            if c.get("winner") and c.get("winner") != "draw":
-                return c
-        return direct or candidates[0]
-
-    from backend.sports_data.bet_settlement import pick_won_for_autobet
-
     def _settle_bet(bet: dict, *, allow_regrade: bool) -> bool:
-        meta = match_meta.get(bet["match_id"])
-        if not meta:
-            return False
-        match = _find_finished(meta)
+        match = match_meta.get(bet.get("match_id"))
         if not match:
+            logger.warning("{} autobet={}", EXACT_MATCH_NOT_FOUND, bet.get("id"))
+            return False
+        if match.get("is_final") is not True:
+            logger.info("{} autobet={}", EXACT_MATCH_NOT_FINAL, bet.get("id"))
             return False
 
-        bet_type = bet.get("bet_type") or "moneyline"
-        backed = bet["outcome_name"]
-        full_match = {**meta, **match}
-
-        won = pick_won_for_autobet(
-            bet_type=bet_type,
-            outcome_name=backed,
-            bet_line=bet.get("bet_line"),
-            bet_subject=bet.get("bet_subject"),
-            match=full_match,
-            match_stats=full_match.get("match_stats"),
-        )
-        if won is None:
+        now = datetime.now(timezone.utc)
+        check = verify_match_linked_autobet(bet, match, now=now)
+        if check.valid:
+            return False
+        if check.reason not in (SETTLEMENT_STATUS_MISMATCH, SETTLEMENT_PNL_MISMATCH):
+            logger.warning("{} autobet={}", check.reason, bet.get("id"))
+            return False
+        if check.expected_status is None or check.expected_pnl is None:
+            logger.warning("SETTLEMENT_DATA_INCOMPLETE autobet={}", bet.get("id"))
             return False
 
-        stake = bet.get("stake") or 0.0
-        shares = bet.get("shares") or 0.0
-        price = bet.get("market_price") or 0.0
-        new_status = "won" if won else "lost"
-        new_pnl = round(shares * (1 - price), 2) if won else round(-stake, 2)
-
+        new_status = check.expected_status
+        new_pnl = check.expected_pnl
+        backed = bet.get("outcome_name")
+        already_settled = bet.get("status") in ("won", "lost")
         if bet.get("status") in ("won", "lost"):
             if not allow_regrade:
                 return False
@@ -811,11 +836,17 @@ def resolve_autobets() -> int:
                 f"{bet.get('status')} → {new_status} ({backed})"
             )
 
-        db.table("autobets").update({
+        update = {
             "status": new_status,
             "pnl": new_pnl,
-            "resolved_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", bet["id"]).execute()
+            "settlement_version": SETTLEMENT_VERSION,
+            "settlement_match_id": bet["match_id"],
+        }
+        if already_settled:
+            update["settlement_corrected_at"] = now.isoformat()
+        else:
+            update["resolved_at"] = now.isoformat()
+        db.table("autobets").update(update).eq("id", bet["id"]).execute()
         return True
 
     resolved = 0
@@ -827,7 +858,8 @@ def resolve_autobets() -> int:
         db.table("autobets")
         .select(
             "id, match_id, outcome_name, stake, shares, market_price, "
-            "bet_type, bet_line, bet_subject, status, pnl"
+            "bet_type, bet_line, bet_subject, sport, status, pnl, resolved_at, "
+            "settlement_version, settlement_match_id, settlement_corrected_at"
         )
         .in_("status", ["won", "lost"])
         .not_.is_("match_id", "null")
@@ -840,8 +872,8 @@ def resolve_autobets() -> int:
         extra_rows = (
             db.table("matches")
             .select(
-                "id, home_team, away_team, scheduled_at, winner, is_final, "
-                "home_score, away_score, match_stats"
+                "id, sport, external_id, home_team, away_team, scheduled_at, "
+                "finished_at, winner, is_final, home_score, away_score, match_stats"
             )
             .in_("id", list(extra_ids))
             .execute()
