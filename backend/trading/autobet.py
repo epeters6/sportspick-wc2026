@@ -43,7 +43,7 @@ from backend.trading.settlement_integrity import (
     SETTLEMENT_PNL_MISMATCH,
     SETTLEMENT_STATUS_MISMATCH,
     SETTLEMENT_VERSION,
-    conservative_risk_pnl,
+    realized_settlement_pnl,
     verify_match_linked_autobet,
 )
 
@@ -359,9 +359,10 @@ def _current_bankroll(db) -> float:
         settled = (
             db.table("autobets")
             .select(
-                "id, match_id, sport, outcome_name, status, pnl, stake, shares, "
-                "market_price, bet_type, bet_line, bet_subject, resolved_at, "
-                "settlement_version, settlement_match_id, settlement_corrected_at, "
+                "id, match_id, sport, outcome_name, mode, status, pnl, stake, shares, "
+                "market_price, bet_type, bet_line, bet_subject, created_at, resolved_at, "
+                "metadata, settlement_version, settlement_match_id, "
+                "settlement_corrected_at, "
                 "matches:matches!autobets_match_id_fkey("
                 "id, sport, external_id, home_team, away_team, scheduled_at, "
                 "finished_at, winner, is_final, home_score, away_score, match_stats)"
@@ -374,20 +375,10 @@ def _current_bankroll(db) -> float:
         realised = 0.0
         conservative_count = 0
         for row in settled:
-            match = row.get("matches")
-            if isinstance(match, list):
-                match = match[0] if len(match) == 1 else None
-            if not isinstance(match, dict):
-                conservative_count += 1
-                realised += min(
-                    float(row.get("pnl") or 0.0),
-                    -abs(float(row.get("stake") or 0.0)),
-                )
-                continue
-            check = verify_match_linked_autobet(row, match)
+            pnl, check = realized_settlement_pnl(row, row.get("matches"))
             if not check.valid:
                 conservative_count += 1
-            realised += conservative_risk_pnl(row, check)
+            realised += pnl
         if conservative_count:
             logger.warning(
                 "Bankroll integrity: {}/{} settled rows treated conservatively",

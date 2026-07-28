@@ -23,8 +23,9 @@ from backend.trading.settlement_integrity import (
     SETTLEMENT_DATA_INCOMPLETE,
     SettlementCheck,
     conservative_risk_pnl,
-    expected_autobet_pnl,
+    is_weather_sport,
     verify_match_linked_autobet,
+    verify_weather_autobet,
 )
 
 PRICE_TIERS: list[tuple[float, float, str]] = [
@@ -173,35 +174,19 @@ def _fetch_settled_autobets(db=None, *, use_cache: bool = True) -> list[dict]:
                 invalid_rows.append(row)
             continue
 
-        sport = str(row.get("sport") or "").lower()
-        metadata = row.get("metadata") or {}
-        if isinstance(metadata, dict) and sport == "weather":
-            settlement = metadata.get("settlement") or {}
-            in_bucket = settlement.get("in_bucket")
-            if (
-                settlement.get("version") == "weather_actual_v2"
-                and isinstance(in_bucket, bool)
-            ):
-                backed_yes = str(row.get("outcome_name") or "yes").lower() == "yes"
-                won = in_bucket if backed_yes else not in_bucket
-                expected_status = "won" if won else "lost"
-                expected_pnl = expected_autobet_pnl(
-                    won=won,
-                    stake=float(row.get("stake") or 0.0),
-                    shares=float(row.get("shares") or 0.0),
-                    market_price=float(row.get("market_price") or 0.0),
-                )
-                if (
-                    row.get("status") == expected_status
-                    and row.get("pnl") is not None
-                    and abs(float(row["pnl"]) - expected_pnl) <= 0.0100001
-                ):
-                    row["pnl"] = expected_pnl
-                    verified_rows.append(row)
-                    continue
-                row["_integrity_reason"] = "WEATHER_SETTLEMENT_MISMATCH"
+        if is_weather_sport(row.get("sport")):
+            check = verify_weather_autobet(row)
+            row["_settlement_check"] = check
+            if check.valid:
+                row["pnl"] = check.expected_pnl
+                verified_rows.append(row)
+            elif check.reason == SETTLEMENT_DATA_INCOMPLETE:
+                row["_integrity_reason"] = check.reason
+                unverifiable_rows.append(row)
+            else:
+                row["_integrity_reason"] = check.reason
                 invalid_rows.append(row)
-                continue
+            continue
 
         row["_integrity_reason"] = (
             "SETTLEMENT_SCHEMA_INCOMPLETE"

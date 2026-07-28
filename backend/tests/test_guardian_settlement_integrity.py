@@ -50,6 +50,29 @@ class TestGuardianSettlementIntegrity(unittest.TestCase):
         self.assertEqual(by_sport["mlb"], -7.5)
         self.assertEqual(total, -7.5)
 
+    def test_weather_win_without_match_is_not_invented_loss(self):
+        row = {
+            "match_id": None,
+            "sport": "weather",
+            "status": "won",
+            "pnl": 5.0,
+            "stake": 5.0,
+            "shares": 10.0,
+            "market_price": 0.5,
+            "outcome_name": "yes",
+            "metadata": {
+                "settlement": {
+                    "version": "weather_actual_v2",
+                    "in_bucket": True,
+                }
+            },
+            "matches": None,
+        }
+        by_sport, total, failed = settlement_risk_summary([row])
+        self.assertFalse(failed)
+        self.assertEqual(by_sport["weather"], 5.0)
+        self.assertEqual(total, 5.0)
+
 
 if __name__ == "__main__":
     unittest.main()

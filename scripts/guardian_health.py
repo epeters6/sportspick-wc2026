@@ -15,38 +15,20 @@ HALT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 def settlement_risk_summary(rows: list[dict]) -> tuple[dict[str, float], float, bool]:
     """Conservative realized P&L plus the MLB identity-integrity signal."""
-    from backend.trading.settlement_integrity import (
-        SettlementCheck,
-        conservative_risk_pnl,
-        verify_match_linked_autobet,
-    )
+    from backend.trading.settlement_integrity import realized_settlement_pnl
 
     by_sport: dict[str, float] = {}
     total_pnl = 0.0
     mlb_integrity_failed = False
     for row in rows:
         sport = (row.get("sport") or "unknown").split("_")[0]
-        match = row.get("matches")
-        if isinstance(match, list):
-            match = match[0] if len(match) == 1 else None
-        if isinstance(match, dict):
-            check = verify_match_linked_autobet(row, match)
-        else:
-            check = SettlementCheck(
-                False,
-                "SETTLEMENT_EVIDENCE_UNAVAILABLE",
-                None,
-                None,
-                None,
-                None,
-            )
+        pnl, check = realized_settlement_pnl(row, row.get("matches"))
         if (
             row.get("match_id")
             and ("mlb" in sport.lower() or "baseball" in sport.lower())
             and not check.valid
         ):
             mlb_integrity_failed = True
-        pnl = conservative_risk_pnl(row, check)
         by_sport[sport] = by_sport.get(sport, 0.0) + pnl
         total_pnl += pnl
     return by_sport, total_pnl, mlb_integrity_failed
@@ -164,7 +146,8 @@ def check_health(*, emit: bool = True):
             db.table("autobets")
             .select(
                 "id, match_id, sport, outcome_name, bet_type, bet_line, bet_subject, "
-                "status, pnl, stake, shares, market_price, resolved_at, "
+                "mode, status, pnl, stake, shares, market_price, created_at, "
+                "resolved_at, metadata, "
                 "settlement_version, settlement_match_id, settlement_corrected_at, "
                 "matches:matches!autobets_match_id_fkey("
                 "id, sport, external_id, home_team, away_team, scheduled_at, "

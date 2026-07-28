@@ -18,6 +18,8 @@ INVALID_MATCH_WINNER = "INVALID_MATCH_WINNER"
 SETTLEMENT_DATA_INCOMPLETE = "SETTLEMENT_DATA_INCOMPLETE"
 SETTLEMENT_STATUS_MISMATCH = "SETTLEMENT_STATUS_MISMATCH"
 SETTLEMENT_PNL_MISMATCH = "SETTLEMENT_PNL_MISMATCH"
+WEATHER_SETTLEMENT_MISMATCH = "WEATHER_SETTLEMENT_MISMATCH"
+LEGACY_WEATHER_CUTOFF = datetime(2026, 7, 23, 16, 26, 28, tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,10 @@ class SettlementCheck:
     expected_pnl: float | None
     scheduled_at: datetime | None
     settlement_match_id: str | None
+
+
+def is_weather_sport(sport: Any) -> bool:
+    return "weather" in str(sport or "").lower()
 
 
 def parse_timestamp(value: Any) -> datetime | None:
@@ -214,9 +220,152 @@ def verify_match_linked_autobet(
     )
 
 
+def _weather_metadata(bet: dict) -> dict:
+    metadata = bet.get("metadata") or {}
+    if isinstance(metadata, str):
+        try:
+            import json
+
+            metadata = json.loads(metadata)
+        except (TypeError, ValueError):
+            metadata = {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def verify_weather_autobet(
+    bet: dict,
+    *,
+    allow_legacy_paper: bool = False,
+) -> SettlementCheck:
+    """
+    Verify a weather autobet settlement.
+
+    Prefer station-backed ``metadata.settlement`` (weather_actual_v2). For paper
+    rows created before Phase 4c, accept internally consistent legacy settlement
+    records only when ``allow_legacy_paper`` is explicitly enabled for conservative
+    bankroll/risk accounting, so the integrity rollout does not retroactively turn
+    every historical weather win into a full-stake loss. Learning/readiness callers,
+    new rows, and live rows still fail closed when durable evidence is missing.
+    """
+    if not is_weather_sport(bet.get("sport")):
+        return _invalid(SETTLEMENT_DATA_INCOMPLETE)
+
+    try:
+        stake = float(bet.get("stake") or 0.0)
+        shares = float(bet.get("shares") or 0.0)
+        market_price = float(bet.get("market_price") or 0.0)
+    except (TypeError, ValueError):
+        return _invalid(SETTLEMENT_DATA_INCOMPLETE)
+
+    metadata = _weather_metadata(bet)
+    settlement = metadata.get("settlement") or {}
+    if not isinstance(settlement, dict):
+        settlement = {}
+
+    won: bool | None = None
+    if settlement.get("version") == WEATHER_SETTLEMENT_VERSION and isinstance(
+        settlement.get("in_bucket"), bool
+    ):
+        actual_temp = settlement.get("actual_temp_f")
+        low = settlement.get("bucket_low_f")
+        high = settlement.get("bucket_high_f")
+        if actual_temp is not None:
+            try:
+                actual_value = float(actual_temp)
+                computed_in_bucket = (
+                    (low is None or actual_value >= float(low))
+                    and (high is None or actual_value <= float(high))
+                )
+            except (TypeError, ValueError):
+                return _invalid(SETTLEMENT_DATA_INCOMPLETE)
+            if computed_in_bucket != settlement["in_bucket"]:
+                return _invalid(WEATHER_SETTLEMENT_MISMATCH)
+        backed_yes = str(bet.get("outcome_name") or "yes").lower() == "yes"
+        won = bool(settlement["in_bucket"]) if backed_yes else not bool(
+            settlement["in_bucket"]
+        )
+    else:
+        created_at = parse_timestamp(bet.get("created_at"))
+        legacy_paper_row = (
+            allow_legacy_paper
+            and str(bet.get("mode") or "").lower() == "paper"
+            and created_at is not None
+            and created_at < LEGACY_WEATHER_CUTOFF
+            and not bet.get("settlement_version")
+        )
+        if not legacy_paper_row:
+            return _invalid(SETTLEMENT_DATA_INCOMPLETE)
+        status = str(bet.get("status") or "").lower()
+        if status == "won":
+            won = True
+        elif status == "lost":
+            won = False
+        else:
+            return _invalid(SETTLEMENT_DATA_INCOMPLETE)
+
+    expected_status = "won" if won else "lost"
+    expected_pnl = expected_autobet_pnl(
+        won=won,
+        stake=stake,
+        shares=shares,
+        market_price=market_price,
+    )
+
+    if str(bet.get("status") or "").lower() != expected_status:
+        return _invalid(
+            WEATHER_SETTLEMENT_MISMATCH
+            if settlement.get("version") == WEATHER_SETTLEMENT_VERSION
+            else SETTLEMENT_STATUS_MISMATCH,
+            expected_status=expected_status,
+            expected_pnl=expected_pnl,
+        )
+    try:
+        stored_pnl = float(bet.get("pnl"))
+    except (TypeError, ValueError):
+        return _invalid(
+            SETTLEMENT_PNL_MISMATCH,
+            expected_status=expected_status,
+            expected_pnl=expected_pnl,
+        )
+    if abs(stored_pnl - expected_pnl) > 0.0100001:
+        return _invalid(
+            SETTLEMENT_PNL_MISMATCH,
+            expected_status=expected_status,
+            expected_pnl=expected_pnl,
+        )
+
+    return SettlementCheck(
+        valid=True,
+        reason=None,
+        expected_status=expected_status,
+        expected_pnl=expected_pnl,
+        scheduled_at=None,
+        settlement_match_id=None,
+    )
+
+
+def realized_settlement_pnl(bet: dict, match: Any = None) -> tuple[float, SettlementCheck]:
+    """
+    Return (pnl_for_bankroll, check) for one settled autobet.
+
+    Match-linked sports use exact match verification. Weather uses weather
+    provenance (or self-consistent legacy status/pnl). Unlinked sports remain
+    fail-closed via conservative_risk_pnl.
+    """
+    if isinstance(match, list):
+        match = match[0] if len(match) == 1 else None
+    if isinstance(match, dict):
+        check = verify_match_linked_autobet(bet, match)
+    elif is_weather_sport(bet.get("sport")):
+        check = verify_weather_autobet(bet, allow_legacy_paper=True)
+    else:
+        check = _invalid(EXACT_MATCH_NOT_FOUND)
+    return conservative_risk_pnl(bet, check), check
+
+
 def conservative_risk_pnl(bet: dict, check: SettlementCheck) -> float:
     if check.valid:
-        return float(check.expected_pnl)
+        return float(check.expected_pnl)  # type: ignore[arg-type]
     return min(
         float(bet.get("pnl") or 0.0),
         -abs(float(bet.get("stake") or 0.0)),

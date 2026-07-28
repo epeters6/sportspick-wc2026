@@ -7,7 +7,9 @@ from unittest.mock import patch
 from backend.trading.settlement_integrity import (
     INVALID_MATCH_WINNER,
     PRESTART_SETTLEMENT_BLOCK,
+    realized_settlement_pnl,
     verify_match_linked_autobet,
+    verify_weather_autobet,
 )
 
 
@@ -215,6 +217,147 @@ class TestSettlementIntegrity(unittest.TestCase):
         self.assertNotIn("resolved_at", payload)
         self.assertIn("settlement_corrected_at", payload)
         self.assertEqual(payload["status"], "won")
+
+    def test_weather_win_without_match_id_is_not_full_stake_loss(self):
+        bet = {
+            "id": "weather-1",
+            "match_id": None,
+            "sport": "weather",
+            "outcome_name": "yes",
+            "stake": 5.0,
+            "shares": 10.0,
+            "market_price": 0.5,
+            "status": "won",
+            "pnl": 5.0,
+            "metadata": {
+                "settlement": {
+                    "version": "weather_actual_v2",
+                    "in_bucket": True,
+                }
+            },
+        }
+        check = verify_weather_autobet(bet)
+        self.assertTrue(check.valid)
+        self.assertEqual(check.expected_pnl, 5.0)
+        pnl, check2 = realized_settlement_pnl(bet, None)
+        self.assertTrue(check2.valid)
+        self.assertEqual(pnl, 5.0)
+
+    def test_legacy_weather_self_consistent_win_counts_for_bankroll(self):
+        bet = {
+            "match_id": None,
+            "sport": "weather",
+            "mode": "paper",
+            "created_at": "2026-07-21T12:00:00+00:00",
+            "outcome_name": "yes",
+            "stake": 4.0,
+            "shares": 8.0,
+            "market_price": 0.5,
+            "status": "won",
+            "pnl": 4.0,
+            "metadata": {},
+        }
+        learning_check = verify_weather_autobet(bet)
+        pnl, check = realized_settlement_pnl(bet, None)
+        self.assertFalse(learning_check.valid)
+        self.assertTrue(check.valid)
+        self.assertEqual(pnl, 4.0)
+
+    def test_new_weather_row_without_station_evidence_fails_closed(self):
+        bet = {
+            "match_id": None,
+            "sport": "weather",
+            "mode": "paper",
+            "created_at": "2026-07-24T12:00:00+00:00",
+            "outcome_name": "yes",
+            "stake": 4.0,
+            "shares": 8.0,
+            "market_price": 0.5,
+            "status": "won",
+            "pnl": 4.0,
+            "metadata": {},
+        }
+        pnl, check = realized_settlement_pnl(bet, None)
+        self.assertFalse(check.valid)
+        self.assertEqual(pnl, -4.0)
+
+    def test_legacy_live_weather_row_without_evidence_fails_closed(self):
+        bet = {
+            "match_id": None,
+            "sport": "weather",
+            "mode": "live",
+            "created_at": "2026-07-21T12:00:00+00:00",
+            "outcome_name": "yes",
+            "stake": 4.0,
+            "shares": 8.0,
+            "market_price": 0.5,
+            "status": "won",
+            "pnl": 4.0,
+            "metadata": {},
+        }
+        pnl, check = realized_settlement_pnl(bet, None)
+        self.assertFalse(check.valid)
+        self.assertEqual(pnl, -4.0)
+
+    def test_current_bankroll_includes_verified_weather_wins(self):
+        weather_win = {
+            "id": "w1",
+            "match_id": None,
+            "sport": "weather",
+            "mode": "paper",
+            "created_at": "2026-07-21T12:00:00+00:00",
+            "outcome_name": "yes",
+            "stake": 10.0,
+            "shares": 20.0,
+            "market_price": 0.5,
+            "status": "won",
+            "pnl": 10.0,
+            "resolved_at": "2026-07-24T02:01:00+00:00",
+            "metadata": {
+                "settlement": {
+                    "version": "weather_actual_v2",
+                    "in_bucket": True,
+                }
+            },
+            "matches": None,
+        }
+
+        class BankrollQuery:
+            def __init__(self, rows):
+                self.rows = rows
+
+            @property
+            def not_(self):
+                return self
+
+            def select(self, *_a, **_k):
+                return self
+
+            def is_(self, *_a, **_k):
+                return self
+
+            def execute(self):
+                class Result:
+                    pass
+
+                result = Result()
+                result.data = self.rows
+                return result
+
+        class BankrollDB:
+            def table(self, name):
+                assert name == "autobets"
+                return BankrollQuery([weather_win])
+
+        class Settings:
+            polymarket_bankroll = 1000.0
+
+        with patch(
+            "backend.trading.autobet.get_settings", return_value=Settings()
+        ):
+            from backend.trading.autobet import _current_bankroll
+
+            self.assertEqual(_current_bankroll(BankrollDB()), 1010.0)
 
 
 if __name__ == "__main__":
