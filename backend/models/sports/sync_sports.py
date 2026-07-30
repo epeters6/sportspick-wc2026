@@ -285,6 +285,13 @@ def sync_sports_market(
         "model_version": prediction.model_version,
         "coefficient_source": prediction.coefficient_source,
         "calibration_status": prediction.calibration_status,
+        "raw_model_prob": (features.sport_specific or {}).get(
+            "raw_model_prob"
+        ),
+        "market_prob_baseline": (features.sport_specific or {}).get(
+            "market_prob_baseline"
+        ),
+        "model_weight": (features.sport_specific or {}).get("model_weight"),
         "mode": mode,
         "platform": market_data.get("platform") or "unknown",
         "stake": stake,

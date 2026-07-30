@@ -52,10 +52,11 @@ def validate_orderbook_freshness(
     """Validate exchange orderbook freshness for evidence-grade fills.
 
     Exchange ``orderbook_timestamp`` is required in live mode.
-    In shadow only, when ``allow_received_timestamp_for_shadow`` is True and the
-    venue provides no exchange book time (e.g. Kalshi), freshness may be assessed
-    from ``received_timestamp`` captured at the HTTP response boundary. That
-    receipt time must never be labeled as an exchange/order-book timestamp.
+    In non-live paper/shadow modes, when
+    ``allow_received_timestamp_for_shadow`` is True and the venue provides no
+    exchange book time (e.g. Kalshi), freshness may be assessed from
+    ``received_timestamp`` captured at the HTTP response boundary. That receipt
+    time must never be labeled as an exchange/order-book timestamp.
     """
     if allow_assumed_fresh_orderbook_for_shadow:
         raise ValueError("ASSUMED_FRESHNESS_INVALID")
@@ -65,7 +66,7 @@ def validate_orderbook_freshness(
 
     if orderbook_timestamp is None:
         if (
-            mode == "shadow"
+            mode in {"shadow", "paper"}
             and allow_received_timestamp_for_shadow
             and received_timestamp is not None
         ):

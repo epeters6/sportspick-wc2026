@@ -62,6 +62,24 @@ class TestOrderbookEvidence(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "MISSING_ORDERBOOK_TIMESTAMP"):
             validate_orderbook_freshness(None, now, mode="shadow")
 
+    def test_paper_may_use_explicit_receipt_timestamp_policy(self):
+        now = datetime.now(timezone.utc)
+        validate_orderbook_freshness(
+            None,
+            now,
+            mode="paper",
+            allow_received_timestamp_for_shadow=True,
+        )
+        fill = simulate_paper_fill(
+            _order(),
+            None,
+            now,
+            mode="paper",
+            allow_received_timestamp_for_shadow=True,
+        )
+        self.assertEqual(fill.filled_shares, 10.0)
+        self.assertIsNone(fill.rejection_reason)
+
     def test_naive_timestamp_rejected(self):
         now = datetime.now(timezone.utc)
         naive = datetime(2026, 7, 21, 12, 0, 0)  # intentionally naive

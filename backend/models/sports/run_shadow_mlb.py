@@ -65,6 +65,12 @@ FEATURE_VERSION = "mlb_moneyline_v1"
 MODEL_TYPE = "mlb_quant_legacy"
 NY_TZ = ZoneInfo("America/New_York")
 ENABLE_PITCHER_OUTS = os.environ.get("MLB_SHADOW_PITCHER_OUTS", "0") == "1"
+try:
+    MLB_MODEL_WEIGHT = min(
+        1.0, max(0.0, float(os.environ.get("MLB_MODEL_WEIGHT", "0.35")))
+    )
+except ValueError:
+    MLB_MODEL_WEIGHT = 0.35
 
 
 def _mlb_game_date(start: datetime) -> str:
@@ -172,6 +178,27 @@ def _valid_prob(p: Any) -> bool:
     return math.isfinite(v) and 0.0 < v < 1.0
 
 
+def shrink_mlb_probability(
+    raw_model_prob: float,
+    best_bid: float,
+    best_ask: float,
+    *,
+    model_weight: float = MLB_MODEL_WEIGHT,
+) -> tuple[float, float]:
+    """Shrink uncalibrated heuristic probability toward the market midpoint."""
+    raw = float(raw_model_prob)
+    bid = float(best_bid)
+    ask = float(best_ask)
+    if not (_valid_prob(raw) and _valid_prob(bid) and _valid_prob(ask)):
+        raise ValueError("MLB_CALIBRATION_INPUT_INVALID")
+    if bid > ask:
+        raise ValueError("CROSSED_ORDERBOOK")
+    weight = min(1.0, max(0.0, float(model_weight)))
+    market_mid = (bid + ask) / 2.0
+    adjusted = weight * raw + (1.0 - weight) * market_mid
+    return min(0.999, max(0.001, adjusted)), market_mid
+
+
 def _moneyline_probs(
     home: str,
     away: str,
@@ -185,7 +212,8 @@ def _moneyline_probs(
         "model_version": MODEL_VERSION,
         "feature_version": FEATURE_VERSION,
         "coefficient_source": COEFFICIENT_SOURCE,
-        "calibration_status": "uncalibrated_shadow",
+        "calibration_status": "market_shrunk_shadow_v1",
+        "model_weight": MLB_MODEL_WEIGHT,
         "market_type": "moneyline",
         "strategy": "mlb_moneyline",
         "model_type": MODEL_TYPE,
@@ -602,7 +630,20 @@ async def _evaluate_venue_candidate(
             "selected_team": selected_team,
         }
 
-    net_edge = float(model_prob) - eff
+    try:
+        adjusted_prob, market_baseline = shrink_mlb_probability(
+            float(model_prob), float(best_bid), float(best_ask)
+        )
+    except ValueError as exc:
+        stats.reject(str(exc))
+        return {
+            "venue": venue,
+            "tradeable": False,
+            "rejection_reason": str(exc),
+            "selected_team": selected_team,
+        }
+
+    net_edge = adjusted_prob - eff
     stats.effective_costs.append(eff)
     stats.net_edges.append(net_edge)
     return {
@@ -621,7 +662,10 @@ async def _evaluate_venue_candidate(
         "received_ts": received_ts,
         "effective_cost": eff,
         "net_edge": net_edge,
-        "model_prob": model_prob,
+        "model_prob": adjusted_prob,
+        "raw_model_prob": float(model_prob),
+        "market_prob_baseline": market_baseline,
+        "model_weight": MLB_MODEL_WEIGHT,
         "selected_team": selected_team,
         "missing_orderbook_timestamp": book_ts is None,
         "timestamp_source": (
@@ -775,7 +819,12 @@ async def run_mlb_moneyline_shadow(
                     stats=stats,
                 )
                 if ev:
-                    ev["model_meta"] = meta
+                    ev["model_meta"] = {
+                        **meta,
+                        "raw_model_prob": ev.get("raw_model_prob"),
+                        "market_prob_baseline": ev.get("market_prob_baseline"),
+                        "model_weight": ev.get("model_weight"),
+                    }
                     venue_candidates.append(ev)
 
         tradeable = [c for c in venue_candidates if c.get("tradeable")]
@@ -854,6 +903,20 @@ async def run_mlb_moneyline_shadow(
         best["book_ts"] = fresh_book_ts
         best["received_ts"] = fresh_recv
         best["effective_cost"] = _executable_cost(best["venue"], best["best_ask"])
+        try:
+            best["model_prob"], best["market_prob_baseline"] = shrink_mlb_probability(
+                float(best["raw_model_prob"]),
+                best["best_bid"],
+                best["best_ask"],
+            )
+        except ValueError as exc:
+            stats = poly_stats if best["venue"] == "polymarket" else kalshi_stats
+            stats.reject(str(exc))
+            rejected += 1
+            continue
+        best["model_meta"]["market_prob_baseline"] = best[
+            "market_prob_baseline"
+        ]
         best["net_edge"] = float(best["model_prob"]) - best["effective_cost"]
         best["allow_received_timestamp_shadow"] = (
             best["book_ts"] is None and best["venue"] == "kalshi"
@@ -951,6 +1014,9 @@ async def run_mlb_moneyline_shadow(
                         "feature_version",
                         "coefficient_source",
                         "calibration_status",
+                        "raw_model_prob",
+                        "market_prob_baseline",
+                        "model_weight",
                     )
                 },
             },

@@ -522,6 +522,19 @@ def _parse_market(raw: dict, series_ticker: str = "") -> dict:
         except (TypeError, ValueError):
             return None
 
+    def _contract_size(*keys: str) -> float:
+        for key in keys:
+            val = raw.get(key)
+            if val is None:
+                continue
+            try:
+                size = float(val)
+            except (TypeError, ValueError):
+                continue
+            if size >= 0:
+                return size
+        return 0.0
+
     return {
         "ticker":        raw.get("ticker", ""),
         "title":         raw.get("title", ""),
@@ -531,6 +544,14 @@ def _parse_market(raw: dict, series_ticker: str = "") -> dict:
         "yes_bid":       _dollars_to_cents(raw.get("yes_bid_dollars")),
         "no_ask":        _dollars_to_cents(raw.get("no_ask_dollars")),
         "no_bid":        _dollars_to_cents(raw.get("no_bid_dollars")),
+        # Fixed-point top-of-book sizes are the authoritative executable
+        # quantities on current Kalshi Market responses. Preserve aliases used
+        # by the shared execution layer and audit artifacts.
+        "yes_ask_size":  _contract_size("yes_ask_size_fp", "yes_ask_size"),
+        "yes_bid_size":  _contract_size("yes_bid_size_fp", "yes_bid_size"),
+        "ask_size":      _contract_size("yes_ask_size_fp", "yes_ask_size"),
+        "yes_ask_qty":   _contract_size("yes_ask_size_fp", "yes_ask_size"),
+        "yes_bid_qty":   _contract_size("yes_bid_size_fp", "yes_bid_size"),
         "close_time":    raw.get("close_time", ""),
         "volume":        raw.get("volume_fp", raw.get("volume", 0)),
         "open_interest": raw.get("open_interest_fp", raw.get("open_interest", 0)),
@@ -540,6 +561,90 @@ def _parse_market(raw: dict, series_ticker: str = "") -> dict:
         "received_timestamp": raw.get("received_timestamp") or datetime.now(timezone.utc),
         "orderbook_timestamp": raw.get("orderbook_timestamp")
     }
+
+
+def _top_of_book_from_orderbook_fp(payload: dict) -> dict:
+    """Return executable YES BBO/depth from a Kalshi fixed-point orderbook.
+
+    Kalshi returns YES and NO bids in ascending price order. The best YES ask
+    is the complement of the highest NO bid, and it carries the same size.
+    """
+    book = payload.get("orderbook_fp", payload) if isinstance(payload, dict) else {}
+    yes_levels = book.get("yes_dollars") or []
+    no_levels = book.get("no_dollars") or []
+
+    def _best(levels) -> tuple[float | None, float]:
+        parsed: list[tuple[float, float]] = []
+        for level in levels:
+            if not isinstance(level, (list, tuple)) or len(level) < 2:
+                continue
+            try:
+                parsed.append((float(level[0]), float(level[1])))
+            except (TypeError, ValueError):
+                continue
+        if not parsed:
+            return None, 0.0
+        price = max(p for p, _ in parsed)
+        size = sum(s for p, s in parsed if abs(p - price) < 1e-9)
+        return price, size
+
+    yes_bid, yes_bid_size = _best(yes_levels)
+    no_bid, no_bid_size = _best(no_levels)
+    yes_ask = (1.0 - no_bid) if no_bid is not None else None
+    return {
+        "yes_bid": round(yes_bid * 100, 4) if yes_bid is not None else None,
+        "yes_ask": round(yes_ask * 100, 4) if yes_ask is not None else None,
+        "yes_bid_size": yes_bid_size,
+        "yes_ask_size": no_bid_size,
+        "yes_bid_qty": yes_bid_size,
+        "yes_ask_qty": no_bid_size,
+        "ask_size": no_bid_size,
+    }
+
+
+def _refresh_orderbook_depth(markets: list[dict]) -> list[dict]:
+    """Refresh current BBO/depth in batches without inventing liquidity.
+
+    The Market listing size fields remain a fallback if the public batch
+    endpoint is temporarily unavailable. Receipt time is recorded separately
+    and is never mislabeled as an exchange/order-book timestamp.
+    """
+    if not markets:
+        return markets
+    by_ticker = {str(m.get("ticker") or ""): m for m in markets if m.get("ticker")}
+    tickers = list(by_ticker)
+    for start in range(0, len(tickers), 100):
+        chunk = tickers[start:start + 100]
+        try:
+            data = _get(
+                "/markets/orderbooks",
+                params={"tickers": chunk},
+                signed=False,
+            )
+        except Exception as exc:
+            logger.warning(
+                "KalshiClient: batch orderbook refresh failed for %d markets — %s",
+                len(chunk),
+                exc,
+            )
+            continue
+        received_at = datetime.now(timezone.utc)
+        for entry in data.get("orderbooks", []):
+            if not isinstance(entry, dict):
+                continue
+            ticker = str(entry.get("ticker") or "")
+            market = by_ticker.get(ticker)
+            if market is None:
+                continue
+            bbo = _top_of_book_from_orderbook_fp(entry)
+            for key, value in bbo.items():
+                if value is not None:
+                    market[key] = value
+            market["received_timestamp"] = received_at
+            # REST orderbooks currently provide no exchange timestamp.
+            market["orderbook_timestamp"] = None
+            market["execution_price_source"] = "orderbook"
+    return markets
 
 
 def _closes_within_window(market: dict) -> bool:
@@ -575,7 +680,7 @@ def get_weather_markets() -> list[dict]:
             "KalshiClient: returning %d markets from cache.",
             len(cache["markets"]),
         )
-        return cache["markets"]
+        return _refresh_orderbook_depth(cache["markets"])
 
     logger.info(
         "KalshiClient: fetching weather markets from %d series tickers ...",
@@ -631,7 +736,7 @@ def get_weather_markets() -> list[dict]:
             series_failures,
         )
     _save_cache(filtered)
-    return filtered
+    return _refresh_orderbook_depth(filtered)
 
 
 
@@ -713,6 +818,29 @@ def get_market_as_parsed(ticker: str) -> dict | None:
         return None
     series = str(raw.get("series_ticker", "") or "")
     return _parse_market(raw, series_ticker=series)
+
+
+def get_orderbook_as_parsed(ticker: str) -> dict | None:
+    """Fetch an executable YES top-of-book snapshot for one market."""
+    try:
+        data = _get(
+            f"/markets/{ticker}/orderbook",
+            params={"depth": 1},
+            signed=False,
+        )
+    except Exception as exc:
+        logger.debug("KalshiClient: orderbook refresh %s failed — %s", ticker, exc)
+        return None
+    parsed = _top_of_book_from_orderbook_fp(data)
+    parsed.update(
+        {
+            "ticker": ticker,
+            "received_timestamp": datetime.now(timezone.utc),
+            "orderbook_timestamp": None,
+            "execution_price_source": "orderbook",
+        }
+    )
+    return parsed
 
 
 def place_order(

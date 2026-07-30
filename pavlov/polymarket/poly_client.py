@@ -62,6 +62,27 @@ def _amount_to_prob(amt) -> float | None:
         return None
 
 
+def _qty_to_float(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get("value") or value.get("qty") or value.get("size")
+    try:
+        qty = float(value)
+    except (TypeError, ValueError):
+        return None
+    return qty if qty >= 0 else None
+
+
+def _exchange_timestamp(raw: dict) -> Any:
+    """Return only a timestamp supplied by the venue, never local receipt time."""
+    for key in ("orderbook_timestamp", "timestamp", "ts", "updatedAt", "updated_at"):
+        value = raw.get(key)
+        if value is not None:
+            return value
+    return None
+
+
 def _unwrap_gateway_market_blob(raw: Any) -> dict[str, Any]:
     """Polymarket US gateway wraps payload in ``marketData`` (BBO, book, etc.)."""
     if not isinstance(raw, dict):
@@ -102,24 +123,41 @@ def _bbo_from_book(book: Any) -> dict[str, Any] | None:
     """Top-of-book bid/ask from ``/v1/markets/{slug}/book``."""
     if not book or not isinstance(book, dict):
         return None
+    raw_book = dict(book)
     book = _unwrap_gateway_market_blob(book)
     bids = book.get("bids") or []
     offers = book.get("offers") or []
     out: dict[str, Any] = {}
-    if bids:
-        lvl = bids[0]
-        if isinstance(lvl, dict) and lvl.get("px") is not None:
-            px = lvl["px"]
-            prob = _amount_to_prob(px)
-            if prob is not None:
-                out["bestBid"] = {"value": str(prob)}
-    if offers:
-        lvl = offers[0]
-        if isinstance(lvl, dict) and lvl.get("px") is not None:
-            px = lvl["px"]
-            prob = _amount_to_prob(px)
-            if prob is not None:
-                out["bestAsk"] = {"value": str(prob)}
+    parsed_bids = [
+        (_amount_to_prob(level.get("px")), _qty_to_float(level.get("qty")))
+        for level in bids
+        if isinstance(level, dict)
+    ]
+    parsed_bids = [(p, q) for p, q in parsed_bids if p is not None]
+    if parsed_bids:
+        best_bid = max(p for p, _ in parsed_bids)
+        bid_size = sum((q or 0.0) for p, q in parsed_bids if abs(p - best_bid) < 1e-9)
+        out["bestBid"] = {"value": str(best_bid)}
+        out["yes_bid_size"] = bid_size
+
+    parsed_offers = [
+        (_amount_to_prob(level.get("px")), _qty_to_float(level.get("qty")))
+        for level in offers
+        if isinstance(level, dict)
+    ]
+    parsed_offers = [(p, q) for p, q in parsed_offers if p is not None]
+    if parsed_offers:
+        best_ask = min(p for p, _ in parsed_offers)
+        ask_size = sum((q or 0.0) for p, q in parsed_offers if abs(p - best_ask) < 1e-9)
+        out["bestAsk"] = {"value": str(best_ask)}
+        out["yes_ask_size"] = ask_size
+        out["yes_ask_qty"] = ask_size
+        out["ask_size"] = ask_size
+    venue_ts = _exchange_timestamp(book) or _exchange_timestamp(raw_book)
+    if venue_ts is not None:
+        out["orderbook_timestamp"] = venue_ts
+    out["received_timestamp"] = datetime.now(timezone.utc)
+    out["execution_price_source"] = "orderbook"
     return out or None
 
 
@@ -150,7 +188,16 @@ def _build_price_bbo(client, m: dict, slug: str) -> dict[str, Any]:
         logger.debug("PolyClient: bbo(%s) failed — %s", slug, exc)
 
     bid, ask = _yes_probs_from_bbo_dict(merged)
-    if bid is None and ask is None:
+    ask_size = _qty_to_float(
+        merged.get("yes_ask_size")
+        or merged.get("yes_ask_qty")
+        or merged.get("ask_size")
+        or merged.get("bestAskQty")
+        or merged.get("bestOfferQty")
+    )
+    # BBO may provide price but not executable quantity. Fetch the full book
+    # whenever either price or ask depth is absent.
+    if (bid is None and ask is None) or not ask_size:
         try:
             book = client.markets.book(slug)
             book_patch = _bbo_from_book(book)
@@ -159,7 +206,7 @@ def _build_price_bbo(client, m: dict, slug: str) -> dict[str, Any]:
         except Exception as exc:
             logger.debug("PolyClient: book(%s) failed — %s", slug, exc)
 
-    merged["orderbook_timestamp"] = datetime.now(timezone.utc)
+    merged.setdefault("received_timestamp", datetime.now(timezone.utc))
     return merged
 
 
@@ -387,8 +434,33 @@ def _normalize_market_row(
         "poly_event_slug":  event_slug,
         "poly_market_slug": slug,
         "venue":            "poly_us",
-        "received_timestamp": m.get("received_timestamp") or datetime.now(timezone.utc),
-        "orderbook_timestamp": m.get("orderbook_timestamp")
+        "yes_ask_size":     _qty_to_float(
+            bbo.get("yes_ask_size")
+            or bbo.get("yes_ask_qty")
+            or bbo.get("ask_size")
+            or bbo.get("bestAskQty")
+            or bbo.get("bestOfferQty")
+        ) or 0.0,
+        "yes_ask_qty":      _qty_to_float(
+            bbo.get("yes_ask_size")
+            or bbo.get("yes_ask_qty")
+            or bbo.get("ask_size")
+            or bbo.get("bestAskQty")
+            or bbo.get("bestOfferQty")
+        ) or 0.0,
+        "ask_size":         _qty_to_float(
+            bbo.get("yes_ask_size")
+            or bbo.get("yes_ask_qty")
+            or bbo.get("ask_size")
+            or bbo.get("bestAskQty")
+            or bbo.get("bestOfferQty")
+        ) or 0.0,
+        "execution_price_source": bbo.get("execution_price_source"),
+        "received_timestamp": bbo.get("received_timestamp")
+        or m.get("received_timestamp")
+        or datetime.now(timezone.utc),
+        "orderbook_timestamp": bbo.get("orderbook_timestamp")
+        or m.get("orderbook_timestamp"),
     }
     return row
 
@@ -621,6 +693,31 @@ def get_weather_markets() -> list[dict]:
             "PolyClient: 0 priced temperature markets — check BBO/book/lastTrade data for slugs."
         )
     return out
+
+
+def get_orderbook_as_parsed(slug: str) -> dict | None:
+    """Fetch a current executable YES top-of-book snapshot for one market."""
+    try:
+        patch = _bbo_from_book(get_client().markets.book(slug))
+    except Exception as exc:
+        logger.debug("PolyClient: orderbook refresh %s failed — %s", slug, exc)
+        return None
+    if not patch:
+        return None
+    bid, ask = _yes_probs_from_bbo_dict(patch)
+    return {
+        "ticker": slug,
+        "yes_bid": bid,
+        "yes_ask": ask,
+        "best_bid": bid,
+        "best_ask": ask,
+        "yes_ask_size": _qty_to_float(patch.get("yes_ask_size")) or 0.0,
+        "yes_ask_qty": _qty_to_float(patch.get("yes_ask_qty")) or 0.0,
+        "ask_size": _qty_to_float(patch.get("ask_size")) or 0.0,
+        "received_timestamp": patch.get("received_timestamp"),
+        "orderbook_timestamp": patch.get("orderbook_timestamp"),
+        "execution_price_source": "orderbook",
+    }
 
 
 def get_market_result(slug: str) -> str | None:

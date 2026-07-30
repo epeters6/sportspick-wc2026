@@ -488,7 +488,12 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
         self.assertEqual(metadata["match_id"], "match-phase4-123")
         self.assertEqual(metadata["game_pk"], 123)
         self.assertEqual(metadata["selected_team"], "New York Yankees")
-        self.assertAlmostEqual(metadata["model_prob"], 0.61)
+        self.assertAlmostEqual(metadata["raw_model_prob"], 0.61)
+        self.assertAlmostEqual(metadata["market_prob_baseline"], 0.41)
+        self.assertAlmostEqual(metadata["model_weight"], 0.35)
+        self.assertAlmostEqual(
+            metadata["model_prob"], 0.35 * 0.61 + 0.65 * 0.41
+        )
 
     def test_selects_highest_positive_net_edge_not_cheapest_underdog(self):
         """Cheap underdog with worse/negative edge must not beat favorite."""

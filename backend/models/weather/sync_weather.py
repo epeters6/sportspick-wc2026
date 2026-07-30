@@ -108,6 +108,36 @@ def init_weather_clv_record(
     )
 
 
+def _append_weather_shadow_record(record: dict) -> None:
+    import json
+
+    with open("weather_shadow_decisions.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, default=str) + "\n")
+
+
+def _record_weather_rejection(stats: dict, reason: str, category: str) -> None:
+    stats["kelly_reject"] += 1  # Backward-compatible aggregate.
+    stats[category] = stats.get(category, 0) + 1
+    reasons = stats.setdefault("rejection_reasons", {})
+    reasons[reason] = reasons.get(reason, 0) + 1
+
+
+def _refresh_weather_orderbook(raw_market: dict, platform: str) -> dict | None:
+    """Fetch a just-in-time executable book before simulating a fill."""
+    market_id = str(raw_market.get("ticker") or raw_market.get("poly_market_slug") or "")
+    if not market_id:
+        return None
+    if platform == "kalshi":
+        from pavlov.pipeline import kalshi_client
+
+        return kalshi_client.get_orderbook_as_parsed(market_id)
+    if platform == "polymarket":
+        from polymarket import poly_client
+
+        return poly_client.get_orderbook_as_parsed(market_id)
+    return None
+
+
 async def sync_weather_predictions():
     logger.info("Starting rewritten weather prediction sync & portfolio optimization...")
     db = get_db()
@@ -118,6 +148,10 @@ async def sync_weather_predictions():
         "ensemble_ok": 0,
         "ensemble_fail": 0,
         "kelly_reject": 0,
+        "depth_reject": 0,
+        "optimizer_reject": 0,
+        "book_refresh_reject": 0,
+        "rejection_reasons": {},
         "bets_placed": 0,
         "skipped_past": 0,
     }
@@ -265,6 +299,24 @@ async def sync_weather_predictions():
                 age_ms = (now - use_ts).total_seconds() * 1000.0
                 if age_ms > 2000:
                     is_stale = True
+
+            snap_bid = _as_probability(
+                raw_m.get("best_bid", raw_m.get("yes_bid"))
+            )
+            snap_ask = _as_probability(
+                raw_m.get("best_ask", raw_m.get("yes_ask"))
+            )
+            bid_depth = float(
+                raw_m.get("yes_bid_size")
+                or raw_m.get("yes_bid_qty")
+                or 0.0
+            )
+            ask_depth = float(
+                raw_m.get("yes_ask_size")
+                or raw_m.get("yes_ask_qty")
+                or raw_m.get("ask_size")
+                or 0.0
+            )
                     
             snapshot_log = {
                 "timestamp": now.isoformat(),
@@ -276,11 +328,11 @@ async def sync_weather_predictions():
                 "orderbook_timestamp": ot.isoformat() if isinstance(ot, datetime) else ot,
                 "exchange_timestamp": None,
                 "source": "api",
-                "best_bid": raw_m.get("best_bid", 0.0),
-                "best_ask": raw_m.get("best_ask", 0.0),
-                "spread": raw_m.get("best_ask", 0.0) - raw_m.get("best_bid", 0.0),
-                "visible_bid_depth": raw_m.get("yes_bid_qty", 0.0),
-                "visible_ask_depth": raw_m.get("yes_ask_qty", 0.0),
+                "best_bid": snap_bid,
+                "best_ask": snap_ask,
+                "spread": snap_ask - snap_bid,
+                "visible_bid_depth": bid_depth,
+                "visible_ask_depth": ask_depth,
                 "age_ms": age_ms,
                 "is_stale": is_stale,
                 "missing_received_timestamp": rt is None,
@@ -341,6 +393,15 @@ async def sync_weather_predictions():
             )
         except Exception as exc:
             logger.debug(f"MOS bias unavailable for {city} (using 0.0): {exc}")
+        P_model: list[float] = []
+        P_market: list[float] = []
+        P_adj: list[float] = []
+        Q_exec: list[float] = []
+        depth_caps: list[float] = []
+        x_opt: list[float] = []
+        observed_extreme = -999.0 if metric == "high" else 999.0
+        nowcast_active = False
+        shadow_record: dict | None = None
         try:
             _, P_model = generate_event_probability_vector(events, mean_f, spread_f, lead_days, hour, bias_correction=mos_bias)
             
@@ -350,8 +411,6 @@ async def sync_weather_predictions():
             # C. Nowcast Constraints BEFORE Shrinkage
             # For HIGH markets the running max rules out low buckets; for LOW
             # markets the running min rules out high buckets.
-            observed_extreme = -999.0 if metric == "high" else 999.0
-            nowcast_active = False
             if lead_days == 0:
                 obs = get_current_obs(city)
                 if metric == "high":
@@ -378,6 +437,43 @@ async def sync_weather_predictions():
             
             # F. Portfolio Optimizer
             x_opt = optimize_portfolio(P_adj, Q_exec, depth_caps, bankroll)
+
+            shadow_record = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "model_version": "v1_kelly_portfolio",
+                "platform": platform,
+                "station": events[0].settlement_station,
+                "settlement_source": events[0].settlement_source,
+                "local_date": date_str,
+                "bucket_ids": [e.market_id for e in events],
+                "bucket_bounds": [
+                    (e.bucket_low_f, e.bucket_high_f) for e in events
+                ],
+                "P_model": P_model,
+                "P_market": P_market,
+                "P_adj": P_adj,
+                "lambda_confidence": None,
+                "metric": metric,
+                "observed_extreme_so_far": (
+                    observed_extreme if nowcast_active else None
+                ),
+                "Q_exec": Q_exec,
+                "depth_caps": depth_caps,
+                "x_opt_raw": None,
+                "x_opt_rounded": x_opt,
+                "total_cost": sum(
+                    x_opt[i] * Q_exec[i] for i in range(len(events))
+                ),
+                "worst_case_wealth": bankroll
+                - sum(x_opt[i] * Q_exec[i] for i in range(len(events))),
+                "delta_expected_log_growth": 0.0,
+                "rejection_reason": None,
+                "would_trade": sum(x_opt) > 0,
+                "paper_orders": [],
+                "settlement_high_f": None,
+                "winning_bucket_id": None,
+                "closing_price_snapshot": None,
+            }
             
             # G. Final Safety Assertions
             if nowcast_active:
@@ -392,13 +488,59 @@ async def sync_weather_predictions():
                             raise ValueError(f"NOWCAST_IMPOSSIBLE_BUCKET_LEAK: Bucket {event.bucket_label} has prob {P_adj[i]} or shares {x_opt[i]}")
             
             if sum(x_opt) == 0:
-                stats["kelly_reject"] += 1
-                logger.info(f"Rejected event {city} {date_str} ({platform}): NON_POSITIVE_EXPECTED_LOG_GROWTH_AFTER_ROUNDING or zero trade.")
+                positive_edge_indexes = [
+                    i
+                    for i in range(len(events))
+                    if P_adj[i] - Q_exec[i] >= 0.015
+                ]
+                if not any(depth_caps):
+                    reason = "MISSING_EXECUTABLE_DEPTH"
+                    category = "depth_reject"
+                elif positive_edge_indexes and not any(
+                    depth_caps[i] > 0 for i in positive_edge_indexes
+                ):
+                    reason = "INSUFFICIENT_DEPTH_AT_POSITIVE_EDGE"
+                    category = "depth_reject"
+                else:
+                    reason = "NON_POSITIVE_EXPECTED_LOG_GROWTH_AFTER_ROUNDING"
+                    category = "optimizer_reject"
+                _record_weather_rejection(stats, reason, category)
+                shadow_record["rejection_reason"] = reason
+                _append_weather_shadow_record(shadow_record)
+                logger.info(
+                    f"Rejected event {city} {date_str} ({platform}): {reason}"
+                )
                 continue
             
         except ValueError as e:
-            stats["kelly_reject"] += 1
-            logger.info(f"Rejected event {city} {date_str} ({platform}): {e}")
+            reason = str(e)
+            _record_weather_rejection(stats, reason, "optimizer_reject")
+            _append_weather_shadow_record(
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "model_version": "v1_kelly_portfolio",
+                    "platform": platform,
+                    "station": events[0].settlement_station,
+                    "settlement_source": events[0].settlement_source,
+                    "local_date": date_str,
+                    "bucket_ids": [event.market_id for event in events],
+                    "bucket_bounds": [
+                        (event.bucket_low_f, event.bucket_high_f)
+                        for event in events
+                    ],
+                    "P_model": P_model,
+                    "P_market": P_market,
+                    "P_adj": P_adj,
+                    "Q_exec": Q_exec,
+                    "depth_caps": depth_caps,
+                    "x_opt_rounded": x_opt,
+                    "metric": metric,
+                    "rejection_reason": reason,
+                    "would_trade": False,
+                    "paper_orders": [],
+                }
+            )
+            logger.info(f"Rejected event {city} {date_str} ({platform}): {reason}")
             continue
         except Exception as e:
             logger.error(f"Unexpected error processing event {city} {date_str}: {e}")
@@ -415,35 +557,7 @@ async def sync_weather_predictions():
         virtual_match_id = f"weather_{city.replace(' ', '')}_{date_str}{metric_tag}_{platform}"
         max_allowed = live_max_dollars if mode == "live" else paper_max_dollars
         
-        shadow_record = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "model_version": "v1_kelly_portfolio",
-            "platform": platform,
-            "station": events[0].settlement_station,
-            "settlement_source": events[0].settlement_source,
-            "local_date": date_str,
-            "bucket_ids": [e.market_id for e in events],
-            "bucket_bounds": [(e.bucket_low_f, e.bucket_high_f) for e in events],
-            "P_model": P_model,
-            "P_market": P_market,
-            "P_adj": P_adj,
-            "lambda_confidence": None, # Kept for schema compatibility if needed
-            "metric": metric,
-            "observed_extreme_so_far": observed_extreme if nowcast_active else None,
-            "Q_exec": Q_exec,
-            "depth_caps": depth_caps,
-            "x_opt_raw": None, # res.x not returned by optimizer currently, but we can just use x_opt_rounded
-            "x_opt_rounded": x_opt,
-            "total_cost": sum(x_opt[i] * Q_exec[i] for i in range(len(events))),
-            "worst_case_wealth": bankroll - sum(x_opt[i] * Q_exec[i] for i in range(len(events))),
-            "delta_expected_log_growth": 0.0, # Currently logged inside optimizer, difficult to return tuple without refactoring
-            "rejection_reason": "NON_POSITIVE_LOG_GROWTH" if sum(x_opt) == 0 else None,
-            "would_trade": sum(x_opt) > 0,
-            "paper_orders": [],
-            "settlement_high_f": None,
-            "winning_bucket_id": None,
-            "closing_price_snapshot": None
-        }
+        assert shadow_record is not None
         
         for i, shares in enumerate(x_opt):
             if shares <= 0:
@@ -492,6 +606,97 @@ async def sync_weather_predictions():
                 })
                 if not shadow_record.get("rejection_reason"):
                     shadow_record["rejection_reason"] = "DUPLICATE_OPEN_POSITION"
+                continue
+
+            fresh_book = _refresh_weather_orderbook(raw_m, platform)
+            fresh_ask = _as_probability(
+                (fresh_book or {}).get(
+                    "best_ask", (fresh_book or {}).get("yes_ask")
+                )
+            )
+            fresh_depth = float(
+                (fresh_book or {}).get("ask_size")
+                or (fresh_book or {}).get("yes_ask_size")
+                or (fresh_book or {}).get("yes_ask_qty")
+                or 0.0
+            )
+            fresh_received = (fresh_book or {}).get("received_timestamp")
+            fresh_orderbook_ts = (fresh_book or {}).get("orderbook_timestamp")
+            if (
+                not fresh_book
+                or fresh_ask <= 0.0
+                or fresh_ask >= 1.0
+                or fresh_depth <= 0.0
+                or fresh_received is None
+            ):
+                reason = "WINNING_BOOK_REFRESH_FAILED"
+                stats["book_refresh_reject"] += 1
+                reasons = stats.setdefault("rejection_reasons", {})
+                reasons[reason] = reasons.get(reason, 0) + 1
+                shadow_record.setdefault("rejections", []).append(
+                    {"candidate_id": candidate_id, "reason": reason}
+                )
+                shadow_record["paper_orders"].append(
+                    {
+                        "candidate_id": candidate_id,
+                        "bucket_id": event.market_id,
+                        "side": "YES",
+                        "shares": shares,
+                        "rejection_reason": reason,
+                    }
+                )
+                shadow_record["rejection_reason"] = (
+                    shadow_record.get("rejection_reason") or reason
+                )
+                logger.info(
+                    f"Paper fill rejected for {event.market_id}: {reason}"
+                )
+                continue
+
+            fresh_costs, fresh_caps = generate_executable_cost_vector(
+                [fresh_book], platform
+            )
+            fresh_q = fresh_costs[0]
+            if fresh_q > q_i + 0.005:
+                reason = "PRICE_MOVED_AGAINST_US"
+            elif P_adj[i] - fresh_q < 0.015:
+                reason = "EDGE_GONE_AFTER_REPRICE"
+            else:
+                reason = ""
+            if reason:
+                stats["book_refresh_reject"] += 1
+                reasons = stats.setdefault("rejection_reasons", {})
+                reasons[reason] = reasons.get(reason, 0) + 1
+                shadow_record.setdefault("rejections", []).append(
+                    {"candidate_id": candidate_id, "reason": reason}
+                )
+                shadow_record["paper_orders"].append(
+                    {
+                        "candidate_id": candidate_id,
+                        "bucket_id": event.market_id,
+                        "side": "YES",
+                        "shares": shares,
+                        "rejection_reason": reason,
+                    }
+                )
+                shadow_record["rejection_reason"] = (
+                    shadow_record.get("rejection_reason") or reason
+                )
+                continue
+
+            raw_m.update(fresh_book)
+            q_i = fresh_q
+            depth_caps[i] = fresh_caps[0]
+            shares = min(shares, depth_caps[i])
+            stake = round(shares * q_i, 2)
+            if shares <= 0 or stake <= 0:
+                continue
+            current_exposure = exposure_tracker.get(virtual_match_id, 0.0)
+            if current_exposure + stake > max_allowed:
+                remaining = max(0.0, max_allowed - current_exposure)
+                shares = min(shares, int(remaining / q_i))
+                stake = round(shares * q_i, 2)
+            if shares <= 0 or stake <= 0:
                 continue
 
             exposure_tracker[virtual_match_id] = current_exposure + stake
@@ -546,14 +751,17 @@ async def sync_weather_predictions():
             # Paper Trading Fill Simulation using shared Simulator
             
             # Once updated, extract `orderbook_timestamp` and `received_timestamp` from `raw_m`
-            real_orderbook_timestamp = raw_m.get("orderbook_timestamp")
-            real_received_timestamp = raw_m.get("received_timestamp")
+            real_orderbook_timestamp = fresh_orderbook_ts
+            real_received_timestamp = fresh_received
             
             fill = simulate_paper_fill(
                 order=sized_order,
                 orderbook_timestamp=real_orderbook_timestamp,
                 received_timestamp=real_received_timestamp,
                 mode=mode,
+                allow_received_timestamp_for_shadow=(
+                    platform == "kalshi" and mode != "live"
+                ),
             )
             
             paper_order = {
@@ -670,17 +878,17 @@ async def sync_weather_predictions():
                     exposure_tracker[virtual_match_id] = max(
                         0.0, exposure_tracker.get(virtual_match_id, 0.0) - stake
                     )
-        # Write Shadow Record
-        shadow_file = "weather_shadow_decisions.jsonl"
-        with open(shadow_file, "a") as f:
-            f.write(json.dumps(shadow_record) + "\n")
+        _append_weather_shadow_record(shadow_record)
 
     stats["bets_placed"] = bets_placed
     logger.info(
         f"Weather sync summary: markets poly={stats['polymarket_markets']} "
         f"kalshi={stats['kalshi_markets']} events={stats['events']} "
         f"ensemble_ok={stats['ensemble_ok']} ensemble_fail={stats['ensemble_fail']} "
-        f"kelly_reject={stats['kelly_reject']} skipped_past={stats['skipped_past']} "
+        f"kelly_reject={stats['kelly_reject']} depth_reject={stats['depth_reject']} "
+        f"optimizer_reject={stats['optimizer_reject']} "
+        f"book_refresh_reject={stats['book_refresh_reject']} "
+        f"skipped_past={stats['skipped_past']} "
         f"bets_placed={bets_placed} mode={mode}"
     )
     logger.info(f"Successfully processed portfolio optimization. Recorded {bets_placed} new {mode} risk-capped event-level optimized basket trades.")
