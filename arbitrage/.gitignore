@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Runtime state and evidence can be large or machine-specific.
+arbitrage_history.db
+arbitrage_history.db-shm
+arbitrage_history.db-wal
+*.jsonl
+*.log
+
+# Local environment and editor files.
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/

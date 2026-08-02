@@ -6,7 +6,7 @@ from loguru import logger
 import traceback
 import sys
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 
 # Running as `python backend/models/weather/sync_weather.py` puts this file's
@@ -85,6 +85,8 @@ def init_weather_clv_record(
     raw_m: dict,
     fill,
     platform: str,
+    due_close: datetime | None = None,
+    metadata: dict | None = None,
 ):
     """
     Persist weather CLV with market fill vs effective cost split.
@@ -105,7 +107,31 @@ def init_weather_clv_record(
         entry_effective_cost=fill.limit_price,
         entry_time=datetime.now(timezone.utc),
         platform=platform,
+        due_close=due_close,
+        metadata=metadata,
     )
+
+
+def _weather_market_close(raw_market: dict) -> datetime | None:
+    """Return an aware UTC venue close time when the market supplies one."""
+    value = (
+        raw_market.get("close_time")
+        or raw_market.get("endDate")
+        or raw_market.get("end_date")
+        or raw_market.get("expiration_time")
+    )
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
 
 
 def _append_weather_shadow_record(record: dict) -> None:
@@ -710,7 +736,9 @@ async def sync_weather_predictions():
                 outcome_id="yes",
                 event_id=virtual_match_id,
                 side="YES",
-                model_prob=P_model[i],
+                # P_adj is the probability that actually passed selection after
+                # market shrinkage. Keep the raw ensemble probability in metadata.
+                model_prob=P_adj[i],
                 market_prob=P_market[i],
                 executable_cost=q_i,
                 best_bid=None,
@@ -725,7 +753,11 @@ async def sync_weather_predictions():
                 event_exposure_cap=max_allowed,
                 bucket_or_outcome_exposure_cap=max_allowed,
                 timestamp=datetime.now(timezone.utc),
-                metadata={"p_adj": P_adj[i], "candidate_id": candidate_id}
+                metadata={
+                    "p_adj": P_adj[i],
+                    "raw_model_prob": P_model[i],
+                    "candidate_id": candidate_id,
+                }
             )
             
             sized_order = SizedOrder(
@@ -794,12 +826,31 @@ async def sync_weather_predictions():
             with open("paper_fills.jsonl", "a") as f:
                 f.write(json.dumps(paper_order) + "\n")
 
+            close_time = _weather_market_close(raw_m)
+            filled_stake = round(fill.filled_shares * fill.limit_price, 2)
+            clv_metadata = {
+                "event_id": virtual_match_id,
+                "event_start": close_time.isoformat() if close_time else None,
+                "event_start_utc": close_time.isoformat() if close_time else None,
+                "close_lead_minutes": 5,
+                "model_prob": P_adj[i],
+                "raw_model_prob": P_model[i],
+                "market_prob": fill.simulated_fill_price,
+                "market_vector_prob": P_market[i],
+                "shares": fill.filled_shares,
+                "stake": filled_stake,
+                "station": station_id,
+                "metric": metric,
+                "target_date": date_str,
+            }
             clv_rec = init_weather_clv_record(
                 candidate_id=candidate_id,
                 market_id=event.market_id,
                 raw_m=raw_m,
                 fill=fill,
                 platform=platform,
+                due_close=(close_time - timedelta(minutes=5)) if close_time else None,
+                metadata=clv_metadata,
             )
             log_clv_record(clv_rec)
 
@@ -813,11 +864,13 @@ async def sync_weather_predictions():
                 "outcome_name": "yes",
                 "token_id": raw_m.get("yes_token", "unknown"),
                 "mode": mode,
-                "model_prob": P_model[i],
+                # Store the probability used for the decision. The raw ensemble
+                # value remains available separately for calibration analysis.
+                "model_prob": P_adj[i],
                 "market_prob": P_market[i],
                 "market_price": best_ask_p,
                 "edge": P_adj[i] - q_i,
-                "raw_confidence": P_adj[i],
+                "raw_confidence": P_model[i],
                 "sport": "weather",
                 "event_date": date_str,
                 "strategy": f"weather_{metric}",
@@ -831,6 +884,8 @@ async def sync_weather_predictions():
                 "metadata": {
                     "candidate_id": candidate_id,
                     "p_adj": P_adj[i],
+                    "raw_model_prob": P_model[i],
+                    "market_vector_prob": P_market[i],
                     "q_exec": q_i,
                     "mean_f": mean_f,
                     "spread_f": spread_f,

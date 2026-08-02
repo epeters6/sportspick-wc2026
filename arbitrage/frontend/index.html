@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arbitrage Scanner — Kalshi ↔ Polymarket</title>
+    <meta name="description" content="Live prediction market arbitrage scanner comparing Kalshi and Polymarket prices">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+</head>
+<body>
+<div class="app" id="app">
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo-icon">⚡</div>
+            <div>
+                <h1>Arbitrage Scanner</h1>
+                <div class="header-subtitle">Kalshi ↔ Polymarket · Live Price Comparison</div>
+            </div>
+        </div>
+        <div class="header-actions">
+            <div class="status-badge" id="statusBadge">
+                <span class="status-dot loading" id="statusDot"></span>
+                <span id="statusText">Connecting…</span>
+            </div>
+            <button class="btn" onclick="triggerRefresh()" id="refreshBtn">↻ Refresh</button>
+            <button class="btn" onclick="toggleSettings()">⚙ Settings</button>
+        </div>
+    </header>
+
+    <!-- Stat Cards -->
+    <div class="stats-grid" id="statsGrid">
+        <div class="stat-card">
+            <div class="stat-label">Matched Pairs</div>
+            <div class="stat-value neutral" id="statPairs">—</div>
+            <div class="stat-detail" id="statPairsDetail">Loading…</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Profitable</div>
+            <div class="stat-value positive" id="statProfitable">—</div>
+            <div class="stat-detail" id="statProfitableDetail">After fees</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Best ROI</div>
+            <div class="stat-value" id="statBestRoi">—</div>
+            <div class="stat-detail" id="statBestRoiDetail">Current cycle</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Scan Count</div>
+            <div class="stat-value neutral" id="statScans">—</div>
+            <div class="stat-detail" id="statScansDetail">Total cycles</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Paper Portfolio</div>
+            <div class="stat-value positive" id="statPaperBalance">$10,000.00</div>
+            <div class="stat-detail" id="statPaperDetail">0 shadow bets placed</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Best Historical ROI</div>
+            <div class="stat-value neutral" id="statHistBest">—</div>
+            <div class="stat-detail" id="statHistDetail">No history yet</div>
+        </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls-bar">
+        <div class="controls-left">
+            <div class="control-group">
+                <label for="filterMinRoi">Min ROI%</label>
+                <input type="number" id="filterMinRoi" value="0" step="0.5" min="-100">
+            </div>
+            <div class="control-group">
+                <label for="filterConfidence">Min Confidence</label>
+                <input type="number" id="filterConfidence" value="70" step="5" min="0" max="100">
+            </div>
+            <div class="control-group">
+                <label>
+                    <input type="checkbox" id="filterProfitable"> Profitable only
+                </label>
+            </div>
+            <div class="control-group">
+                <label>
+                    <input type="checkbox" id="filterSuspicious" checked> Hide suspicious
+                </label>
+            </div>
+        </div>
+        <div class="countdown" id="countdown">Next refresh in —s</div>
+    </div>
+
+    <!-- Main Table -->
+    <div class="table-wrapper">
+        <div class="table-header-bar">
+            <h2>Opportunities</h2>
+            <span class="table-count" id="tableCount">0 results</span>
+        </div>
+        <div style="overflow-x: auto; max-height: 50vh; overflow-y: auto;">
+            <table id="oppTable">
+                <thead>
+                    <tr>
+                        <th data-sort="event_name" class="sorted">Event <span class="sort-arrow">▼</span></th>
+                        <th data-sort="kalshi_yes">Kalshi YES <span class="sort-arrow">▼</span></th>
+                        <th data-sort="polymarket_yes">Poly YES <span class="sort-arrow">▼</span></th>
+                        <th data-sort="buy_yes_on">Direction <span class="sort-arrow">▼</span></th>
+                        <th data-sort="gross_gap">Gross Gap <span class="sort-arrow">▼</span></th>
+                        <th data-sort="total_fees">Fees <span class="sort-arrow">▼</span></th>
+                        <th data-sort="net_gap">Net Profit <span class="sort-arrow">▼</span></th>
+                        <th data-sort="roi_pct">ROI% <span class="sort-arrow">▼</span></th>
+                        <th data-sort="capital_required">Capital <span class="sort-arrow">▼</span></th>
+                        <th data-sort="match_confidence">Confidence <span class="sort-arrow">▼</span></th>
+                    </tr>
+                </thead>
+                <tbody id="oppBody">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Shadow Betting Ledger Section -->
+    <div class="table-wrapper" style="margin-top: 24px;">
+        <div class="table-header-bar">
+            <h2>🎯 Shadow Betting Ledger (Paper Trading)</h2>
+            <span class="table-count" id="shadowCount">0 paper positions</span>
+        </div>
+        <div style="overflow-x: auto; max-height: 40vh; overflow-y: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Event</th>
+                        <th>Direction</th>
+                        <th>Size</th>
+                        <th>Entry Capital</th>
+                        <th>Expected Net Gap</th>
+                        <th>Expected ROI</th>
+                        <th>Status</th>
+                        <th>Realized PnL</th>
+                    </tr>
+                </thead>
+                <tbody id="shadowBody">
+                    <tr><td colspan="9" style="text-align:center; padding: 20px; color: var(--text-muted);">
+                        No paper positions yet. Only executable, settlement-verified signals (≥85%) qualify.
+                    </td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        Research use only · No trades placed · Read-only market data ·
+        <a href="/api/config" target="_blank">API Config</a> ·
+        <a href="/api/stats" target="_blank">History Stats</a>
+    </div>
+</div>
+
+<!-- Settings Panel -->
+<div class="overlay" id="overlay" onclick="toggleSettings()"></div>
+<aside class="settings-panel" id="settingsPanel">
+    <h2>
+        Settings
+        <button class="btn" onclick="toggleSettings()" style="padding:4px 10px; font-size:0.9rem;">✕</button>
+    </h2>
+
+    <div class="settings-section">
+        <h3>Refresh</h3>
+        <div class="setting-row">
+            <label for="settingRefresh">Interval (seconds)</label>
+            <input type="number" id="settingRefresh" value="30" min="5" max="300">
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h3>Fee Assumptions</h3>
+        <div class="fee-info">
+            <strong>Kalshi (taker):</strong><br>
+            <code>fee = ⌈M × 0.07 × P × (1-P)⌉</code><br>
+            Peak at 50¢ = 1.75¢/contract<br><br>
+            <strong>Polymarket (taker):</strong><br>
+            <code>fee = rate × P × (1-P)</code><br>
+            Rate varies by category (0.04–0.07)<br>
+            Geopolitics = free<br><br>
+            <em>Both peak at 50% probability, near-zero at extremes.</em>
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h3>Display</h3>
+        <div class="setting-row">
+            <label for="settingMinRoi">Default Min ROI%</label>
+            <input type="number" id="settingMinRoi" value="0" step="0.5">
+        </div>
+        <div class="setting-row">
+            <label for="settingMinConf">Default Min Confidence</label>
+            <input type="number" id="settingMinConf" value="70" step="5" min="0" max="100">
+        </div>
+    </div>
+
+    <button class="btn btn-primary" onclick="saveSettings()" style="width:100%; justify-content: center; margin-top: 8px;">
+        Save Settings
+    </button>
+</aside>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
