@@ -59,11 +59,107 @@ s = get_settings()
 from pavlov.pipeline import ensemble_client
 from pavlov.pipeline.settlement_resolver import normalize_market
 from pavlov.pipeline.probability_model import generate_event_probability_vector
-from pavlov.pipeline.market_probability import generate_market_implied_vector, shrink_probability_vector
+from pavlov.pipeline.market_probability import (
+    generate_market_implied_vector,
+    get_event_lambda,
+    shrink_probability_vector,
+)
 from pavlov.pipeline.execution_cost import generate_executable_cost_vector, _as_probability
 from pavlov.pipeline.portfolio_optimizer import optimize_portfolio
 from pavlov.pipeline.nowcast_features import mask_impossible_buckets
 from backend.ml.intraday_nowcast import get_current_obs # Hypothetical or existing NWS fetcher
+from backend.ml.prediction_evaluation import (
+    WEATHER_PREDICTION_SOURCE,
+    replace_prediction_rows,
+)
+
+
+WEATHER_MODEL_VERSION = "weather_calibrated_v2"
+try:
+    WEATHER_MIN_NET_EDGE = max(
+        0.0, float(os.environ.get("WEATHER_MIN_NET_EDGE", "0.05"))
+    )
+except ValueError:
+    WEATHER_MIN_NET_EDGE = 0.05
+WEATHER_LOW_STAKES_ENABLED = os.environ.get(
+    "WEATHER_LOW_STAKES_ENABLED", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def weather_risk_key(station: str, date_str: str, metric: str) -> str:
+    """Cross-venue exposure identity: one position per station/metric/date."""
+    return f"weather:{station}:{date_str}:{metric}"
+
+
+def limit_to_one_weather_position(
+    shares: list[float], probabilities: list[float], costs: list[float]
+) -> list[float]:
+    """Keep only the highest-edge positive position in an event vector."""
+    eligible = [i for i, value in enumerate(shares) if float(value) > 0.0]
+    if len(eligible) <= 1:
+        return list(shares)
+    best = max(eligible, key=lambda i: float(probabilities[i]) - float(costs[i]))
+    return [float(value) if i == best else 0.0 for i, value in enumerate(shares)]
+
+
+def record_weather_prediction_vector(
+    db,
+    *,
+    platform: str,
+    station: str,
+    date_str: str,
+    metric: str,
+    events: list,
+    raw_probabilities: list[float],
+    decision_probabilities: list[float],
+    market_probabilities: list[float],
+    executable_costs: list[float],
+    selected_shares: list[float],
+    theoretical_shares: list[float],
+    lead_days: int,
+    calibration_metadata: dict,
+) -> int:
+    """Persist every bucket, including rejected/non-selected outcomes."""
+    event_key = f"weather:{platform}:{station}:{date_str}:{metric}"
+    rows = []
+    for i, event in enumerate(events):
+        rows.append(
+            {
+                "outcome": event.market_id,
+                "prob": decision_probabilities[i],
+                "market_price": market_probabilities[i],
+                "edge": decision_probabilities[i] - executable_costs[i],
+                "metadata": {
+                    "model_version": WEATHER_MODEL_VERSION,
+                    "raw_model_prob": raw_probabilities[i],
+                    "decision_prob": decision_probabilities[i],
+                    "market_vector_prob": market_probabilities[i],
+                    "executable_cost": executable_costs[i],
+                    "selected": selected_shares[i] > 0,
+                    "eligible_before_observation_gate": theoretical_shares[i] > 0,
+                    "station": station,
+                    "target_date": date_str,
+                    "metric": metric,
+                    "platform": platform,
+                    "lead_days": lead_days,
+                    "bucket_low_f": (
+                        None if event.bucket_low_f == float("-inf") else event.bucket_low_f
+                    ),
+                    "bucket_high_f": (
+                        None if event.bucket_high_f == float("inf") else event.bucket_high_f
+                    ),
+                    "bucket_label": event.bucket_label,
+                    **calibration_metadata,
+                },
+            }
+        )
+    return replace_prediction_rows(
+        db,
+        source=WEATHER_PREDICTION_SOURCE,
+        domain="weather",
+        event_key=event_key,
+        rows=rows,
+    )
 
 
 def weather_candidate_id(
@@ -177,6 +273,8 @@ async def sync_weather_predictions():
         "depth_reject": 0,
         "optimizer_reject": 0,
         "book_refresh_reject": 0,
+        "observation_only": 0,
+        "evaluation_rows": 0,
         "rejection_reasons": {},
         "bets_placed": 0,
         "skipped_past": 0,
@@ -275,13 +373,23 @@ async def sync_weather_predictions():
     )
     for row in (open_bets.data or []):
         subj = row.get("bet_subject")
-        exposure_tracker[subj] = exposure_tracker.get(subj, 0.0) + (row.get("stake") or 0.0)
         meta = row.get("metadata") or {}
         if isinstance(meta, str):
             try:
                 meta = _json.loads(meta)
             except (ValueError, TypeError):
                 meta = {}
+        risk_key = subj
+        if isinstance(meta, dict) and all(
+            meta.get(key) for key in ("station", "target_date", "metric")
+        ):
+            risk_key = weather_risk_key(
+                str(meta["station"]), str(meta["target_date"]), str(meta["metric"])
+            )
+        if risk_key:
+            exposure_tracker[risk_key] = exposure_tracker.get(risk_key, 0.0) + (
+                row.get("stake") or 0.0
+            )
         if isinstance(meta, dict) and meta.get("candidate_id"):
             open_candidate_ids.add(str(meta["candidate_id"]))
         mid = row.get("market_id")
@@ -412,11 +520,25 @@ async def sync_weather_predictions():
         
         # A. Probability Model (Sigma calibration + MOS bias correction)
         mos_bias = 0.0
+        empirical_sigma = None
+        calibration_meta = {
+            "calibration_source": "v2_floor",
+            "calibration_station_samples": 0,
+            "calibration_pooled_samples": 0,
+        }
         try:
             from backend.ml.weather_mos import mos_engine
-            mos_bias = mos_engine.calculate_bias(
+            calibration = mos_engine.calculate_calibration(
                 events[0].settlement_station, "ensemble", max(lead_days, 0), metric
             )
+            mos_bias = calibration.bias_correction
+            empirical_sigma = calibration.residual_sigma
+            calibration_meta = {
+                "calibration_source": calibration.source,
+                "calibration_station_samples": calibration.station_samples,
+                "calibration_pooled_samples": calibration.pooled_samples,
+                "residual_sigma_f": calibration.residual_sigma,
+            }
         except Exception as exc:
             logger.debug(f"MOS bias unavailable for {city} (using 0.0): {exc}")
         P_model: list[float] = []
@@ -429,7 +551,15 @@ async def sync_weather_predictions():
         nowcast_active = False
         shadow_record: dict | None = None
         try:
-            _, P_model = generate_event_probability_vector(events, mean_f, spread_f, lead_days, hour, bias_correction=mos_bias)
+            _, P_model = generate_event_probability_vector(
+                events,
+                mean_f,
+                spread_f,
+                lead_days,
+                hour,
+                bias_correction=mos_bias,
+                empirical_sigma=empirical_sigma,
+            )
             
             # B. Market Probability
             P_market = generate_market_implied_vector(raw_markets)
@@ -462,11 +592,44 @@ async def sync_weather_predictions():
             Q_exec, depth_caps = generate_executable_cost_vector(raw_markets, platform)
             
             # F. Portfolio Optimizer
-            x_opt = optimize_portfolio(P_adj, Q_exec, depth_caps, bankroll)
+            x_opt = optimize_portfolio(
+                P_adj,
+                Q_exec,
+                depth_caps,
+                bankroll,
+                min_net_edge=WEATHER_MIN_NET_EDGE,
+            )
+            x_opt = limit_to_one_weather_position(x_opt, P_adj, Q_exec)
+            theoretical_x_opt = list(x_opt)
+            execution_enabled = metric != "low" or WEATHER_LOW_STAKES_ENABLED
+            if not execution_enabled:
+                x_opt = [0.0 for _ in x_opt]
+
+            stats["evaluation_rows"] += record_weather_prediction_vector(
+                db,
+                platform=platform,
+                station=events[0].settlement_station,
+                date_str=date_str,
+                metric=metric,
+                events=events,
+                raw_probabilities=P_model,
+                decision_probabilities=P_adj,
+                market_probabilities=P_market,
+                executable_costs=Q_exec,
+                selected_shares=x_opt,
+                theoretical_shares=theoretical_x_opt,
+                lead_days=lead_days,
+                calibration_metadata={
+                    **calibration_meta,
+                    "lambda_confidence": get_event_lambda(lead_days),
+                    "min_net_edge": WEATHER_MIN_NET_EDGE,
+                    "execution_enabled": execution_enabled,
+                },
+            )
 
             shadow_record = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "model_version": "v1_kelly_portfolio",
+                "model_version": WEATHER_MODEL_VERSION,
                 "platform": platform,
                 "station": events[0].settlement_station,
                 "settlement_source": events[0].settlement_source,
@@ -478,14 +641,15 @@ async def sync_weather_predictions():
                 "P_model": P_model,
                 "P_market": P_market,
                 "P_adj": P_adj,
-                "lambda_confidence": None,
+                "lambda_confidence": get_event_lambda(lead_days),
+                "calibration": calibration_meta,
                 "metric": metric,
                 "observed_extreme_so_far": (
                     observed_extreme if nowcast_active else None
                 ),
                 "Q_exec": Q_exec,
                 "depth_caps": depth_caps,
-                "x_opt_raw": None,
+                "x_opt_raw": theoretical_x_opt,
                 "x_opt_rounded": x_opt,
                 "total_cost": sum(
                     x_opt[i] * Q_exec[i] for i in range(len(events))
@@ -500,6 +664,20 @@ async def sync_weather_predictions():
                 "winning_bucket_id": None,
                 "closing_price_snapshot": None,
             }
+
+            if not execution_enabled:
+                reason = "WEATHER_LOW_OBSERVATION_ONLY"
+                stats["observation_only"] += 1
+                shadow_record["rejection_reason"] = reason
+                shadow_record["would_trade"] = False
+                shadow_record["would_trade_before_observation_gate"] = (
+                    sum(theoretical_x_opt) > 0
+                )
+                _append_weather_shadow_record(shadow_record)
+                logger.info(
+                    f"Observation-only event {city} {date_str} ({platform}, {metric})"
+                )
+                continue
             
             # G. Final Safety Assertions
             if nowcast_active:
@@ -517,7 +695,7 @@ async def sync_weather_predictions():
                 positive_edge_indexes = [
                     i
                     for i in range(len(events))
-                    if P_adj[i] - Q_exec[i] >= 0.015
+                    if P_adj[i] - Q_exec[i] >= WEATHER_MIN_NET_EDGE
                 ]
                 if not any(depth_caps):
                     reason = "MISSING_EXECUTABLE_DEPTH"
@@ -544,7 +722,7 @@ async def sync_weather_predictions():
             _append_weather_shadow_record(
                 {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "model_version": "v1_kelly_portfolio",
+                    "model_version": WEATHER_MODEL_VERSION,
                     "platform": platform,
                     "station": events[0].settlement_station,
                     "settlement_source": events[0].settlement_source,
@@ -581,9 +759,23 @@ async def sync_weather_predictions():
         # G. Shadow Mode Logging & Execution
         metric_tag = "" if metric == "high" else "_low"
         virtual_match_id = f"weather_{city.replace(' ', '')}_{date_str}{metric_tag}_{platform}"
+        station_id = events[0].settlement_station
+        risk_event_key = weather_risk_key(station_id, date_str, metric)
         max_allowed = live_max_dollars if mode == "live" else paper_max_dollars
         
         assert shadow_record is not None
+
+        if exposure_tracker.get(risk_event_key, 0.0) > 0:
+            reason = "DUPLICATE_STATION_METRIC_DATE_EXPOSURE"
+            reasons = stats.setdefault("rejection_reasons", {})
+            reasons[reason] = reasons.get(reason, 0) + 1
+            shadow_record["rejection_reason"] = reason
+            shadow_record["would_trade"] = False
+            _append_weather_shadow_record(shadow_record)
+            logger.info(
+                f"Decision rejection {reason} station={station_id} date={date_str} metric={metric}"
+            )
+            continue
         
         for i, shares in enumerate(x_opt):
             if shares <= 0:
@@ -597,7 +789,7 @@ async def sync_weather_predictions():
             if stake <= 0:
                 continue
                 
-            current_exposure = exposure_tracker.get(virtual_match_id, 0.0)
+            current_exposure = exposure_tracker.get(risk_event_key, 0.0)
             if current_exposure >= max_allowed:
                 logger.info(f"Skipping {event.market_id}: {virtual_match_id} exposure (${current_exposure:.2f}) is at cap.")
                 continue
@@ -610,7 +802,6 @@ async def sync_weather_predictions():
             if shares <= 0:
                 continue
 
-            station_id = events[0].settlement_station
             candidate_id = weather_candidate_id(
                 platform, station_id, date_str, metric, event.market_id, mode
             )
@@ -685,7 +876,7 @@ async def sync_weather_predictions():
             fresh_q = fresh_costs[0]
             if fresh_q > q_i + 0.005:
                 reason = "PRICE_MOVED_AGAINST_US"
-            elif P_adj[i] - fresh_q < 0.015:
+            elif P_adj[i] - fresh_q < WEATHER_MIN_NET_EDGE:
                 reason = "EDGE_GONE_AFTER_REPRICE"
             else:
                 reason = ""
@@ -717,7 +908,7 @@ async def sync_weather_predictions():
             stake = round(shares * q_i, 2)
             if shares <= 0 or stake <= 0:
                 continue
-            current_exposure = exposure_tracker.get(virtual_match_id, 0.0)
+            current_exposure = exposure_tracker.get(risk_event_key, 0.0)
             if current_exposure + stake > max_allowed:
                 remaining = max(0.0, max_allowed - current_exposure)
                 shares = min(shares, int(remaining / q_i))
@@ -725,7 +916,7 @@ async def sync_weather_predictions():
             if shares <= 0 or stake <= 0:
                 continue
 
-            exposure_tracker[virtual_match_id] = current_exposure + stake
+            exposure_tracker[risk_event_key] = current_exposure + stake
             
             # Convert to shared Execution schema
             best_ask_p = _as_probability(raw_m.get("best_ask", raw_m.get("yes_ask", q_i))) or q_i
@@ -754,9 +945,11 @@ async def sync_weather_predictions():
                 bucket_or_outcome_exposure_cap=max_allowed,
                 timestamp=datetime.now(timezone.utc),
                 metadata={
+                    "model_version": WEATHER_MODEL_VERSION,
                     "p_adj": P_adj[i],
                     "raw_model_prob": P_model[i],
                     "candidate_id": candidate_id,
+                    **calibration_meta,
                 }
             )
             
@@ -818,8 +1011,8 @@ async def sync_weather_predictions():
                     f"{fill.rejection_reason or 'unknown'}"
                 )
                 # Undo exposure reservation so a later retry can try again.
-                exposure_tracker[virtual_match_id] = max(
-                    0.0, exposure_tracker.get(virtual_match_id, 0.0) - stake
+                exposure_tracker[risk_event_key] = max(
+                    0.0, exposure_tracker.get(risk_event_key, 0.0) - stake
                 )
                 continue
 
@@ -829,6 +1022,7 @@ async def sync_weather_predictions():
             close_time = _weather_market_close(raw_m)
             filled_stake = round(fill.filled_shares * fill.limit_price, 2)
             clv_metadata = {
+                "model_version": WEATHER_MODEL_VERSION,
                 "event_id": virtual_match_id,
                 "event_start": close_time.isoformat() if close_time else None,
                 "event_start_utc": close_time.isoformat() if close_time else None,
@@ -842,6 +1036,7 @@ async def sync_weather_predictions():
                 "station": station_id,
                 "metric": metric,
                 "target_date": date_str,
+                **calibration_meta,
             }
             clv_rec = init_weather_clv_record(
                 candidate_id=candidate_id,
@@ -882,6 +1077,7 @@ async def sync_weather_predictions():
                 "status": "open",
                 "bet_type": "weather",
                 "metadata": {
+                    "model_version": WEATHER_MODEL_VERSION,
                     "candidate_id": candidate_id,
                     "p_adj": P_adj[i],
                     "raw_model_prob": P_model[i],
@@ -898,7 +1094,9 @@ async def sync_weather_predictions():
                     "bucket_low_f": event.bucket_low_f if event.bucket_low_f != float("-inf") else None,
                     "bucket_high_f": event.bucket_high_f if event.bucket_high_f != float("inf") else None,
                     "bucket_label": event.bucket_label,
-                    "mos_bias": mos_bias
+                    "mos_bias": mos_bias,
+                    "min_net_edge": WEATHER_MIN_NET_EDGE,
+                    **calibration_meta,
                 }
             }
             
@@ -930,8 +1128,8 @@ async def sync_weather_predictions():
                     logger.warning(f"Weather autobet recorded with slim schema ({e})")
                 except Exception as e2:
                     logger.error(f"Failed to record weather autobet: {e2}")
-                    exposure_tracker[virtual_match_id] = max(
-                        0.0, exposure_tracker.get(virtual_match_id, 0.0) - stake
+                    exposure_tracker[risk_event_key] = max(
+                        0.0, exposure_tracker.get(risk_event_key, 0.0) - stake
                     )
         _append_weather_shadow_record(shadow_record)
 
@@ -943,6 +1141,8 @@ async def sync_weather_predictions():
         f"kelly_reject={stats['kelly_reject']} depth_reject={stats['depth_reject']} "
         f"optimizer_reject={stats['optimizer_reject']} "
         f"book_refresh_reject={stats['book_refresh_reject']} "
+        f"observation_only={stats['observation_only']} "
+        f"evaluation_rows={stats['evaluation_rows']} "
         f"skipped_past={stats['skipped_past']} "
         f"bets_placed={bets_placed} mode={mode}"
     )

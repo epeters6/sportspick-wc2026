@@ -466,11 +466,21 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
             [("New York Yankees", "tok_home"), ("Los Angeles Dodgers", "tok_away")],
             end_date=future.strftime("%Y-%m-%d"),
         )
-        router = self._router(poly_markets=[poly_mkt])
+        router = self._router(
+            poly_markets=[poly_mkt],
+            book={
+                "best_bid": 0.18,
+                "best_ask": 0.20,
+                "ask_size": 100.0,
+                "bid_size": 80.0,
+                "book_timestamp": datetime.now(timezone.utc),
+                "received_timestamp": datetime.now(timezone.utc),
+            },
+        )
 
         with isolate_clv_db() as clv_upsert, patch(
             "backend.models.sports.run_shadow_mlb.get_mlb_quant_probability",
-            return_value={"home_prob": 0.61, "away_prob": 0.39, "game_pk": 123},
+            return_value={"home_prob": 0.95, "away_prob": 0.05, "game_pk": 123},
         ), patch(
             "backend.models.sports.run_shadow_mlb._resolve_event_times",
             return_value=(datetime.now(timezone.utc), future),
@@ -488,11 +498,11 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
         self.assertEqual(metadata["match_id"], "match-phase4-123")
         self.assertEqual(metadata["game_pk"], 123)
         self.assertEqual(metadata["selected_team"], "New York Yankees")
-        self.assertAlmostEqual(metadata["raw_model_prob"], 0.61)
-        self.assertAlmostEqual(metadata["market_prob_baseline"], 0.41)
-        self.assertAlmostEqual(metadata["model_weight"], 0.35)
+        self.assertAlmostEqual(metadata["raw_model_prob"], 0.95)
+        self.assertAlmostEqual(metadata["market_prob_baseline"], 0.19)
+        self.assertAlmostEqual(metadata["model_weight"], 0.10)
         self.assertAlmostEqual(
-            metadata["model_prob"], 0.35 * 0.61 + 0.65 * 0.41
+            metadata["model_prob"], 0.10 * 0.95 + 0.90 * 0.19
         )
 
     def test_selects_highest_positive_net_edge_not_cheapest_underdog(self):
@@ -523,8 +533,8 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
             if venue == "polymarket":
                 # Favorite home: higher ask but strong positive edge
                 return {
-                    "best_bid": 0.50,
-                    "best_ask": 0.55,
+                    "best_bid": 0.23,
+                    "best_ask": 0.25,
                     "ask_size": 100.0,
                     "book_timestamp": now,
                     "received_timestamp": now,
@@ -568,7 +578,7 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
 
         with isolate_clv_db(), patch(
             "backend.models.sports.run_shadow_mlb.get_mlb_quant_probability",
-            return_value={"home_prob": 0.70, "away_prob": 0.30},
+            return_value={"home_prob": 0.99, "away_prob": 0.01},
         ), patch(
             "backend.models.sports.run_shadow_mlb._resolve_event_times",
             return_value=(now, future),
@@ -668,8 +678,8 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
         router = self._router(
             poly_markets=[poly_mkt],
             book={
-                "best_bid": 0.41,
-                "best_ask": 0.44,
+                "best_bid": 0.18,
+                "best_ask": 0.20,
                 "ask_size": 77.0,
                 "book_timestamp": now,
                 "received_timestamp": now,
@@ -677,7 +687,7 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
         )
         with isolate_clv_db(), patch(
             "backend.models.sports.run_shadow_mlb.get_mlb_quant_probability",
-            return_value={"home_prob": 0.65, "away_prob": 0.35},
+            return_value={"home_prob": 0.99, "away_prob": 0.01},
         ), patch(
             "backend.models.sports.run_shadow_mlb._resolve_event_times",
             return_value=(now - timedelta(seconds=30), future),
@@ -690,9 +700,9 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
                     router=router, db=MagicMock(), bankroll=1000.0, slate=slate
                 )
             )
-        self.assertEqual(captured["best_ask"], 0.44)
-        self.assertEqual(captured["best_bid"], 0.41)
-        self.assertAlmostEqual(captured["spread"], 0.03)
+        self.assertEqual(captured["best_ask"], 0.20)
+        self.assertEqual(captured["best_bid"], 0.18)
+        self.assertAlmostEqual(captured["spread"], 0.02)
         self.assertEqual(captured["visible_depth"], 77.0)
         self.assertEqual(captured["outcome_id"], "tok_home")
         self.assertEqual(captured["snapshot"], now)

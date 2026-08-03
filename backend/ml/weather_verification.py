@@ -184,6 +184,58 @@ def backfill_actuals(max_rows: int = 100) -> int:
 
     if updated:
         logger.info(f"weather_verification: backfilled actuals on {updated} rows.")
+    resolved_predictions = resolve_prediction_actuals(db=db)
+    if resolved_predictions:
+        logger.info(
+            "weather_verification: resolved %s all-bucket prediction rows.",
+            resolved_predictions,
+        )
+    return updated
+
+
+def resolve_prediction_actuals(*, db=None, max_rows: int = 500) -> int:
+    """Grade all weather buckets, including outcomes that were never selected."""
+    from backend.ml.prediction_evaluation import resolve_weather_prediction_rows
+
+    db = db or get_db()
+    oldest = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
+    try:
+        rows = (
+            db.table("weather_verification")
+            .select("station_id,target_date,actual_high,actual_low")
+            .gte("target_date", oldest)
+            .order("target_date", desc=True)
+            .limit(max_rows)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        logger.warning("Weather prediction actual lookup failed: %s", exc)
+        return 0
+
+    seen: set[tuple[str, str, str]] = set()
+    updated = 0
+    for row in rows:
+        station = row.get("station_id")
+        target_date = row.get("target_date")
+        if not station or not target_date:
+            continue
+        if isinstance(target_date, date_type):
+            target_date = target_date.isoformat()
+        for metric, column in (("high", "actual_high"), ("low", "actual_low")):
+            actual = row.get(column)
+            key = (str(station), str(target_date), metric)
+            if actual is None or key in seen:
+                continue
+            seen.add(key)
+            updated += resolve_weather_prediction_rows(
+                db,
+                station=str(station),
+                target_date=str(target_date),
+                metric=metric,
+                actual=float(actual),
+            )
     return updated
 
 

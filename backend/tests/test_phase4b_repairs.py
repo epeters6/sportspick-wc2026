@@ -201,8 +201,8 @@ class TestDurableShadowExposure(unittest.TestCase):
         router.poly.fetch_markets = AsyncMock(return_value=[])
         router.get_top_of_book = AsyncMock(
             return_value={
-                "best_ask": 0.40,
-                "best_bid": 0.38,
+                "best_ask": 0.20,
+                "best_bid": 0.18,
                 "ask_size": 500.0,
                 "book_timestamp": book_ts,
                 "received_timestamp": book_ts,
@@ -222,7 +222,7 @@ class TestDurableShadowExposure(unittest.TestCase):
         with isolate_clv_db(), patch(
             "backend.models.sports.run_shadow_mlb._moneyline_probs",
             return_value=(
-                {"home_prob": 0.65, "away_prob": 0.35, "game_pk": 716001},
+                {"home_prob": 0.99, "away_prob": 0.01, "game_pk": 716001},
                 {
                     "model_version": "t",
                     "feature_version": "t",
@@ -292,15 +292,15 @@ class TestDurableShadowExposure(unittest.TestCase):
         )
         book_ts = datetime.now(timezone.utc)
         good = {
-            "best_ask": 0.40,
-            "best_bid": 0.38,
+            "best_ask": 0.20,
+            "best_bid": 0.18,
             "ask_size": 500.0,
             "book_timestamp": book_ts,
             "received_timestamp": book_ts,
         }
         bad_refresh = {
-            "best_ask": 0.40,
-            "best_bid": 0.38,
+            "best_ask": 0.20,
+            "best_bid": 0.18,
             "ask_size": 0.0,  # zero refreshed depth → fail closed
             "book_timestamp": book_ts,
             "received_timestamp": book_ts,
@@ -314,7 +314,7 @@ class TestDurableShadowExposure(unittest.TestCase):
         with isolate_clv_db(), patch(
             "backend.models.sports.run_shadow_mlb._moneyline_probs",
             return_value=(
-                {"home_prob": 0.65, "away_prob": 0.35, "game_pk": 716001},
+                {"home_prob": 0.99, "away_prob": 0.01, "game_pk": 716001},
                 {
                     "model_version": "t",
                     "feature_version": "t",

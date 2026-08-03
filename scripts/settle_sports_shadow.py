@@ -138,6 +138,14 @@ def settle_pending(db=None, *, now: datetime | None = None) -> dict[str, Any]:
                 "settlement_source": SETTLEMENT_SOURCE,
             }
         ).eq("candidate_id", candidate_id).execute()
+        from backend.ml.prediction_evaluation import resolve_mlb_prediction_rows
+
+        resolve_mlb_prediction_rows(
+            db,
+            game_pk=stored_pk,
+            winner=str(match.get("winner")),
+            resolved_at=now,
+        )
         summary["settled"] += 1
         summary[status] += 1
     return summary

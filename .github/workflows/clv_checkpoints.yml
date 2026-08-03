@@ -5,7 +5,9 @@ name: CLV Checkpoints
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    # Offset from the top of the hour to reduce GitHub scheduler congestion.
+    # Supabase Cron is primary; this remains a five-minute fallback.
+    - cron: '2-57/5 * * * *'
   workflow_dispatch:
 
 jobs:

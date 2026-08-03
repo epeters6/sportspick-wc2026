@@ -20,8 +20,8 @@ ALTER TABLE model_predictions ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "service_role_all_model_predictions" ON model_predictions;
 CREATE POLICY "service_role_all_model_predictions"
-    ON model_predictions FOR ALL USING (auth.role() = 'service_role');
+    ON model_predictions FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "public_read_model_predictions" ON model_predictions;
 CREATE POLICY "public_read_model_predictions"
-    ON model_predictions FOR SELECT USING (true);
+    ON model_predictions FOR SELECT TO anon, authenticated USING (true);

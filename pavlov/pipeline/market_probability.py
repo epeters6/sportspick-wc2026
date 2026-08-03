@@ -2,14 +2,16 @@ from typing import List, Tuple
 from loguru import logger
 from pavlov.pipeline.probability_model import validate_probability_vector
 
-# Default Lambda values per implementation plan
+# Calibration v2: the market remains the baseline until the weather model beats
+# it out of sample.  The former 45-55% model weights were larger than the
+# measured edge and amplified tail-bucket overconfidence.
 LAMBDA_DEFAULTS = {
-    "same_day_with_reliable_nowcast": 0.55,
-    "day_ahead_near_mean": 0.45,
-    "day_ahead_tail_bucket": 0.30,
-    "two_day_near_mean": 0.35,
-    "two_day_tail_bucket": 0.25,
-    "three_to_five_day": 0.20,
+    "same_day_with_reliable_nowcast": 0.25,
+    "day_ahead_near_mean": 0.15,
+    "day_ahead_tail_bucket": 0.10,
+    "two_day_near_mean": 0.10,
+    "two_day_tail_bucket": 0.075,
+    "three_to_five_day": 0.05,
 }
 
 def get_event_lambda(lead_days: int) -> float:

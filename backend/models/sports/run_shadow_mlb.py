@@ -42,6 +42,10 @@ from backend.ml.mlb_quant_legacy import (
     MlbQuantGameIdentityAmbiguous,
     get_mlb_quant_probability,
 )
+from backend.ml.prediction_evaluation import (
+    MLB_PREDICTION_SOURCE,
+    replace_prediction_rows,
+)
 
 PREGAME_MODEL_UNAVAILABLE = "PREGAME_MODEL_UNAVAILABLE"
 MLB_SHADOW_ZERO_PROCESSED = "MLB_SHADOW_ZERO_PROCESSED"
@@ -67,10 +71,16 @@ NY_TZ = ZoneInfo("America/New_York")
 ENABLE_PITCHER_OUTS = os.environ.get("MLB_SHADOW_PITCHER_OUTS", "0") == "1"
 try:
     MLB_MODEL_WEIGHT = min(
-        1.0, max(0.0, float(os.environ.get("MLB_MODEL_WEIGHT", "0.35")))
+        1.0, max(0.0, float(os.environ.get("MLB_MODEL_WEIGHT", "0.10")))
     )
 except ValueError:
-    MLB_MODEL_WEIGHT = 0.35
+    MLB_MODEL_WEIGHT = 0.10
+try:
+    MLB_MIN_NET_EDGE = max(
+        0.0, float(os.environ.get("MLB_MIN_NET_EDGE", "0.05"))
+    )
+except ValueError:
+    MLB_MIN_NET_EDGE = 0.05
 
 
 def _mlb_game_date(start: datetime) -> str:
@@ -212,7 +222,7 @@ def _moneyline_probs(
         "model_version": MODEL_VERSION,
         "feature_version": FEATURE_VERSION,
         "coefficient_source": COEFFICIENT_SOURCE,
-        "calibration_status": "market_shrunk_shadow_v1",
+        "calibration_status": "market_shrunk_shadow_v2",
         "model_weight": MLB_MODEL_WEIGHT,
         "market_type": "moneyline",
         "strategy": "mlb_moneyline",
@@ -678,7 +688,9 @@ async def _evaluate_venue_candidate(
     }
 
 
-def _select_best_candidate(tradeable: list[dict]) -> dict | None:
+def _select_best_candidate(
+    tradeable: list[dict], *, min_net_edge: float = MLB_MIN_NET_EDGE
+) -> dict | None:
     """
     Per team → best venue (lowest effective cost).
     Across teams → highest positive net edge.
@@ -689,10 +701,90 @@ def _select_best_candidate(tradeable: list[dict]) -> dict | None:
         prev = by_team.get(team)
         if prev is None or c["effective_cost"] < prev["effective_cost"]:
             by_team[team] = c
-    positive = [c for c in by_team.values() if c.get("net_edge", 0) > 0]
+    positive = [
+        c for c in by_team.values() if c.get("net_edge", 0) >= min_net_edge
+    ]
     if not positive:
         return None
     return max(positive, key=lambda c: c["net_edge"])
+
+
+def _record_all_game_predictions(
+    db,
+    *,
+    event_id: str,
+    game_pk: Any,
+    home: str,
+    away: str,
+    slate_date: str,
+    probs: dict,
+    candidates: list[dict],
+    selected: dict | None,
+) -> int:
+    """Persist both teams for every exact game, not just the selected edge."""
+    exact_pk = probs.get("game_pk") or game_pk
+    if exact_pk is None:
+        logger.warning("All-game MLB evaluation skipped without exact game_pk: %s", event_id)
+        return 0
+
+    rows = []
+    for team, probability in (
+        (home, float(probs["home_prob"])),
+        (away, float(probs["away_prob"])),
+    ):
+        team_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.get("tradeable") and candidate.get("selected_team") == team
+        ]
+        best_market = min(
+            team_candidates,
+            key=lambda candidate: candidate.get("effective_cost", float("inf")),
+            default=None,
+        )
+        market_probability = (
+            best_market.get("market_prob_baseline") if best_market else None
+        )
+        effective_cost = best_market.get("effective_cost") if best_market else None
+        rows.append(
+            {
+                "outcome": team,
+                # Raw model probability is the stable quantity used to compare
+                # candidate blend weights without selected-bet bias.
+                "prob": probability,
+                "market_price": market_probability,
+                "edge": (
+                    probability - float(effective_cost)
+                    if effective_cost is not None
+                    else None
+                ),
+                "metadata": {
+                    "model_version": MODEL_VERSION,
+                    "feature_version": FEATURE_VERSION,
+                    "calibration_status": "all_game_raw_v2",
+                    "game_pk": exact_pk,
+                    "event_id": event_id,
+                    "slate_date": slate_date,
+                    "home_team": home,
+                    "away_team": away,
+                    "selected_team": team,
+                    "market_prob_baseline": market_probability,
+                    "effective_cost": effective_cost,
+                    "venue": best_market.get("venue") if best_market else None,
+                    "decision_prob": best_market.get("model_prob") if best_market else None,
+                    "model_weight": MLB_MODEL_WEIGHT,
+                    "selected": bool(selected is not None and best_market is selected),
+                    "min_net_edge": MLB_MIN_NET_EDGE,
+                },
+            }
+        )
+    return replace_prediction_rows(
+        db,
+        source=MLB_PREDICTION_SOURCE,
+        domain="sports",
+        event_key=f"mlb:{exact_pk}",
+        rows=rows,
+    )
 
 
 async def run_mlb_moneyline_shadow(
@@ -713,7 +805,7 @@ async def run_mlb_moneyline_shadow(
         max_platform_exposure_pct=0.2,
         max_daily_loss_pct=0.05,
         max_weekly_loss_pct=0.1,
-        min_net_edge=0.015,
+        min_net_edge=MLB_MIN_NET_EDGE,
         min_log_growth_delta=0.001,
     )
 
@@ -730,6 +822,7 @@ async def run_mlb_moneyline_shadow(
     rejected = 0
     exposed_events: set[str] = set()
     candidate_evaluations = 0
+    prediction_rows = 0
 
     # Fetch Kalshi MLB slate + Polymarket MLB universe once per run
     try:
@@ -767,22 +860,6 @@ async def run_mlb_moneyline_shadow(
         open_stake = durable_open_shadow_event_exposure(db, event_id)
         event_cap = float(risk_caps.get_event_exposure_cap_dollars(bankroll))
         remaining_event_cap = event_cap - float(open_stake)
-        if remaining_event_cap <= 0:
-            logger.info(
-                f"{DUPLICATE_SHADOW_EXPOSURE}: {event_id} "
-                f"open_stake={open_stake} event_cap={event_cap}"
-            )
-            poly_stats.reject(DUPLICATE_SHADOW_EXPOSURE)
-            kalshi_stats.reject(DUPLICATE_SHADOW_EXPOSURE)
-            exposed_events.add(event_id)
-            rejected += 1
-            continue
-        if open_stake > 0:
-            logger.info(
-                f"REPEAT_SHADOW_PREDICTION: {event_id} open_stake={open_stake} "
-                f"remaining_event_cap={remaining_event_cap:.2f}"
-            )
-
         # Shared once-per-run universes; filter/match per game (no per-game re-search)
         markets: list = list(kalshi_slate) + list(poly_universe)
 
@@ -828,6 +905,32 @@ async def run_mlb_moneyline_shadow(
                     venue_candidates.append(ev)
 
         tradeable = [c for c in venue_candidates if c.get("tradeable")]
+        best = _select_best_candidate(
+            tradeable, min_net_edge=risk_caps.min_net_edge
+        )
+        prediction_rows += _record_all_game_predictions(
+            db,
+            event_id=event_id,
+            game_pk=game_pk,
+            home=home,
+            away=away,
+            slate_date=slate_date,
+            probs=probs,
+            candidates=venue_candidates,
+            selected=best,
+        )
+        # One durable position per game. Repeated workflow runs still refresh
+        # the all-game evaluation vector above, but never compound exposure.
+        if open_stake > 0:
+            logger.info(
+                f"{DUPLICATE_SHADOW_EXPOSURE}: {event_id} "
+                f"open_stake={open_stake} event_cap={event_cap}"
+            )
+            poly_stats.reject(DUPLICATE_SHADOW_EXPOSURE)
+            kalshi_stats.reject(DUPLICATE_SHADOW_EXPOSURE)
+            exposed_events.add(event_id)
+            rejected += 1
+            continue
         if not tradeable:
             for c in venue_candidates:
                 logger.info(
@@ -837,10 +940,10 @@ async def run_mlb_moneyline_shadow(
             rejected += 1
             continue
 
-        best = _select_best_candidate(tradeable)
         if best is None:
             logger.info(
-                f"NO_POSITIVE_NET_EDGE: {home} vs {away}; "
+                f"NET_EDGE_BELOW_THRESHOLD: {home} vs {away} "
+                f"threshold={risk_caps.min_net_edge:.4f}; "
                 f"candidates={[ (c['venue'], c['selected_team'], round(c['net_edge'], 4)) for c in tradeable ]}"
             )
             rejected += 1
@@ -924,10 +1027,11 @@ async def run_mlb_moneyline_shadow(
         best["timestamp_source"] = (
             "orderbook_timestamp" if best["book_ts"] is not None else "received_timestamp"
         )
-        if best["net_edge"] <= 0:
+        if best["net_edge"] < risk_caps.min_net_edge:
             logger.info(
-                f"NO_POSITIVE_NET_EDGE after re-fetch: {home} vs {away} "
-                f"net_edge={best['net_edge']:.4f}"
+                f"NET_EDGE_BELOW_THRESHOLD after re-fetch: {home} vs {away} "
+                f"net_edge={best['net_edge']:.4f} "
+                f"threshold={risk_caps.min_net_edge:.4f}"
             )
             rejected += 1
             exposed_events.add(event_id)
@@ -1070,6 +1174,7 @@ async def run_mlb_moneyline_shadow(
         "processed": processed,
         "rejected": rejected,
         "candidate_evaluations": candidate_evaluations,
+        "prediction_rows": prediction_rows,
         "exposed_events": len(exposed_events),
         "polymarket_universe_size": len(poly_universe),
         "by_venue": {
