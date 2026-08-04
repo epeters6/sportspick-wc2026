@@ -130,8 +130,7 @@ async function updateRow(
   const response = await fetch(url, {
     method: "PATCH",
     headers: {
-      apikey: serviceKey,
-      Authorization: `Bearer ${serviceKey}`,
+      ...adminHeaders(serviceKey),
       "Content-Type": "application/json",
       Prefer: "return=representation",
     },
@@ -156,6 +155,45 @@ function constantTimeEqual(left: string, right: string): boolean {
   return difference === 0;
 }
 
+function parseNamedKeyMap(environmentName: string): Record<string, string> {
+  const raw = Deno.env.get(environmentName);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] =>
+          typeof entry[1] === "string" && entry[1].length > 0,
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function acceptedCallerKeys(): string[] {
+  const keys = Object.values(parseNamedKeyMap("SUPABASE_PUBLISHABLE_KEYS"));
+  const legacyAnon = Deno.env.get("SUPABASE_ANON_KEY");
+  if (legacyAnon) keys.push(legacyAnon);
+  return keys;
+}
+
+function adminKey(): string | null {
+  const configured = parseNamedKeyMap("SUPABASE_SECRET_KEYS");
+  const modern = configured.default ?? Object.values(configured)[0];
+  return modern ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? null;
+}
+
+function adminHeaders(key: string): Record<string, string> {
+  const headers: Record<string, string> = { apikey: key };
+  // Modern sb_secret keys belong only in apikey. Legacy service_role keys are
+  // JWTs and still require the Authorization header for PostgREST.
+  if (!key.startsWith("sb_secret_")) {
+    headers.Authorization = `Bearer ${key}`;
+  }
+  return headers;
+}
+
 Deno.serve(async (request: Request) => {
   if (request.method !== "POST") {
     return new Response(JSON.stringify({ error: "method_not_allowed" }), {
@@ -165,16 +203,16 @@ Deno.serve(async (request: Request) => {
   }
 
   const baseUrl = Deno.env.get("SUPABASE_URL");
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  const schedulerSecret = Deno.env.get("CLV_SCHEDULER_SECRET");
-  if (!baseUrl || !serviceKey || !schedulerSecret) {
+  const serviceKey = adminKey();
+  if (!baseUrl || !serviceKey) {
     return new Response(JSON.stringify({ error: "missing_supabase_environment" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
     });
   }
-  const suppliedSecret = request.headers.get("x-clv-scheduler-secret") ?? "";
-  if (!constantTimeEqual(suppliedSecret, schedulerSecret)) {
+  const suppliedKey = request.headers.get("apikey") ?? "";
+  const callerKeys = acceptedCallerKeys();
+  if (!callerKeys.some((key) => constantTimeEqual(suppliedKey, key))) {
     return new Response(JSON.stringify({ error: "unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
@@ -199,10 +237,7 @@ Deno.serve(async (request: Request) => {
   query.searchParams.set("limit", String(BATCH_SIZE));
 
   const rowsResponse = await fetch(query, {
-    headers: {
-      apikey: serviceKey,
-      Authorization: `Bearer ${serviceKey}`,
-    },
+    headers: adminHeaders(serviceKey),
     signal: AbortSignal.timeout(8000),
   });
   if (!rowsResponse.ok) {

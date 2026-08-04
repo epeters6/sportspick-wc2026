@@ -1,10 +1,13 @@
 -- Calibration v2 evaluation support + durable one-minute CLV scheduler.
--- Required Vault secrets: clv_project_url, clv_anon_key, and
--- clv_scheduler_secret. Set the same scheduler secret as CLV_SCHEDULER_SECRET
--- in the Edge Function environment.
+-- Required Vault secrets: clv_project_url and clv_publishable_key.
+-- The function validates the publishable key itself and is deployed with
+-- platform verify_jwt disabled because modern API keys are not JWTs.
 
-create extension if not exists pg_cron;
-create extension if not exists pg_net with schema extensions;
+create extension if not exists pg_cron with schema pg_catalog;
+create extension if not exists pg_net;
+
+grant usage on schema cron to postgres;
+grant all privileges on all tables in schema cron to postgres;
 
 alter table public.model_predictions enable row level security;
 
@@ -15,13 +18,6 @@ create policy "service_role_all_model_predictions"
     to service_role
     using (true)
     with check (true);
-
-drop policy if exists "public_read_model_predictions" on public.model_predictions;
-create policy "public_read_model_predictions"
-    on public.model_predictions
-    for select
-    to anon, authenticated
-    using (true);
 
 create index if not exists idx_model_predictions_source_event
     on public.model_predictions (source, event_key);
@@ -44,17 +40,7 @@ select cron.schedule(
             'apikey', (
                 select decrypted_secret
                 from vault.decrypted_secrets
-                where name = 'clv_anon_key'
-            ),
-            'Authorization', 'Bearer ' || (
-                select decrypted_secret
-                from vault.decrypted_secrets
-                where name = 'clv_anon_key'
-            ),
-            'x-clv-scheduler-secret', (
-                select decrypted_secret
-                from vault.decrypted_secrets
-                where name = 'clv_scheduler_secret'
+                where name = 'clv_publishable_key'
             )
         ),
         body := jsonb_build_object('scheduled_at', now()),
@@ -64,10 +50,7 @@ select cron.schedule(
         select 1 from vault.decrypted_secrets where name = 'clv_project_url'
     )
       and exists (
-        select 1 from vault.decrypted_secrets where name = 'clv_anon_key'
-    )
-      and exists (
-        select 1 from vault.decrypted_secrets where name = 'clv_scheduler_secret'
+        select 1 from vault.decrypted_secrets where name = 'clv_publishable_key'
     );
     $job$
 );
