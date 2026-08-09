@@ -22,6 +22,9 @@ from backend.trading.autobet_learning import (
 )
 
 REPORT_TZ = ZoneInfo("America/New_York")
+DISCORD_EMBED_DESCRIPTION_LIMIT = 4096
+GUARDIAN_REASON_DISPLAY_LIMIT = 5
+GUARDIAN_REASON_TEXT_LIMIT = 1000
 
 STRATEGY_LABELS = {
     "legacy_consensus_mlb": "Legacy MLB — verified only",
@@ -95,6 +98,26 @@ def _fmt_line(label: str, aggregate: dict[str, Any], *, phase: str) -> str:
         f"risked `${aggregate['staked']:.2f}` · "
         f"P&L `${aggregate['pnl']:+.2f}` · ROI `{roi}`"
     )
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    suffix = "\n… (truncated to Discord limit)"
+    return value[: limit - len(suffix)].rstrip() + suffix
+
+
+def _guardian_reason_text(reasons: list[Any]) -> str:
+    normalized = [str(reason).strip() for reason in reasons if str(reason).strip()]
+    if not normalized:
+        return ""
+
+    displayed = list(reversed(normalized[-GUARDIAN_REASON_DISPLAY_LIMIT:]))
+    if len(normalized) > len(displayed):
+        prefix = f"Guardian reasons (latest {len(displayed)} of {len(normalized)}): "
+    else:
+        prefix = "Guardian reasons: "
+    return _truncate_text(prefix + "; ".join(displayed), GUARDIAN_REASON_TEXT_LIMIT)
 
 
 def _fetch_phase4_rows(
@@ -266,18 +289,22 @@ def build_embed(report: dict[str, Any]) -> dict[str, Any]:
             "Phase 4 live remains blocked until sports validation gates pass.",
         ]
     )
-    if report["guardian"].get("reasons"):
-        lines.append(
-            "Guardian reasons: " + "; ".join(report["guardian"].get("reasons") or [])
-        )
+    guardian_reason_text = _guardian_reason_text(
+        report["guardian"].get("reasons") or []
+    )
+    if guardian_reason_text:
+        lines.append(guardian_reason_text)
 
     total_pnl = sum(
         _agg(rows)["pnl"] for rows in report["by_strategy"].values()
     )
     color = 0x2ECC71 if total_pnl > 0 else 0xE74C3C if total_pnl < 0 else 0x95A5A6
+    description = _truncate_text(
+        "\n".join(lines), DISCORD_EMBED_DESCRIPTION_LIMIT
+    )
     return {
         "title": "Daily Settlement Integrity Report",
-        "description": "\n".join(lines),
+        "description": description,
         "color": color,
         "footer": {
             "text": "Legacy and Phase 4 results are intentionally separated"

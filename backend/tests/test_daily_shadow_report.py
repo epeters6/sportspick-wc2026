@@ -4,7 +4,12 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from scripts.daily_shadow_report import build_embed, build_report, previous_local_day
+from scripts.daily_shadow_report import (
+    DISCORD_EMBED_DESCRIPTION_LIMIT,
+    build_embed,
+    build_report,
+    previous_local_day,
+)
 
 
 class TestDailyShadowReport(unittest.TestCase):
@@ -81,6 +86,43 @@ class TestDailyShadowReport(unittest.TestCase):
         self.assertIn("Weather low", embed["description"])
         self.assertIn("Live trading status: **OFF**", embed["description"])
         self.assertNotIn("READY FOR LIVE", embed["description"])
+
+    def test_embed_bounds_long_sticky_guardian_history(self):
+        report = {
+            "report_date": datetime(2026, 8, 8, tzinfo=timezone.utc).date(),
+            "window_start_utc": datetime(2026, 8, 8, 4, tzinfo=timezone.utc),
+            "window_end_utc": datetime(2026, 8, 9, 4, tzinfo=timezone.utc),
+            "by_strategy": {
+                strategy: []
+                for strategy in (
+                    "legacy_consensus_mlb",
+                    "phase4_mlb_moneyline",
+                    "weather_high",
+                    "weather_low",
+                    "legacy_consensus_football",
+                )
+            },
+            "excluded_by_strategy": {},
+            "integrity_excluded_count": 0,
+            "integrity_exclusion_reasons": {},
+            "open_count": 0,
+            "guardian": {
+                "halted": True,
+                "reasons": [
+                    f"Historical sticky halt reason {index}: " + ("detail " * 30)
+                    for index in range(100)
+                ],
+            },
+            "live_enabled": False,
+            "readiness": {"message": "legacy blocked"},
+        }
+
+        description = build_embed(report)["description"]
+
+        self.assertLessEqual(len(description), DISCORD_EMBED_DESCRIPTION_LIMIT)
+        self.assertIn("Guardian reasons (latest 5 of 100)", description)
+        self.assertIn("Historical sticky halt reason 99", description)
+        self.assertNotIn("Historical sticky halt reason 0:", description)
 
 
 if __name__ == "__main__":
