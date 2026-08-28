@@ -11,6 +11,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.db import get_db
+from backend.ml.prediction_evaluation import resolve_mlb_prediction_backlog
 from backend.trading.market_matcher import _canonical
 
 SETTLEMENT_SOURCE = "exact_match_id_game_pk_v1"
@@ -62,6 +63,7 @@ def fetch_pending(db) -> list[dict]:
 def settle_pending(db=None, *, now: datetime | None = None) -> dict[str, Any]:
     db = db or get_db()
     now = now or datetime.now(timezone.utc)
+    prediction_backlog = resolve_mlb_prediction_backlog(db, resolved_at=now)
     obligations = fetch_pending(db)
     match_ids = sorted(
         {str(row["match_id"]) for row in obligations if row.get("match_id")}
@@ -86,6 +88,7 @@ def settle_pending(db=None, *, now: datetime | None = None) -> dict[str, Any]:
         "won": 0,
         "lost": 0,
         "failures": {},
+        "prediction_backlog": prediction_backlog,
     }
 
     def fail(reason: str, candidate_id: Any) -> None:
@@ -138,14 +141,6 @@ def settle_pending(db=None, *, now: datetime | None = None) -> dict[str, Any]:
                 "settlement_source": SETTLEMENT_SOURCE,
             }
         ).eq("candidate_id", candidate_id).execute()
-        from backend.ml.prediction_evaluation import resolve_mlb_prediction_rows
-
-        resolve_mlb_prediction_rows(
-            db,
-            game_pk=stored_pk,
-            winner=str(match.get("winner")),
-            resolved_at=now,
-        )
         summary["settled"] += 1
         summary[status] += 1
     return summary

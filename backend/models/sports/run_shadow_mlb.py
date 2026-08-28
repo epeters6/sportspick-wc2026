@@ -46,6 +46,7 @@ from backend.ml.prediction_evaluation import (
     MLB_PREDICTION_SOURCE,
     replace_prediction_rows,
 )
+from backend.ml.mlb_calibration import learn_mlb_market_blend
 
 PREGAME_MODEL_UNAVAILABLE = "PREGAME_MODEL_UNAVAILABLE"
 MLB_SHADOW_ZERO_PROCESSED = "MLB_SHADOW_ZERO_PROCESSED"
@@ -538,6 +539,7 @@ async def _evaluate_venue_candidate(
     model_prob: float,
     start_time: datetime,
     stats: VenueStats,
+    model_weight: float = MLB_MODEL_WEIGHT,
 ) -> dict | None:
     matched = match_mlb_moneyline_contract(
         markets=markets,
@@ -642,7 +644,10 @@ async def _evaluate_venue_candidate(
 
     try:
         adjusted_prob, market_baseline = shrink_mlb_probability(
-            float(model_prob), float(best_bid), float(best_ask)
+            float(model_prob),
+            float(best_bid),
+            float(best_ask),
+            model_weight=model_weight,
         )
     except ValueError as exc:
         stats.reject(str(exc))
@@ -675,7 +680,7 @@ async def _evaluate_venue_candidate(
         "model_prob": adjusted_prob,
         "raw_model_prob": float(model_prob),
         "market_prob_baseline": market_baseline,
-        "model_weight": MLB_MODEL_WEIGHT,
+        "model_weight": model_weight,
         "selected_team": selected_team,
         "missing_orderbook_timestamp": book_ts is None,
         "timestamp_source": (
@@ -720,11 +725,12 @@ def _record_all_game_predictions(
     probs: dict,
     candidates: list[dict],
     selected: dict | None,
+    blend_metadata: dict[str, Any] | None = None,
 ) -> int:
     """Persist both teams for every exact game, not just the selected edge."""
     exact_pk = probs.get("game_pk") or game_pk
     if exact_pk is None:
-        logger.warning("All-game MLB evaluation skipped without exact game_pk: %s", event_id)
+        logger.warning("All-game MLB evaluation skipped without exact game_pk: {}", event_id)
         return 0
 
     rows = []
@@ -772,7 +778,12 @@ def _record_all_game_predictions(
                     "effective_cost": effective_cost,
                     "venue": best_market.get("venue") if best_market else None,
                     "decision_prob": best_market.get("model_prob") if best_market else None,
-                    "model_weight": MLB_MODEL_WEIGHT,
+                    "model_weight": (
+                        best_market.get("model_weight")
+                        if best_market
+                        else (blend_metadata or {}).get("model_weight", MLB_MODEL_WEIGHT)
+                    ),
+                    **(blend_metadata or {}),
                     "selected": bool(selected is not None and best_market is selected),
                     "min_net_edge": MLB_MIN_NET_EDGE,
                 },
@@ -798,6 +809,21 @@ async def run_mlb_moneyline_shadow(
     router = router or VenueRouter()
     db = db if db is not None else get_db()
     bankroll = float(bankroll if bankroll is not None else _current_bankroll(db))
+    blend_calibration = learn_mlb_market_blend(
+        db,
+        fallback_weight=MLB_MODEL_WEIGHT,
+    )
+    blend_metadata = blend_calibration.as_metadata()
+    model_weight = blend_calibration.model_weight
+    logger.info(
+        "MLB blend calibration status={} weight={:.4f} events={} "
+        "raw_brier={} market_brier={}",
+        blend_calibration.status,
+        model_weight,
+        blend_calibration.sample_events,
+        blend_calibration.raw_brier,
+        blend_calibration.market_brier,
+    )
     risk_caps = RiskCaps(
         max_event_exposure_pct=0.05,
         max_outcome_exposure_pct=0.02,
@@ -877,6 +903,7 @@ async def run_mlb_moneyline_shadow(
             kalshi_stats.reject(reason)
             rejected += 1
             continue
+        meta = {**meta, **blend_metadata}
 
         venue_candidates: list[dict] = []
         for selected in (home, away):
@@ -894,6 +921,7 @@ async def run_mlb_moneyline_shadow(
                     model_prob=model_prob,
                     start_time=start_time,
                     stats=stats,
+                    model_weight=model_weight,
                 )
                 if ev:
                     ev["model_meta"] = {
@@ -918,6 +946,7 @@ async def run_mlb_moneyline_shadow(
             probs=probs,
             candidates=venue_candidates,
             selected=best,
+            blend_metadata=blend_metadata,
         )
         # One durable position per game. Repeated workflow runs still refresh
         # the all-game evaluation vector above, but never compound exposure.
@@ -1011,6 +1040,7 @@ async def run_mlb_moneyline_shadow(
                 float(best["raw_model_prob"]),
                 best["best_bid"],
                 best["best_ask"],
+                model_weight=model_weight,
             )
         except ValueError as exc:
             stats = poly_stats if best["venue"] == "polymarket" else kalshi_stats
@@ -1175,6 +1205,7 @@ async def run_mlb_moneyline_shadow(
         "rejected": rejected,
         "candidate_evaluations": candidate_evaluations,
         "prediction_rows": prediction_rows,
+        "blend_calibration": blend_metadata,
         "exposed_events": len(exposed_events),
         "polymarket_universe_size": len(poly_universe),
         "by_venue": {

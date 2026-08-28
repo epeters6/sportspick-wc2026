@@ -3,6 +3,7 @@ Sync weather model predictions to the unified model_predictions table and execut
 Revised architecture using Bayesian probability shrinkage, full event vectors, and multi-outcome Kelly optimization.
 """
 from loguru import logger
+import math
 import traceback
 import sys
 import os
@@ -72,6 +73,7 @@ from backend.ml.prediction_evaluation import (
     WEATHER_PREDICTION_SOURCE,
     replace_prediction_rows,
 )
+from backend.ml.weather_execution_calibration import load_weather_execution_calibrator
 
 
 WEATHER_MODEL_VERSION = "weather_calibrated_v2"
@@ -118,10 +120,14 @@ def record_weather_prediction_vector(
     theoretical_shares: list[float],
     lead_days: int,
     calibration_metadata: dict,
+    execution_probabilities: list[float] | None = None,
+    execution_calibrations: list[dict] | None = None,
 ) -> int:
     """Persist every bucket, including rejected/non-selected outcomes."""
     event_key = f"weather:{platform}:{station}:{date_str}:{metric}"
     rows = []
+    execution_probabilities = execution_probabilities or decision_probabilities
+    execution_calibrations = execution_calibrations or [{} for _ in events]
     for i, event in enumerate(events):
         rows.append(
             {
@@ -133,6 +139,7 @@ def record_weather_prediction_vector(
                     "model_version": WEATHER_MODEL_VERSION,
                     "raw_model_prob": raw_probabilities[i],
                     "decision_prob": decision_probabilities[i],
+                    "execution_probability": execution_probabilities[i],
                     "market_vector_prob": market_probabilities[i],
                     "executable_cost": executable_costs[i],
                     "selected": selected_shares[i] > 0,
@@ -150,6 +157,7 @@ def record_weather_prediction_vector(
                     ),
                     "bucket_label": event.bucket_label,
                     **calibration_metadata,
+                    **execution_calibrations[i],
                 },
             }
         )
@@ -402,6 +410,12 @@ async def sync_weather_predictions():
     live_max_dollars = bankroll * s.polymarket_max_position_pct
     from backend.trading.live_toggle import is_live_mode
     mode = "live" if is_live_mode(s, db) else "paper"
+    execution_calibrator = load_weather_execution_calibrator(db)
+    logger.info(
+        f"Weather execution calibration loaded rows={len(execution_calibrator.rows)} "
+        f"close_clv_n={execution_calibrator.close_clv_samples} "
+        f"avg_close_clv={execution_calibrator.average_close_clv}"
+    )
     
     bets_placed = 0
 
@@ -601,9 +615,64 @@ async def sync_weather_predictions():
             )
             x_opt = limit_to_one_weather_position(x_opt, P_adj, Q_exec)
             theoretical_x_opt = list(x_opt)
-            execution_enabled = metric != "low" or WEATHER_LOW_STAKES_ENABLED
-            if not execution_enabled:
-                x_opt = [0.0 for _ in x_opt]
+            execution_probabilities = list(P_adj)
+            execution_calibrations: list[dict] = [{} for _ in events]
+            execution_gate_reason: str | None = None
+            selected_indexes = [
+                i for i, shares in enumerate(theoretical_x_opt) if shares > 0
+            ]
+            if selected_indexes:
+                selected_index = selected_indexes[0]
+                selected_event = events[selected_index]
+                selected_calibration = execution_calibrator.calibrate(
+                    metric=metric,
+                    bucket_low_f=(
+                        None
+                        if selected_event.bucket_low_f == float("-inf")
+                        else selected_event.bucket_low_f
+                    ),
+                    bucket_high_f=(
+                        None
+                        if selected_event.bucket_high_f == float("inf")
+                        else selected_event.bucket_high_f
+                    ),
+                    probability=P_adj[selected_index],
+                    executable_cost=Q_exec[selected_index],
+                    min_net_edge=WEATHER_MIN_NET_EDGE,
+                )
+                execution_probabilities[selected_index] = (
+                    selected_calibration.execution_probability
+                )
+                execution_calibrations[selected_index] = (
+                    selected_calibration.as_metadata()
+                )
+                if not selected_calibration.allowed:
+                    execution_gate_reason = selected_calibration.reason
+                    x_opt = [0.0 for _ in x_opt]
+                else:
+                    base_edge = max(
+                        1e-9, P_adj[selected_index] - Q_exec[selected_index]
+                    )
+                    calibrated_edge = max(
+                        0.0,
+                        execution_probabilities[selected_index]
+                        - Q_exec[selected_index],
+                    )
+                    share_scale = min(1.0, calibrated_edge / base_edge)
+                    x_opt[selected_index] = float(
+                        math.floor(x_opt[selected_index] * share_scale)
+                    )
+                    if x_opt[selected_index] <= 0:
+                        execution_gate_reason = (
+                            "WEATHER_EXECUTION_SIZE_ZERO_AFTER_CALIBRATION"
+                        )
+                        x_opt = [0.0 for _ in x_opt]
+                    elif metric == "low" and not WEATHER_LOW_STAKES_ENABLED:
+                        execution_calibrations[selected_index][
+                            "low_execution_source"
+                        ] = "backlog_profitability_gate"
+
+            execution_enabled = execution_gate_reason is None
 
             stats["evaluation_rows"] += record_weather_prediction_vector(
                 db,
@@ -625,6 +694,8 @@ async def sync_weather_predictions():
                     "min_net_edge": WEATHER_MIN_NET_EDGE,
                     "execution_enabled": execution_enabled,
                 },
+                execution_probabilities=execution_probabilities,
+                execution_calibrations=execution_calibrations,
             )
 
             shadow_record = {
@@ -641,6 +712,8 @@ async def sync_weather_predictions():
                 "P_model": P_model,
                 "P_market": P_market,
                 "P_adj": P_adj,
+                "P_execution": execution_probabilities,
+                "execution_calibrations": execution_calibrations,
                 "lambda_confidence": get_event_lambda(lead_days),
                 "calibration": calibration_meta,
                 "metric": metric,
@@ -665,17 +738,19 @@ async def sync_weather_predictions():
                 "closing_price_snapshot": None,
             }
 
-            if not execution_enabled:
-                reason = "WEATHER_LOW_OBSERVATION_ONLY"
+            if execution_gate_reason:
+                reason = execution_gate_reason
                 stats["observation_only"] += 1
+                _record_weather_rejection(stats, reason, "calibration_reject")
                 shadow_record["rejection_reason"] = reason
                 shadow_record["would_trade"] = False
-                shadow_record["would_trade_before_observation_gate"] = (
+                shadow_record["would_trade_before_calibration_gate"] = (
                     sum(theoretical_x_opt) > 0
                 )
                 _append_weather_shadow_record(shadow_record)
                 logger.info(
-                    f"Observation-only event {city} {date_str} ({platform}, {metric})"
+                    f"Calibration-gated event {city} {date_str} "
+                    f"({platform}, {metric}): {reason}"
                 )
                 continue
             
@@ -876,7 +951,7 @@ async def sync_weather_predictions():
             fresh_q = fresh_costs[0]
             if fresh_q > q_i + 0.005:
                 reason = "PRICE_MOVED_AGAINST_US"
-            elif P_adj[i] - fresh_q < WEATHER_MIN_NET_EDGE:
+            elif execution_probabilities[i] - fresh_q < WEATHER_MIN_NET_EDGE:
                 reason = "EDGE_GONE_AFTER_REPRICE"
             else:
                 reason = ""
@@ -927,9 +1002,9 @@ async def sync_weather_predictions():
                 outcome_id="yes",
                 event_id=virtual_match_id,
                 side="YES",
-                # P_adj is the probability that actually passed selection after
-                # market shrinkage. Keep the raw ensemble probability in metadata.
-                model_prob=P_adj[i],
+                # The backlog-calibrated execution probability passed selection.
+                # Preserve pre-execution and raw probabilities in metadata.
+                model_prob=execution_probabilities[i],
                 market_prob=P_market[i],
                 executable_cost=q_i,
                 best_bid=None,
@@ -947,9 +1022,11 @@ async def sync_weather_predictions():
                 metadata={
                     "model_version": WEATHER_MODEL_VERSION,
                     "p_adj": P_adj[i],
+                    "execution_probability": execution_probabilities[i],
                     "raw_model_prob": P_model[i],
                     "candidate_id": candidate_id,
                     **calibration_meta,
+                    **execution_calibrations[i],
                 }
             )
             
@@ -1027,7 +1104,7 @@ async def sync_weather_predictions():
                 "event_start": close_time.isoformat() if close_time else None,
                 "event_start_utc": close_time.isoformat() if close_time else None,
                 "close_lead_minutes": 5,
-                "model_prob": P_adj[i],
+                "model_prob": execution_probabilities[i],
                 "raw_model_prob": P_model[i],
                 "market_prob": fill.simulated_fill_price,
                 "market_vector_prob": P_market[i],
@@ -1037,6 +1114,7 @@ async def sync_weather_predictions():
                 "metric": metric,
                 "target_date": date_str,
                 **calibration_meta,
+                **execution_calibrations[i],
             }
             clv_rec = init_weather_clv_record(
                 candidate_id=candidate_id,
@@ -1061,10 +1139,10 @@ async def sync_weather_predictions():
                 "mode": mode,
                 # Store the probability used for the decision. The raw ensemble
                 # value remains available separately for calibration analysis.
-                "model_prob": P_adj[i],
+                "model_prob": execution_probabilities[i],
                 "market_prob": P_market[i],
                 "market_price": best_ask_p,
-                "edge": P_adj[i] - q_i,
+                "edge": execution_probabilities[i] - q_i,
                 "raw_confidence": P_model[i],
                 "sport": "weather",
                 "event_date": date_str,
@@ -1080,6 +1158,7 @@ async def sync_weather_predictions():
                     "model_version": WEATHER_MODEL_VERSION,
                     "candidate_id": candidate_id,
                     "p_adj": P_adj[i],
+                    "execution_probability": execution_probabilities[i],
                     "raw_model_prob": P_model[i],
                     "market_vector_prob": P_market[i],
                     "q_exec": q_i,
@@ -1097,6 +1176,7 @@ async def sync_weather_predictions():
                     "mos_bias": mos_bias,
                     "min_net_edge": WEATHER_MIN_NET_EDGE,
                     **calibration_meta,
+                    **execution_calibrations[i],
                 }
             }
             
