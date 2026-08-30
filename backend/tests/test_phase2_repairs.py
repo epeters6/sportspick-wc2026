@@ -32,6 +32,15 @@ class TestWeatherCandidateId(unittest.TestCase):
         self.assertNotEqual(a, b)
         self.assertNotEqual(a, c)
 
+    def test_database_bet_id_is_stable_and_candidate_specific(self):
+        from backend.models.weather.sync_weather import weather_bet_id
+
+        first = weather_bet_id("kalshi:KNYC:2026-07-21:high:M1:yes:paper")
+        retry = weather_bet_id("kalshi:KNYC:2026-07-21:high:M1:yes:paper")
+        other = weather_bet_id("kalshi:KNYC:2026-07-21:high:M2:yes:paper")
+        self.assertEqual(first, retry)
+        self.assertNotEqual(first, other)
+
 
 class TestAnalyzeSportsShadowMissingManifest(unittest.TestCase):
     def test_missing_decisions_raises(self):

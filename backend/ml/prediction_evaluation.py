@@ -6,6 +6,7 @@ rows retain the latest pre-event prediction for every eligible outcome instead.
 """
 from __future__ import annotations
 
+import inspect
 import math
 import re
 from datetime import datetime, timezone
@@ -255,15 +256,14 @@ def resolve_weather_prediction_rows(
     actual: float,
     resolved_at: datetime | None = None,
 ) -> int:
-    """Resolve every venue/bucket for a verified station/metric/date."""
+    """Store station verification without treating it as a venue outcome label."""
     pattern = f"weather:%:{station}:{target_date}:{metric}"
     try:
         rows = (
             db.table("model_predictions")
-            .select("id,metadata")
+            .select("id,metadata,is_correct,resolved_at")
             .eq("source", WEATHER_PREDICTION_SOURCE)
             .like("event_key", pattern)
-            .is_("resolved_at", "null")
             .execute()
             .data
             or []
@@ -276,13 +276,30 @@ def resolve_weather_prediction_rows(
     updated = 0
     for row in rows:
         meta = row.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
         try:
             correct = _in_bucket(
                 actual, meta.get("bucket_low_f"), meta.get("bucket_high_f")
             )
+            updated_meta = dict(meta)
+            updated_meta.update(
+                {
+                    "meteorological_is_correct": correct,
+                    "meteorological_resolved_at": stamp,
+                    "meteorological_actual_f": float(actual),
+                    "meteorological_source": "station_metar",
+                }
+            )
+            payload: dict[str, Any] = {"metadata": updated_meta}
+            # Relabel legacy station-graded rows as unresolved for trading. Keep
+            # the old result above as a forecast diagnostic until the venue's
+            # exact market result is available.
+            if updated_meta.get("label_source") != "venue_official":
+                payload.update({"is_correct": None, "resolved_at": None})
             (
                 db.table("model_predictions")
-                .update({"is_correct": correct, "resolved_at": stamp})
+                .update(payload)
                 .eq("id", row["id"])
                 .execute()
             )
@@ -290,3 +307,150 @@ def resolve_weather_prediction_rows(
         except Exception as exc:
             logger.warning("Weather evaluation row settlement failed: {}", exc)
     return updated
+
+
+async def _fetch_weather_venue_resolution(
+    venue: str, market_id: str
+) -> dict | None:
+    # Lazy import avoids pulling trading clients into prediction-only jobs/tests.
+    from backend.trading.weather_settlement import (
+        check_kalshi_resolution,
+        check_polymarket_resolution,
+    )
+
+    if venue == "kalshi":
+        return await check_kalshi_resolution(market_id)
+    if venue == "polymarket":
+        return await check_polymarket_resolution(market_id)
+    return None
+
+
+async def resolve_weather_prediction_backlog(
+    db,
+    *,
+    resolved_at: datetime | None = None,
+    row_limit: int = 150,
+    eligible_only: bool = True,
+    resolution_fetcher=None,
+) -> dict[str, Any]:
+    """Relabel weather prediction history from exact official venue outcomes.
+
+    The METAR-backed fields remain in metadata for forecast diagnostics. Only
+    these official labels are eligible for execution calibration.
+    """
+    summary: dict[str, Any] = {
+        "candidate_rows": 0,
+        "resolved_rows": 0,
+        "unresolved_rows": 0,
+        "invalid_rows": 0,
+        "errors": 0,
+    }
+    try:
+        query = (
+            db.table("model_predictions")
+            .select("id,event_key,outcome,is_correct,resolved_at,metadata")
+            .eq("source", WEATHER_PREDICTION_SOURCE)
+            .is_("metadata->>label_source", "null")
+        )
+        if eligible_only:
+            query = query.eq("metadata->>eligible_before_observation_gate", "true")
+        rows = (
+            query.order("created_at")
+            .limit(max(1, int(row_limit)))
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        summary["errors"] += 1
+        logger.warning("Weather official-label backlog lookup failed: {}", exc)
+        return summary
+
+    summary["candidate_rows"] = len(rows)
+    fetcher = resolution_fetcher or _fetch_weather_venue_resolution
+    default_stamp = (resolved_at or datetime.now(timezone.utc)).astimezone(
+        timezone.utc
+    ).isoformat()
+    for row in rows:
+        metadata = row.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        event_parts = str(row.get("event_key") or "").split(":")
+        venue = str(
+            metadata.get("platform")
+            or (event_parts[1] if len(event_parts) > 1 else "")
+        ).lower()
+        market_id = str(row.get("outcome") or "")
+        if (
+            venue not in {"kalshi", "polymarket"}
+            or not market_id
+            or not row.get("id")
+        ):
+            summary["invalid_rows"] += 1
+            continue
+        try:
+            result = fetcher(venue, market_id)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as exc:
+            summary["errors"] += 1
+            logger.warning(
+                "Weather official-label fetch failed for {} {}: {}",
+                venue,
+                market_id,
+                exc,
+            )
+            continue
+        winner = str((result or {}).get("winner") or "").lower()
+        reported_market_id = str((result or {}).get("market_id") or market_id)
+        if (
+            not result
+            or result.get("resolved") is not True
+            or winner not in {"yes", "no"}
+            or reported_market_id != market_id
+        ):
+            summary["unresolved_rows"] += 1
+            continue
+
+        updated_meta = dict(metadata)
+        if (
+            row.get("is_correct") is not None
+            and "meteorological_is_correct" not in updated_meta
+        ):
+            updated_meta["meteorological_is_correct"] = row.get("is_correct") is True
+        if (
+            row.get("resolved_at")
+            and "meteorological_resolved_at" not in updated_meta
+        ):
+            updated_meta["meteorological_resolved_at"] = row.get("resolved_at")
+        updated_meta.update(
+            {
+                "label_source": "venue_official",
+                "official_venue": venue,
+                "official_market_id": market_id,
+                "official_result": winner,
+                "official_settled_at": result.get("settled_at"),
+                "official_settlement_value": result.get("settlement_value"),
+                "official_rules_primary": result.get("rules_primary"),
+            }
+        )
+        stamp = result.get("settled_at") or default_stamp
+        try:
+            (
+                db.table("model_predictions")
+                .update(
+                    {
+                        # Each stored bucket row is the YES side of that market.
+                        "is_correct": winner == "yes",
+                        "resolved_at": stamp,
+                        "metadata": updated_meta,
+                    }
+                )
+                .eq("id", row["id"])
+                .execute()
+            )
+            summary["resolved_rows"] += 1
+        except Exception as exc:
+            summary["errors"] += 1
+            logger.warning("Weather official-label update failed: {}", exc)
+    return summary

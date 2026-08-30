@@ -175,6 +175,25 @@ async def run_ml_phase() -> dict[str, int]:
             f"ROI={cal.get('simulated_roi_pct', 0):.1f}%"
         )
 
+    # Weather settlement and official-label recovery must precede calibration
+    # and placement. This also ensures a workflow retry cannot reopen exposure.
+    from backend.db import get_db
+    from backend.trading.weather_settlement import resolve_weather_autobets
+    weather_resolved = await resolve_weather_autobets()
+    print(f"  weather bets officially resolved={weather_resolved}")
+
+    from backend.ml.prediction_evaluation import resolve_weather_prediction_backlog
+    weather_labels = await resolve_weather_prediction_backlog(
+        get_db(),
+        row_limit=150,
+        eligible_only=True,
+    )
+    print(
+        "  weather official execution labels="
+        f"{weather_labels.get('resolved_rows', 0)}/"
+        f"{weather_labels.get('candidate_rows', 0)}"
+    )
+
     print("Running weather prediction model (Phase 1)...")
     try:
         # In-process so logs appear in the Actions step and repo-root imports work.
@@ -210,10 +229,6 @@ async def run_ml_phase() -> dict[str, int]:
     ab_resolved = resolve_autobets()
     print(f"  autobets resolved={ab_resolved}")
 
-    from backend.trading.weather_settlement import resolve_weather_autobets
-    w_resolved = await resolve_weather_autobets()
-    print(f"  weather bets resolved={w_resolved}")
-
     print("Running Polymarket autobet...")
     autobet_summary: dict = {}
     try:
@@ -247,6 +262,17 @@ async def run_ml_phase() -> dict[str, int]:
     from backend.ml.weather_verification import backfill_actuals
     wv_backfilled = backfill_actuals()
     print(f"  weather verification backfilled={wv_backfilled}")
+
+    weather_labels_all = await resolve_weather_prediction_backlog(
+        get_db(),
+        row_limit=100,
+        eligible_only=False,
+    )
+    print(
+        "  weather official all-candidate labels="
+        f"{weather_labels_all.get('resolved_rows', 0)}/"
+        f"{weather_labels_all.get('candidate_rows', 0)}"
+    )
 
     # Optional alerts — warn only
     print("Sending Discord alerts...")

@@ -9,7 +9,8 @@ from backend.sports_data.bet_settlement import pick_won_for_autobet
 from backend.trading.market_matcher import _canonical
 
 SETTLEMENT_VERSION = "exact_match_v2"
-WEATHER_SETTLEMENT_VERSION = "weather_actual_v2"
+WEATHER_SETTLEMENT_VERSION = "weather_venue_official_v3"
+WEATHER_STATION_SETTLEMENT_VERSION = "weather_actual_v2"
 
 EXACT_MATCH_NOT_FOUND = "EXACT_MATCH_NOT_FOUND"
 EXACT_MATCH_NOT_FINAL = "EXACT_MATCH_NOT_FINAL"
@@ -60,7 +61,10 @@ def expected_autobet_pnl(
     market_price: float,
 ) -> float:
     if won:
-        return round(shares * (1.0 - market_price), 2)
+        # ``stake`` is the durable effective cost of the fill (including any
+        # fee/slippage adjustment). A winning binary share pays $1, so using
+        # shares - stake preserves those execution costs in realized P&L.
+        return round(shares - stake, 2)
     return round(-stake, 2)
 
 
@@ -240,12 +244,13 @@ def verify_weather_autobet(
     """
     Verify a weather autobet settlement.
 
-    Prefer station-backed ``metadata.settlement`` (weather_actual_v2). For paper
-    rows created before Phase 4c, accept internally consistent legacy settlement
+    Require the exact venue's durable official outcome for current weather rows.
+    Station observations are useful forecast diagnostics, but they are not valid
+    evidence for a contract whose published resolution source can differ. For
+    paper rows created before Phase 4c, accept internally consistent legacy
     records only when ``allow_legacy_paper`` is explicitly enabled for conservative
-    bankroll/risk accounting, so the integrity rollout does not retroactively turn
-    every historical weather win into a full-stake loss. Learning/readiness callers,
-    new rows, and live rows still fail closed when durable evidence is missing.
+    bankroll/risk accounting. Learning/readiness callers, new rows, and live rows
+    still fail closed when official evidence is missing.
     """
     if not is_weather_sport(bet.get("sport")):
         return _invalid(SETTLEMENT_DATA_INCOMPLETE)
@@ -263,27 +268,22 @@ def verify_weather_autobet(
         settlement = {}
 
     won: bool | None = None
-    if settlement.get("version") == WEATHER_SETTLEMENT_VERSION and isinstance(
-        settlement.get("in_bucket"), bool
-    ):
-        actual_temp = settlement.get("actual_temp_f")
-        low = settlement.get("bucket_low_f")
-        high = settlement.get("bucket_high_f")
-        if actual_temp is not None:
-            try:
-                actual_value = float(actual_temp)
-                computed_in_bucket = (
-                    (low is None or actual_value >= float(low))
-                    and (high is None or actual_value <= float(high))
-                )
-            except (TypeError, ValueError):
-                return _invalid(SETTLEMENT_DATA_INCOMPLETE)
-            if computed_in_bucket != settlement["in_bucket"]:
-                return _invalid(WEATHER_SETTLEMENT_MISMATCH)
-        backed_yes = str(bet.get("outcome_name") or "yes").lower() == "yes"
-        won = bool(settlement["in_bucket"]) if backed_yes else not bool(
-            settlement["in_bucket"]
-        )
+    if settlement.get("version") == WEATHER_SETTLEMENT_VERSION:
+        source = str(settlement.get("source") or "").lower()
+        official_result = str(settlement.get("official_result") or "").lower()
+        settlement_market_id = str(settlement.get("market_id") or "")
+        bet_market_id = str(bet.get("market_id") or "")
+        if (
+            source not in {"kalshi_official", "polymarket_official"}
+            or official_result not in {"yes", "no"}
+            or not settlement_market_id
+            or settlement_market_id != bet_market_id
+        ):
+            return _invalid(SETTLEMENT_DATA_INCOMPLETE)
+        backed = str(bet.get("outcome_name") or "yes").lower()
+        if backed not in {"yes", "no"}:
+            return _invalid(SETTLEMENT_DATA_INCOMPLETE)
+        won = backed == official_result
     else:
         created_at = parse_timestamp(bet.get("created_at"))
         legacy_paper_row = (
@@ -358,6 +358,17 @@ def realized_settlement_pnl(bet: dict, match: Any = None) -> tuple[float, Settle
         check = verify_match_linked_autobet(bet, match)
     elif is_weather_sport(bet.get("sport")):
         check = verify_weather_autobet(bet, allow_legacy_paper=True)
+        settlement = _weather_metadata(bet).get("settlement") or {}
+        if (
+            not check.valid
+            and str(bet.get("mode") or "").lower() == "paper"
+            and isinstance(settlement, dict)
+            and settlement.get("version") == WEATHER_STATION_SETTLEMENT_VERSION
+        ):
+            # Quarantine the Phase-4 station-graded paper backlog until exact
+            # venue reconciliation. It is neither trusted profit nor real-money
+            # loss; live rows continue through conservative full-risk handling.
+            return 0.0, check
     else:
         check = _invalid(EXACT_MATCH_NOT_FOUND)
     return conservative_risk_pnl(bet, check), check

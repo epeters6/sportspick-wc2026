@@ -222,6 +222,7 @@ class TestSettlementIntegrity(unittest.TestCase):
         bet = {
             "id": "weather-1",
             "match_id": None,
+            "market_id": "KXWEATHER-1",
             "sport": "weather",
             "outcome_name": "yes",
             "stake": 5.0,
@@ -231,8 +232,10 @@ class TestSettlementIntegrity(unittest.TestCase):
             "pnl": 5.0,
             "metadata": {
                 "settlement": {
-                    "version": "weather_actual_v2",
-                    "in_bucket": True,
+                    "version": "weather_venue_official_v3",
+                    "source": "kalshi_official",
+                    "market_id": "KXWEATHER-1",
+                    "official_result": "yes",
                 }
             },
         }
@@ -242,6 +245,56 @@ class TestSettlementIntegrity(unittest.TestCase):
         pnl, check2 = realized_settlement_pnl(bet, None)
         self.assertTrue(check2.valid)
         self.assertEqual(pnl, 5.0)
+
+    def test_station_only_weather_settlement_is_not_tradable_evidence(self):
+        bet = {
+            "market_id": "KXWEATHER-OLD",
+            "sport": "weather",
+            "mode": "paper",
+            "created_at": "2026-08-29T12:00:00+00:00",
+            "outcome_name": "yes",
+            "stake": 5.0,
+            "shares": 10.0,
+            "market_price": 0.5,
+            "status": "won",
+            "pnl": 5.0,
+            "metadata": {
+                "settlement": {
+                    "version": "weather_actual_v2",
+                    "source": "station_actual",
+                    "in_bucket": True,
+                }
+            },
+        }
+        check = verify_weather_autobet(bet)
+        self.assertFalse(check.valid)
+        pnl, risk_check = realized_settlement_pnl(bet, None)
+        self.assertFalse(risk_check.valid)
+        self.assertEqual(pnl, 0.0)
+
+    def test_station_only_live_weather_settlement_remains_full_risk(self):
+        bet = {
+            "market_id": "KXWEATHER-OLD-LIVE",
+            "sport": "weather",
+            "mode": "live",
+            "created_at": "2026-08-29T12:00:00+00:00",
+            "outcome_name": "yes",
+            "stake": 5.0,
+            "shares": 10.0,
+            "market_price": 0.5,
+            "status": "won",
+            "pnl": 5.0,
+            "metadata": {
+                "settlement": {
+                    "version": "weather_actual_v2",
+                    "source": "station_actual",
+                    "in_bucket": True,
+                }
+            },
+        }
+        pnl, check = realized_settlement_pnl(bet, None)
+        self.assertFalse(check.valid)
+        self.assertEqual(pnl, -5.0)
 
     def test_legacy_weather_self_consistent_win_counts_for_bankroll(self):
         bet = {
@@ -303,6 +356,7 @@ class TestSettlementIntegrity(unittest.TestCase):
         weather_win = {
             "id": "w1",
             "match_id": None,
+            "market_id": "KXWEATHER-2",
             "sport": "weather",
             "mode": "paper",
             "created_at": "2026-07-21T12:00:00+00:00",
@@ -315,8 +369,10 @@ class TestSettlementIntegrity(unittest.TestCase):
             "resolved_at": "2026-07-24T02:01:00+00:00",
             "metadata": {
                 "settlement": {
-                    "version": "weather_actual_v2",
-                    "in_bucket": True,
+                    "version": "weather_venue_official_v3",
+                    "source": "kalshi_official",
+                    "market_id": "KXWEATHER-2",
+                    "official_result": "yes",
                 }
             },
             "matches": None,

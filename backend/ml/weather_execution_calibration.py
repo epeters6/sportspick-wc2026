@@ -253,6 +253,7 @@ def load_weather_execution_calibrator(
             .select("prob,is_correct,metadata,resolved_at")
             .eq("source", WEATHER_PREDICTION_SOURCE)
             .not_.is_("resolved_at", "null")
+            .eq("metadata->>label_source", "venue_official")
             .eq("metadata->>eligible_before_observation_gate", "true")
             .order("resolved_at", desc=True)
             .limit(max(1, int(history_limit)))

@@ -53,6 +53,7 @@ class TestGuardianSettlementIntegrity(unittest.TestCase):
     def test_weather_win_without_match_is_not_invented_loss(self):
         row = {
             "match_id": None,
+            "market_id": "KXWEATHER-3",
             "sport": "weather",
             "status": "won",
             "pnl": 5.0,
@@ -62,8 +63,10 @@ class TestGuardianSettlementIntegrity(unittest.TestCase):
             "outcome_name": "yes",
             "metadata": {
                 "settlement": {
-                    "version": "weather_actual_v2",
-                    "in_bucket": True,
+                    "version": "weather_venue_official_v3",
+                    "source": "kalshi_official",
+                    "market_id": "KXWEATHER-3",
+                    "official_result": "yes",
                 }
             },
             "matches": None,

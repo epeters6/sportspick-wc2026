@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import unittest
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from backend.ml.mlb_calibration import learn_mlb_market_blend
-from backend.ml.prediction_evaluation import resolve_mlb_prediction_backlog
+from backend.ml.prediction_evaluation import (
+    resolve_mlb_prediction_backlog,
+    resolve_weather_prediction_backlog,
+    resolve_weather_prediction_rows,
+)
 from backend.ml.weather_execution_calibration import (
     WeatherExecutionCalibrator,
     _WeatherHistoryRow,
     _probability_bin,
+    load_weather_execution_calibrator,
 )
 
 
@@ -36,6 +42,10 @@ class _Query:
         self.filters.append(("in", key, list(values)))
         return self
 
+    def like(self, key, value):
+        self.filters.append(("like", key, value))
+        return self
+
     @property
     def not_(self):
         self.filters.append(("not_next", "", None))
@@ -53,17 +63,30 @@ class _Query:
         return self
 
     def _matches(self, row):
+        def value_for(key):
+            if "->>" not in key:
+                return row.get(key)
+            root, nested = key.split("->>", 1)
+            value = (row.get(root) or {}).get(nested)
+            if isinstance(value, bool):
+                return str(value).lower()
+            return None if value is None else str(value)
+
         negate_next = False
         for operation, key, value in self.filters:
             if operation == "not_next":
                 negate_next = True
                 continue
             if operation == "eq":
-                matched = row.get(key) == value
+                matched = value_for(key) == value
             elif operation == "in":
-                matched = row.get(key) in value
+                matched = value_for(key) in value
             elif operation == "is":
-                matched = row.get(key) is None if value == "null" else row.get(key) is value
+                candidate = value_for(key)
+                matched = candidate is None if value == "null" else candidate is value
+            elif operation == "like":
+                pattern = re.escape(str(value)).replace("%", ".*")
+                matched = re.fullmatch(pattern, str(value_for(key) or "")) is not None
             else:
                 matched = True
             if negate_next:
@@ -141,7 +164,7 @@ class TestMlbBacklogTraining(unittest.TestCase):
         self.assertLess(calibration.market_brier, calibration.raw_brier)
 
 
-class TestWeatherBacklogCalibration(unittest.TestCase):
+class TestWeatherBacklogCalibration(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _row(metric, direction, probability, cost, correct):
         return _WeatherHistoryRow(
@@ -195,6 +218,99 @@ class TestWeatherBacklogCalibration(unittest.TestCase):
         self.assertTrue(result.allowed)
         self.assertGreater(result.historical_unit_roi, 0.0)
         self.assertAlmostEqual(result.execution_probability, 0.16)
+
+    def test_station_verification_is_preserved_but_not_a_trading_label(self):
+        predictions = [
+            {
+                "id": "w1",
+                "source": "weather_calibrated_v2",
+                "event_key": "weather:kalshi:KNYC:2026-08-27:high",
+                "is_correct": True,
+                "resolved_at": "2026-08-28T01:00:00+00:00",
+                "metadata": {"bucket_low_f": 89.5, "bucket_high_f": 90.5},
+            }
+        ]
+        db = _DB(model_predictions=predictions)
+        updated = resolve_weather_prediction_rows(
+            db,
+            station="KNYC",
+            target_date="2026-08-27",
+            metric="high",
+            actual=90.0,
+            resolved_at=datetime(2026, 8, 28, tzinfo=timezone.utc),
+        )
+        self.assertEqual(updated, 1)
+        self.assertIsNone(predictions[0]["is_correct"])
+        self.assertIsNone(predictions[0]["resolved_at"])
+        self.assertTrue(predictions[0]["metadata"]["meteorological_is_correct"])
+        self.assertEqual(
+            predictions[0]["metadata"]["meteorological_source"], "station_metar"
+        )
+
+    async def test_official_backlog_relabels_legacy_station_result(self):
+        predictions = [
+            {
+                "id": "w2",
+                "source": "weather_calibrated_v2",
+                "event_key": "weather:kalshi:KIAH:2026-08-29:low",
+                "outcome": "KXLOWTHOU-26AUG29-B74.5",
+                "is_correct": True,
+                "resolved_at": "2026-08-29T18:00:00+00:00",
+                "metadata": {
+                    "platform": "kalshi",
+                    "eligible_before_observation_gate": True,
+                    "metric": "low",
+                },
+            }
+        ]
+
+        async def official(venue, market_id):
+            return {
+                "resolved": True,
+                "winner": "no",
+                "market_id": market_id,
+                "settled_at": "2026-08-30T02:00:00+00:00",
+                "rules_primary": "The Weather Company CLIHOU",
+            }
+
+        summary = await resolve_weather_prediction_backlog(
+            _DB(model_predictions=predictions),
+            resolution_fetcher=official,
+        )
+        self.assertEqual(summary["resolved_rows"], 1)
+        self.assertFalse(predictions[0]["is_correct"])
+        self.assertEqual(predictions[0]["metadata"]["label_source"], "venue_official")
+        self.assertTrue(predictions[0]["metadata"]["meteorological_is_correct"])
+
+    def test_execution_calibrator_uses_only_official_labels(self):
+        base_meta = {
+            "eligible_before_observation_gate": True,
+            "metric": "high",
+            "bucket_low_f": 89.5,
+            "bucket_high_f": 90.5,
+            "executable_cost": 0.4,
+        }
+        predictions = [
+            {
+                "source": "weather_calibrated_v2",
+                "prob": 0.6,
+                "is_correct": True,
+                "resolved_at": "2026-08-30T01:00:00+00:00",
+                "metadata": {**base_meta, "label_source": "station_metar"},
+            },
+            {
+                "source": "weather_calibrated_v2",
+                "prob": 0.6,
+                "is_correct": False,
+                "resolved_at": "2026-08-30T02:00:00+00:00",
+                "metadata": {**base_meta, "label_source": "venue_official"},
+            },
+        ]
+        calibrator = load_weather_execution_calibrator(
+            _DB(model_predictions=predictions, clv_obligations=[])
+        )
+        self.assertEqual(len(calibrator.rows), 1)
+        self.assertFalse(calibrator.rows[0].correct)
 
 
 if __name__ == "__main__":

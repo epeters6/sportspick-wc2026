@@ -7,6 +7,7 @@ import math
 import traceback
 import sys
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 
@@ -180,6 +181,11 @@ def weather_candidate_id(
 ) -> str:
     """Deterministic id shared by shadow / fill / CLV / autobet metadata."""
     return f"{platform}:{station}:{date_str}:{metric}:{market_id}:yes:{mode}"
+
+
+def weather_bet_id(candidate_id: str) -> str:
+    """Stable UUID so the database rejects a retry even after settlement."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"weather-autobet:{candidate_id}"))
 
 
 def init_weather_clv_record(
@@ -367,19 +373,19 @@ async def sync_weather_predictions():
         _write_weather_sync_status(ok=False, stats=stats, error=msg)
         raise RuntimeError(msg)
     
-    # Pre-fetch exposure + open-position keys for duplicate detection before fills
+    # Pre-fetch all execution identities so settlement/retry cycles cannot create
+    # another fill. Only open rows contribute to current exposure.
     import json as _json
     exposure_tracker = {}
-    open_candidate_ids: set[str] = set()
-    open_legacy_keys: set[str] = set()
-    open_bets = (
+    seen_candidate_ids: set[str] = set()
+    seen_legacy_keys: set[str] = set()
+    weather_bets = (
         db.table("autobets")
-        .select("bet_subject, stake, market_id, outcome_name, mode, metadata")
-        .eq("status", "open")
+        .select("bet_subject, stake, market_id, outcome_name, mode, status, metadata")
         .like("bet_subject", "weather_%")
         .execute()
     )
-    for row in (open_bets.data or []):
+    for row in (weather_bets.data or []):
         subj = row.get("bet_subject")
         meta = row.get("metadata") or {}
         if isinstance(meta, str):
@@ -394,17 +400,17 @@ async def sync_weather_predictions():
             risk_key = weather_risk_key(
                 str(meta["station"]), str(meta["target_date"]), str(meta["metric"])
             )
-        if risk_key:
+        if risk_key and row.get("status") == "open":
             exposure_tracker[risk_key] = exposure_tracker.get(risk_key, 0.0) + (
                 row.get("stake") or 0.0
             )
         if isinstance(meta, dict) and meta.get("candidate_id"):
-            open_candidate_ids.add(str(meta["candidate_id"]))
+            seen_candidate_ids.add(str(meta["candidate_id"]))
         mid = row.get("market_id")
         out = str(row.get("outcome_name") or "yes").lower()
         row_mode = row.get("mode") or "paper"
         if mid:
-            open_legacy_keys.add(f"{mid}:{out}:{row_mode}")
+            seen_legacy_keys.add(f"{mid}:{out}:{row_mode}")
 
     paper_max_dollars = bankroll * s.polymarket_paper_max_position_pct
     live_max_dollars = bankroll * s.polymarket_max_position_pct
@@ -882,22 +888,22 @@ async def sync_weather_predictions():
             )
             legacy_key = f"{event.market_id}:yes:{mode}"
             # Duplicate check BEFORE fill / CLV / PaperFill so artifacts match DB
-            if candidate_id in open_candidate_ids or legacy_key in open_legacy_keys:
+            if candidate_id in seen_candidate_ids or legacy_key in seen_legacy_keys:
                 logger.info(
-                    f"Decision rejection DUPLICATE_OPEN_POSITION candidate_id={candidate_id}"
+                    f"Decision rejection DUPLICATE_EXECUTION candidate_id={candidate_id}"
                 )
                 shadow_record.setdefault("rejections", []).append(
-                    {"candidate_id": candidate_id, "reason": "DUPLICATE_OPEN_POSITION"}
+                    {"candidate_id": candidate_id, "reason": "DUPLICATE_EXECUTION"}
                 )
                 shadow_record["paper_orders"].append({
                     "candidate_id": candidate_id,
                     "bucket_id": event.market_id,
                     "side": "YES",
                     "shares": shares,
-                    "rejection_reason": "DUPLICATE_OPEN_POSITION",
+                    "rejection_reason": "DUPLICATE_EXECUTION",
                 })
                 if not shadow_record.get("rejection_reason"):
-                    shadow_record["rejection_reason"] = "DUPLICATE_OPEN_POSITION"
+                    shadow_record["rejection_reason"] = "DUPLICATE_EXECUTION"
                 continue
 
             fresh_book = _refresh_weather_orderbook(raw_m, platform)
@@ -991,8 +997,6 @@ async def sync_weather_predictions():
             if shares <= 0 or stake <= 0:
                 continue
 
-            exposure_tracker[risk_event_key] = current_exposure + stake
-            
             # Convert to shared Execution schema
             best_ask_p = _as_probability(raw_m.get("best_ask", raw_m.get("yes_ask", q_i))) or q_i
             candidate = TradeCandidate(
@@ -1087,19 +1091,15 @@ async def sync_weather_predictions():
                     f"Paper fill rejected for {event.market_id}: "
                     f"{fill.rejection_reason or 'unknown'}"
                 )
-                # Undo exposure reservation so a later retry can try again.
-                exposure_tracker[risk_event_key] = max(
-                    0.0, exposure_tracker.get(risk_event_key, 0.0) - stake
-                )
                 continue
-
-            with open("paper_fills.jsonl", "a") as f:
-                f.write(json.dumps(paper_order) + "\n")
 
             close_time = _weather_market_close(raw_m)
             filled_stake = round(fill.filled_shares * fill.limit_price, 2)
+            bet_id = weather_bet_id(candidate_id)
             clv_metadata = {
                 "model_version": WEATHER_MODEL_VERSION,
+                "signal_candidate_id": candidate_id,
+                "autobet_id": bet_id,
                 "event_id": virtual_match_id,
                 "event_start": close_time.isoformat() if close_time else None,
                 "event_start_utc": close_time.isoformat() if close_time else None,
@@ -1116,19 +1116,9 @@ async def sync_weather_predictions():
                 **calibration_meta,
                 **execution_calibrations[i],
             }
-            clv_rec = init_weather_clv_record(
-                candidate_id=candidate_id,
-                market_id=event.market_id,
-                raw_m=raw_m,
-                fill=fill,
-                platform=platform,
-                due_close=(close_time - timedelta(minutes=5)) if close_time else None,
-                metadata=clv_metadata,
-            )
-            log_clv_record(clv_rec)
-
             # Record only filled paper/live bets in DB
             record = {
+                "id": bet_id,
                 "venue": platform,
                 "bet_subject": virtual_match_id,
                 "market_id": event.market_id,
@@ -1148,10 +1138,10 @@ async def sync_weather_predictions():
                 "event_date": date_str,
                 "strategy": f"weather_{metric}",
                 # Effective fraction implied by the portfolio optimizer's sizing
-                "kelly_fraction": round(stake / bankroll, 4) if bankroll > 0 else 0.0,
-                "stake": stake,
+                "kelly_fraction": round(filled_stake / bankroll, 4) if bankroll > 0 else 0.0,
+                "stake": filled_stake,
                 "bankroll_at_time": round(bankroll, 2),
-                "shares": shares,
+                "shares": fill.filled_shares,
                 "status": "open",
                 "bet_type": "weather",
                 "metadata": {
@@ -1164,8 +1154,8 @@ async def sync_weather_predictions():
                     "q_exec": q_i,
                     "mean_f": mean_f,
                     "spread_f": spread_f,
-                    # Everything settlement needs to grade this bet against
-                    # observed temps if the exchange never reports resolution
+                    # Station/bucket fields remain forecast diagnostics. Contract
+                    # P&L is settled only from the exact venue market result.
                     "metric": metric,
                     "station": station_id,
                     "city": city,
@@ -1180,11 +1170,10 @@ async def sync_weather_predictions():
                 }
             }
             
+            recorded = False
             try:
                 db.table("autobets").insert(record).execute()
-                bets_placed += 1
-                open_candidate_ids.add(candidate_id)
-                open_legacy_keys.add(legacy_key)
+                recorded = True
             except Exception as e:
                 # Retry without optional columns when migrations are pending
                 msg = str(e)
@@ -1202,15 +1191,31 @@ async def sync_weather_predictions():
                         slim.pop(col, None)
                 try:
                     db.table("autobets").insert(slim).execute()
-                    bets_placed += 1
-                    open_candidate_ids.add(candidate_id)
-                    open_legacy_keys.add(legacy_key)
+                    recorded = True
                     logger.warning(f"Weather autobet recorded with slim schema ({e})")
                 except Exception as e2:
                     logger.error(f"Failed to record weather autobet: {e2}")
-                    exposure_tracker[risk_event_key] = max(
-                        0.0, exposure_tracker.get(risk_event_key, 0.0) - stake
-                    )
+            if not recorded:
+                continue
+
+            bets_placed += 1
+            seen_candidate_ids.add(candidate_id)
+            seen_legacy_keys.add(legacy_key)
+            exposure_tracker[risk_event_key] = current_exposure + filled_stake
+
+            # Side effects happen only after the durable idempotent insert.
+            with open("paper_fills.jsonl", "a") as f:
+                f.write(json.dumps(paper_order) + "\n")
+            clv_rec = init_weather_clv_record(
+                candidate_id=f"weather-fill:{bet_id}",
+                market_id=event.market_id,
+                raw_m=raw_m,
+                fill=fill,
+                platform=platform,
+                due_close=(close_time - timedelta(minutes=5)) if close_time else None,
+                metadata=clv_metadata,
+            )
+            log_clv_record(clv_rec)
         _append_weather_shadow_record(shadow_record)
 
     stats["bets_placed"] = bets_placed
