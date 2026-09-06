@@ -4,6 +4,10 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
+    # Weather is the active private trading research domain. Historical sports
+    # code remains available only through an explicit legacy configuration.
+    trading_focus: str = "weather"
+    weather_api_scheduler_enabled: bool = False  # GitHub is the default scheduler.
     supabase_url: str
     supabase_anon_key: str
     supabase_service_role_key: str
@@ -105,6 +109,13 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return v.strip()
         return v
+
+    @field_validator("trading_focus")
+    @classmethod
+    def _validate_trading_focus(cls, value: str) -> str:
+        if value not in {"weather", "legacy"}:
+            raise ValueError("trading_focus must be weather or legacy")
+        return value
 
     @field_validator("sync_fast_mode", "sync_skip_youtube_search", mode="before")
     @classmethod

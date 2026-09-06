@@ -63,6 +63,10 @@ class _FakeDB:
 
 class TestLiveToggleSecurity(unittest.TestCase):
     def setUp(self):
+        self.settings_patch = patch("backend.config.get_settings")
+        self.settings = self.settings_patch.start().return_value
+        self.settings.trading_focus = "legacy"
+        self.addCleanup(self.settings_patch.stop)
         self._env_backup = {
             k: os.environ.get(k)
             for k in (
@@ -159,6 +163,23 @@ class TestLiveToggleSecurity(unittest.TestCase):
     def test_set_live_toggle_refuses_enable(self):
         with self.assertRaises(PermissionError):
             lt.set_live_toggle(True, by="dashboard", db=self.db)
+
+    @patch("backend.trading.autobet_learning.assess_live_readiness", return_value={"live_ready": True})
+    def test_weather_cannot_enable_even_if_legacy_track_record_is_ready(self, ready):
+        self.settings.trading_focus = "weather"
+        os.environ["LIVE_TRADING_ADMIN_TOKEN"] = "secret-admin"
+        result = lt.request_live_toggle(True, actor="ops", authorization_header="Bearer secret-admin", db=self.db)
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["status"], 409)
+        self.assertIn("paper-only", result["reason"])
+        self.assertFalse(self.db.store["app_settings"].get("enabled"))
+        ready.assert_not_called()
+
+    def test_weather_effective_mode_is_paper_with_all_live_flags_set(self):
+        self.settings.trading_focus = "weather"
+        with patch.dict(os.environ, {"LIVE_TRADING_ENABLED": "true", "POLYMARKET_LIVE_ENABLED": "true"}), \
+                patch.object(lt, "get_live_toggle", return_value={"enabled": True}):
+            self.assertFalse(lt.is_live_mode())
 
     def test_disable_allowed_for_admin(self):
         os.environ["LIVE_TRADING_ADMIN_TOKEN"] = "secret-admin"

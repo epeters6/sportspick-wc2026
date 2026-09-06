@@ -1,7 +1,7 @@
 import asyncio
+import math
 import os
 import sys
-from datetime import datetime, timezone
 from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -11,23 +11,60 @@ from pavlov.pipeline.clv_updater import (
     update_clv_obligations,
     count_clv_obligations,
 )
-from backend.trading.venue_router import VenueRouter
+
+def _binary_weather_price(book: dict, side: str):
+    """Buy YES at its ask; buy NO at one minus the executable YES bid."""
+    field, size_field = ("best_ask", "yes_ask_size") if side == "YES" else ("best_bid", "yes_bid_size")
+    try:
+        price = float(book.get(field))
+        size = float(book.get(size_field, book.get("ask_size" if side == "YES" else "bid_size", 0)))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(price) or not math.isfinite(size) or size <= 0 or not 0 < price < 1:
+        return None
+    return price if side == "YES" else round(1.0 - price, 10)
 
 
 async def _fetch_executable_price(
     market_id: str,
     outcome_id: str,
     side: str,
-    router: VenueRouter,
+    router=None,
 ):
     """
     Side-correct executable price for the purchased outcome token.
 
-    Buying YES/token → take the ask (side='sell' on the book).
+    Weather contracts use public venue books. Legacy token IDs retain their
+    original router. A US slug must never be sent to the international CLOB.
     Returns (price, book_timestamp, received_timestamp).
     """
     venue = "kalshi" if str(market_id).upper().startswith("KX") else "polymarket"
     try:
+        binary_outcome = str(outcome_id).lower() in {"yes", "no"}
+        weather_kalshi = str(market_id).upper().startswith(("KXHIGH", "KXLOW"))
+        if weather_kalshi or (venue == "polymarket" and binary_outcome):
+            side = str(side).upper()
+            if side not in {"YES", "NO"}:
+                return None, None, None
+            if weather_kalshi:
+                from pavlov.pipeline import kalshi_client
+
+                book = await asyncio.to_thread(kalshi_client.get_orderbook_as_parsed, market_id)
+            else:
+                from pavlov.polymarket import poly_client
+
+                book = await asyncio.to_thread(poly_client.get_orderbook_as_parsed, market_id)
+            if not isinstance(book, dict) or book.get("ticker") != market_id:
+                return None, None, None
+            return (
+                _binary_weather_price(book, side),
+                book.get("orderbook_timestamp"),
+                book.get("received_timestamp"),
+            )
+        if router is None:
+            from backend.trading.venue_router import VenueRouter
+
+            router = VenueRouter()
         book = await router.get_top_of_book(
             venue=venue,
             token_id=outcome_id,
@@ -46,7 +83,8 @@ async def _fetch_executable_price(
 
 async def run_scheduler(once: bool = False):
     logger.info("Starting CLV Checkpoint Scheduler...")
-    router = VenueRouter()
+    # New weather observations need no trading client or signing credentials.
+    router = None
 
     while True:
         try:

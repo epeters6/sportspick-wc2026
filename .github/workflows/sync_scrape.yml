@@ -1,9 +1,6 @@
-name: Sync Scrape
+name: Legacy - Sync Scrape
 
 on:
-  schedule:
-    # Lightweight pick scrape
-    - cron: '0 9,15,21 * * *'
   workflow_dispatch:
 
 jobs:
@@ -27,6 +24,7 @@ jobs:
       MODE: shadow
       LIVE_TRADING_ENABLED: "false"
       POLYMARKET_LIVE_ENABLED: "false"
+      POLY_AUTO_BET_ENABLED: "0"
       AUTO_BET_ENABLED: "0"
       POLY_MLB_AUTO_BET_ENABLED: "0"
 

@@ -20,7 +20,10 @@ if _REPO_ROOT not in sys.path:
 
 from backend.db import get_db
 from backend.trading.polymarket_client import PolymarketClient
-from backend.trading.autobet import _current_bankroll
+from backend.trading.weather_experiment import (
+    register_experiment, fetch_experiment_bets, account_state, entry_budget,
+    event_scope_reason, save_prediction_snapshot, snapshot_id,
+)
 
 # Weather modules live in pavlov/pipeline. ML consensus loads mlb_quant_legacy first,
 # which inserts pavlov/pavlov-mlb-bot and binds `pipeline` to that package (no
@@ -123,6 +126,8 @@ def record_weather_prediction_vector(
     calibration_metadata: dict,
     execution_probabilities: list[float] | None = None,
     execution_calibrations: list[dict] | None = None,
+    experiment: dict | None = None,
+    run_id: str | None = None,
 ) -> int:
     """Persist every bucket, including rejected/non-selected outcomes."""
     event_key = f"weather:{platform}:{station}:{date_str}:{metric}"
@@ -157,10 +162,16 @@ def record_weather_prediction_vector(
                         None if event.bucket_high_f == float("inf") else event.bucket_high_f
                     ),
                     "bucket_label": event.bucket_label,
+                    "fee_estimate": calibration_metadata.get("fee_estimates", [None] * len(events))[i],
                     **calibration_metadata,
                     **execution_calibrations[i],
                 },
             }
+        )
+    if experiment is not None:
+        save_prediction_snapshot(
+            db, manifest=experiment, run_id=str(run_id), event_key=event_key,
+            rows=rows, decision_at=datetime.now(timezone.utc).isoformat(),
         )
     return replace_prediction_rows(
         db,
@@ -268,15 +279,23 @@ def _refresh_weather_orderbook(raw_market: dict, platform: str) -> dict | None:
 
         return kalshi_client.get_orderbook_as_parsed(market_id)
     if platform == "polymarket":
-        from polymarket import poly_client
+        from pavlov.polymarket import poly_client
 
         return poly_client.get_orderbook_as_parsed(market_id)
     return None
 
 
-async def sync_weather_predictions():
+async def sync_weather_predictions(*, experiment: dict | None = None, run_id: str | None = None):
     logger.info("Starting rewritten weather prediction sync & portfolio optimization...")
     db = get_db()
+    experiment = experiment or register_experiment(db)
+    config = experiment["config"]
+    run_id = run_id or str(uuid.uuid4())
+    # This path only simulates fills. It must never label simulated executions
+    # as live, regardless of an unrelated dashboard/legacy trading toggle.
+    mode = "paper"
+    experiment_bets = fetch_experiment_bets(db, experiment["id"])
+    accounts = {venue: account_state(experiment_bets, config, venue) for venue in config["venues"]}
     stats = {
         "polymarket_markets": 0,
         "kalshi_markets": 0,
@@ -292,28 +311,28 @@ async def sync_weather_predictions():
         "rejection_reasons": {},
         "bets_placed": 0,
         "skipped_past": 0,
+        "scope_skipped": 0,
+        "venue_errors": {},
+        "experiment_id": experiment["id"],
+        "mode": mode,
     }
     
     # 1. Fetch active weather markets (platforms isolated — one failure must not
     # skip the other; Kalshi is the primary paper-trading venue today).
     markets = []
     try:
-        from polymarket import poly_client
-        if not poly_client.poly_configured():
-            logger.warning("POLYMARKET_KEY_ID not set. Using dummy keys for public data.")
-            poly_client.poly_configured = lambda: True
-            def mock_get_client():
-                from polymarket_us import PolymarketUS
-                return PolymarketUS(key_id="dummy", secret_key="dummy")
-            poly_client.get_client = mock_get_client
+        from pavlov.polymarket import poly_client
 
         pm_markets = poly_client.get_weather_markets()
         for m in pm_markets:
             m["_platform"] = "polymarket"
         markets.extend(pm_markets)
         stats["polymarket_markets"] = len(pm_markets)
+        if not pm_markets:
+            stats["venue_errors"]["polymarket"] = "NO_CURRENT_MARKETS_RETURNED"
         logger.info(f"Fetched {len(pm_markets)} Polymarket weather markets.")
     except Exception as e:
+        stats["venue_errors"]["polymarket"] = str(e)
         logger.warning(f"Failed to fetch Polymarket weather markets: {e}")
 
     try:
@@ -324,8 +343,11 @@ async def sync_weather_predictions():
             m["_platform"] = "kalshi"
         markets.extend(kalshi_markets)
         stats["kalshi_markets"] = len(kalshi_markets)
+        if not kalshi_markets:
+            stats["venue_errors"]["kalshi"] = "NO_CURRENT_MARKETS_RETURNED"
         logger.info(f"Fetched {len(kalshi_markets)} Kalshi weather markets.")
     except Exception as e:
+        stats["venue_errors"]["kalshi"] = str(e)
         logger.warning(f"Failed to fetch Kalshi weather markets: {e}")
 
     if not markets:
@@ -339,8 +361,6 @@ async def sync_weather_predictions():
         _write_weather_sync_status(ok=False, stats=stats, error=msg)
         raise RuntimeError(msg)
         
-    bankroll = _current_bankroll(db)
-    
     # 2. Normalize and Group by Event
     events_by_group = defaultdict(list)
     raw_by_group = defaultdict(list)
@@ -379,13 +399,7 @@ async def sync_weather_predictions():
     exposure_tracker = {}
     seen_candidate_ids: set[str] = set()
     seen_legacy_keys: set[str] = set()
-    weather_bets = (
-        db.table("autobets")
-        .select("bet_subject, stake, market_id, outcome_name, mode, status, metadata")
-        .like("bet_subject", "weather_%")
-        .execute()
-    )
-    for row in (weather_bets.data or []):
+    for row in experiment_bets:
         subj = row.get("bet_subject")
         meta = row.get("metadata") or {}
         if isinstance(meta, str):
@@ -412,15 +426,13 @@ async def sync_weather_predictions():
         if mid:
             seen_legacy_keys.add(f"{mid}:{out}:{row_mode}")
 
-    paper_max_dollars = bankroll * s.polymarket_paper_max_position_pct
-    live_max_dollars = bankroll * s.polymarket_max_position_pct
-    from backend.trading.live_toggle import is_live_mode
-    mode = "live" if is_live_mode(s, db) else "paper"
-    execution_calibrator = load_weather_execution_calibrator(db)
+    execution_calibrators = {
+        venue: load_weather_execution_calibrator(db, venue=venue)
+        for venue in config["venues"]
+    }
     logger.info(
-        f"Weather execution calibration loaded rows={len(execution_calibrator.rows)} "
-        f"close_clv_n={execution_calibrator.close_clv_samples} "
-        f"avg_close_clv={execution_calibrator.average_close_clv}"
+        "Weather experiment {}: independent paper balances and venue-specific calibration",
+        experiment["id"],
     )
     
     bets_placed = 0
@@ -507,6 +519,21 @@ async def sync_weather_predictions():
         local_now = datetime.now(ZoneInfo(get_tz_for_city(city)))
         lead_days = (event_date - local_now.date()).days
         hour = local_now.hour
+        scope_reason = event_scope_reason(
+            config, venue=platform, station=station, metric=metric,
+            lead_days=lead_days, local_hour=hour,
+        )
+        if scope_reason:
+            stats["scope_skipped"] += 1
+            stats["rejection_reasons"][scope_reason] = stats["rejection_reasons"].get(scope_reason, 0) + 1
+            continue
+        account = accounts[platform]
+        # Fixed research sizing keeps forecast collection running even when an
+        # account is halted. Actual paper fills separately obey available cash
+        # and event/open/daily risk budgets below.
+        bankroll = float(config["seed_per_venue"])
+        budget = entry_budget(account, config)
+        execution_calibrator = execution_calibrators[platform]
 
         # Past local dates cannot settle as open markets we still want to trade;
         # Open-Meteo also drops them from the forecast window.
@@ -558,6 +585,7 @@ async def sync_weather_predictions():
                 "calibration_station_samples": calibration.station_samples,
                 "calibration_pooled_samples": calibration.pooled_samples,
                 "residual_sigma_f": calibration.residual_sigma,
+                "mos_training_as_of": calibration.training_as_of,
             }
         except Exception as exc:
             logger.debug(f"MOS bias unavailable for {city} (using 0.0): {exc}")
@@ -596,8 +624,13 @@ async def sync_weather_predictions():
                     observed_extreme = obs.get("low_so_far", 999.0)
                     nowcast_active = observed_extreme < 999.0
                 if nowcast_active:
-                    P_model = mask_impossible_buckets(events, P_model, observed_extreme, metric=metric)
-                    P_market = mask_impossible_buckets(events, P_market, observed_extreme, metric=metric)
+                    # METAR values are provisional and rounded; they are useful
+                    # diagnostics, not the venue's final climate-report outcome.
+                    # Do not force probabilities to zero or alter the market
+                    # baseline using a different observation source.
+                    calibration_meta["provisional_observed_extreme"] = observed_extreme
+                    calibration_meta["observation_mask_applied"] = False
+                    nowcast_active = False
             
             # D. Bayesian Shrinkage
             P_adj = shrink_probability_vector(P_model, P_market, lead_days)
@@ -617,7 +650,7 @@ async def sync_weather_predictions():
                 Q_exec,
                 depth_caps,
                 bankroll,
-                min_net_edge=WEATHER_MIN_NET_EDGE,
+                min_net_edge=float(config["min_net_edge"]),
             )
             x_opt = limit_to_one_weather_position(x_opt, P_adj, Q_exec)
             theoretical_x_opt = list(x_opt)
@@ -644,7 +677,7 @@ async def sync_weather_predictions():
                     ),
                     probability=P_adj[selected_index],
                     executable_cost=Q_exec[selected_index],
-                    min_net_edge=WEATHER_MIN_NET_EDGE,
+                    min_net_edge=float(config["min_net_edge"]),
                 )
                 execution_probabilities[selected_index] = (
                     selected_calibration.execution_probability
@@ -679,6 +712,10 @@ async def sync_weather_predictions():
                         ] = "backlog_profitability_gate"
 
             execution_enabled = execution_gate_reason is None
+            if budget <= 0:
+                execution_gate_reason = ";".join(account["blocked_reasons"]) or "WEATHER_OPEN_RISK_LIMIT"
+                x_opt = [0.0 for _ in x_opt]
+                execution_enabled = False
 
             stats["evaluation_rows"] += record_weather_prediction_vector(
                 db,
@@ -697,16 +734,25 @@ async def sync_weather_predictions():
                 calibration_metadata={
                     **calibration_meta,
                     "lambda_confidence": get_event_lambda(lead_days),
-                    "min_net_edge": WEATHER_MIN_NET_EDGE,
+                    "min_net_edge": float(config["min_net_edge"]),
+                    "research_sizing_bankroll": bankroll,
+                    "available_cash": account["available_cash"],
+                    "entry_budget": budget,
+                    "fee_estimates": [raw.get("fee_estimate") for raw in raw_markets],
                     "execution_enabled": execution_enabled,
                 },
                 execution_probabilities=execution_probabilities,
                 execution_calibrations=execution_calibrations,
+                experiment=experiment,
+                run_id=run_id,
             )
 
             shadow_record = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "model_version": WEATHER_MODEL_VERSION,
+                "experiment_id": experiment["id"],
+                "config_hash": experiment["config_hash"],
+                "run_id": run_id,
                 "platform": platform,
                 "station": events[0].settlement_station,
                 "settlement_source": events[0].settlement_source,
@@ -776,7 +822,7 @@ async def sync_weather_predictions():
                 positive_edge_indexes = [
                     i
                     for i in range(len(events))
-                    if P_adj[i] - Q_exec[i] >= WEATHER_MIN_NET_EDGE
+                    if P_adj[i] - Q_exec[i] >= float(config["min_net_edge"])
                 ]
                 if not any(depth_caps):
                     reason = "MISSING_EXECUTABLE_DEPTH"
@@ -828,6 +874,7 @@ async def sync_weather_predictions():
             logger.info(f"Rejected event {city} {date_str} ({platform}): {reason}")
             continue
         except Exception as e:
+            _record_weather_rejection(stats, "WEATHER_EVENT_PROCESSING_FAILED", "persistence_reject")
             logger.error(f"Unexpected error processing event {city} {date_str}: {e}")
             continue
             
@@ -842,7 +889,7 @@ async def sync_weather_predictions():
         virtual_match_id = f"weather_{city.replace(' ', '')}_{date_str}{metric_tag}_{platform}"
         station_id = events[0].settlement_station
         risk_event_key = weather_risk_key(station_id, date_str, metric)
-        max_allowed = live_max_dollars if mode == "live" else paper_max_dollars
+        max_allowed = entry_budget(accounts[platform], config)
         
         assert shadow_record is not None
 
@@ -886,6 +933,7 @@ async def sync_weather_predictions():
             candidate_id = weather_candidate_id(
                 platform, station_id, date_str, metric, event.market_id, mode
             )
+            candidate_id = f"{experiment['id']}:{candidate_id}"
             legacy_key = f"{event.market_id}:yes:{mode}"
             # Duplicate check BEFORE fill / CLV / PaperFill so artifacts match DB
             if candidate_id in seen_candidate_ids or legacy_key in seen_legacy_keys:
@@ -957,7 +1005,7 @@ async def sync_weather_predictions():
             fresh_q = fresh_costs[0]
             if fresh_q > q_i + 0.005:
                 reason = "PRICE_MOVED_AGAINST_US"
-            elif execution_probabilities[i] - fresh_q < WEATHER_MIN_NET_EDGE:
+            elif execution_probabilities[i] - fresh_q < float(config["min_net_edge"]):
                 reason = "EDGE_GONE_AFTER_REPRICE"
             else:
                 reason = ""
@@ -985,7 +1033,7 @@ async def sync_weather_predictions():
             raw_m.update(fresh_book)
             q_i = fresh_q
             depth_caps[i] = fresh_caps[0]
-            shares = min(shares, depth_caps[i])
+            shares = math.floor(min(shares, depth_caps[i]))
             stake = round(shares * q_i, 2)
             if shares <= 0 or stake <= 0:
                 continue
@@ -1066,7 +1114,7 @@ async def sync_weather_predictions():
                 received_timestamp=real_received_timestamp,
                 mode=mode,
                 allow_received_timestamp_for_shadow=(
-                    platform == "kalshi" and mode != "live"
+                    mode == "paper" and config.get("paper_allow_receipt_timestamp") is True
                 ),
             )
             
@@ -1081,6 +1129,8 @@ async def sync_weather_predictions():
                 "visible_depth_used": fill.visible_depth_used,
                 "fees": fill.fees,
                 "slippage_assumption": fill.slippage,
+                "book_timestamp_source": "exchange" if fresh_orderbook_ts is not None else "local_receipt",
+                "book_received_at": fresh_received.isoformat() if isinstance(fresh_received, datetime) else fresh_received,
                 "post_fee_cost": round(fill.filled_shares * fill.limit_price, 2),
                 "rejection_reason": fill.rejection_reason
             }
@@ -1097,6 +1147,11 @@ async def sync_weather_predictions():
             filled_stake = round(fill.filled_shares * fill.limit_price, 2)
             bet_id = weather_bet_id(candidate_id)
             clv_metadata = {
+                "mode": "paper",
+                "venue_product": "polymarket_us" if platform == "polymarket" else "kalshi",
+                "paper_allow_receipt_timestamp": config.get("paper_allow_receipt_timestamp") is True,
+                "experiment_id": experiment["id"],
+                "config_hash": experiment["config_hash"],
                 "model_version": WEATHER_MODEL_VERSION,
                 "signal_candidate_id": candidate_id,
                 "autobet_id": bet_id,
@@ -1138,13 +1193,21 @@ async def sync_weather_predictions():
                 "event_date": date_str,
                 "strategy": f"weather_{metric}",
                 # Effective fraction implied by the portfolio optimizer's sizing
-                "kelly_fraction": round(filled_stake / bankroll, 4) if bankroll > 0 else 0.0,
+                "kelly_fraction": round(filled_stake / accounts[platform]["equity"], 4),
                 "stake": filled_stake,
-                "bankroll_at_time": round(bankroll, 2),
+                "bankroll_at_time": round(accounts[platform]["equity"], 2),
                 "shares": fill.filled_shares,
                 "status": "open",
                 "bet_type": "weather",
                 "metadata": {
+                    "experiment_id": experiment["id"],
+                    "config_hash": experiment["config_hash"],
+                    "run_id": run_id,
+                    "research_sizing_bankroll": bankroll,
+                    "decision_snapshot_id": snapshot_id(
+                        experiment["id"], run_id,
+                        f"weather:{platform}:{station_id}:{date_str}:{metric}", event.market_id,
+                    ),
                     "model_version": WEATHER_MODEL_VERSION,
                     "candidate_id": candidate_id,
                     "p_adj": P_adj[i],
@@ -1152,6 +1215,10 @@ async def sync_weather_predictions():
                     "raw_model_prob": P_model[i],
                     "market_vector_prob": P_market[i],
                     "q_exec": q_i,
+                    "fee_estimate": raw_m.get("fee_estimate"),
+                    "execution_assumption": "whole_contract_taker_at_displayed_ask_with_cost_reserve",
+                    "book_timestamp_source": "exchange" if fresh_orderbook_ts is not None else "local_receipt",
+                    "book_received_at": fresh_received.isoformat() if isinstance(fresh_received, datetime) else fresh_received,
                     "mean_f": mean_f,
                     "spread_f": spread_f,
                     # Station/bucket fields remain forecast diagnostics. Contract
@@ -1164,7 +1231,7 @@ async def sync_weather_predictions():
                     "bucket_high_f": event.bucket_high_f if event.bucket_high_f != float("inf") else None,
                     "bucket_label": event.bucket_label,
                     "mos_bias": mos_bias,
-                    "min_net_edge": WEATHER_MIN_NET_EDGE,
+                    "min_net_edge": float(config["min_net_edge"]),
                     **calibration_meta,
                     **execution_calibrations[i],
                 }
@@ -1175,26 +1242,10 @@ async def sync_weather_predictions():
                 db.table("autobets").insert(record).execute()
                 recorded = True
             except Exception as e:
-                # Retry without optional columns when migrations are pending
-                msg = str(e)
-                slim = dict(record)
-                for col in (
-                    "metadata",
-                    "raw_confidence",
-                    "bet_type",
-                    "sport",
-                    "venue",
-                    "event_date",
-                    "strategy",
-                ):
-                    if col in msg or "PGRST204" in msg or "schema cache" in msg:
-                        slim.pop(col, None)
-                try:
-                    db.table("autobets").insert(slim).execute()
-                    recorded = True
-                    logger.warning(f"Weather autobet recorded with slim schema ({e})")
-                except Exception as e2:
-                    logger.error(f"Failed to record weather autobet: {e2}")
+                # Evidence and account identity are mandatory. A schema error
+                # must never produce an untraceable fill by stripping metadata.
+                logger.error(f"Failed to record weather autobet with complete evidence: {e}")
+                _record_weather_rejection(stats, "WEATHER_LEDGER_WRITE_FAILED", "persistence_reject")
             if not recorded:
                 continue
 
@@ -1202,6 +1253,9 @@ async def sync_weather_predictions():
             seen_candidate_ids.add(candidate_id)
             seen_legacy_keys.add(legacy_key)
             exposure_tracker[risk_event_key] = current_exposure + filled_stake
+            accounts[platform]["reserved"] += filled_stake
+            accounts[platform]["available_cash"] -= filled_stake
+            accounts[platform]["open"] += 1
 
             # Side effects happen only after the durable idempotent insert.
             with open("paper_fills.jsonl", "a") as f:
@@ -1234,12 +1288,15 @@ async def sync_weather_predictions():
     logger.info(f"Successfully processed portfolio optimization. Recorded {bets_placed} new {mode} risk-capped event-level optimized basket trades.")
     _write_weather_sync_status(ok=True, stats=stats, error=None)
     if stats["ensemble_ok"] == 0 and stats["events"] > 0:
+        if stats["scope_skipped"] == stats["events"]:
+            return stats
         msg = (
             f"Weather sync ran but ensemble returned data for 0/{stats['events']} events "
             f"(fail={stats['ensemble_fail']}, past={stats['skipped_past']})."
         )
         logger.error(msg)
         raise RuntimeError(msg)
+    return stats
 
 
 def _write_weather_sync_status(*, ok: bool, stats: dict, error: str | None) -> None:

@@ -10,10 +10,12 @@ from backend.trading.weather_settlement import (
     _actuals_ready_to_grade,
     _apply_resolution,
     _city_and_metric_for_bet,
+    _detect_venue,
     _grade_bet_against_actual,
     _grade_bet_against_venue,
     _target_date_for_bet,
     check_kalshi_resolution,
+    check_polymarket_resolution,
 )
 from backend.trading.settlement_integrity import WEATHER_SETTLEMENT_VERSION
 
@@ -117,6 +119,7 @@ class TestWeatherSettlementReadiness(unittest.TestCase):
             bet,
             {
                 "resolved": True,
+                "venue": "kalshi",
                 "winner": "yes",
                 "market_id": bet["market_id"],
                 "settled_at": "2026-07-15T02:00:00Z",
@@ -157,6 +160,7 @@ class TestWeatherVenueResolution(unittest.IsolatedAsyncioTestCase):
         client._get = AsyncMock(
             return_value={
                 "market": {
+                    "ticker": "KXLOWTHOU-26AUG29-B74.5",
                     "status": "finalized",
                     "result": "no",
                     "settlement_ts": "2026-08-30T02:00:00Z",
@@ -172,6 +176,62 @@ class TestWeatherVenueResolution(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["resolved"])
         self.assertEqual(result["winner"], "no")
         self.assertEqual(result["market_id"], "KXLOWTHOU-26AUG29-B74.5")
+
+    async def test_kalshi_rejects_wrong_ticker_and_nonfinal_result(self):
+        for ticker, status in [("OTHER", "finalized"), ("KXHIGHCHI-26AUG27-B82.5", "determined")]:
+            with self.subTest(ticker=ticker, status=status):
+                client = MagicMock()
+                client._get = AsyncMock(return_value={"market": {
+                    "ticker": ticker, "status": status, "result": "yes",
+                }})
+                with patch("backend.trading.weather_settlement.KalshiClient", return_value=client):
+                    result = await check_kalshi_resolution("KXHIGHCHI-26AUG27-B82.5")
+                self.assertTrue(result is None or not result["resolved"])
+
+    async def test_public_polymarket_us_settlement_requires_exact_slug(self):
+        slug = "tc-temp-mdwhigh-2026-08-27-gte82f"
+        for payload, winner in [
+            ({"slug": slug, "settlement": 1}, "yes"),
+            ({"slug": slug, "settlement": "0"}, "no"),
+            ({"slug": "different-market", "settlement": 1}, None),
+            ({"slug": slug, "settlement": 0.5}, None),
+            ({"slug": slug, "settlement": True}, None),
+            ({"slug": slug}, None),
+        ]:
+            with self.subTest(payload=payload):
+                response = MagicMock(status_code=200)
+                response.json.return_value = payload
+                client = MagicMock()
+                client.get = AsyncMock(return_value=response)
+                with patch("backend.trading.weather_settlement.httpx.AsyncClient") as factory:
+                    factory.return_value.__aenter__.return_value = client
+                    result = await check_polymarket_resolution(slug)
+                if winner is None:
+                    self.assertIsNone(result)
+                else:
+                    self.assertEqual(result["winner"], winner)
+                    self.assertEqual(result["venue_product"], "polymarket_us")
+                    self.assertEqual(result["market_id"], slug)
+
+
+class TestWeatherSettlementIdentity(unittest.TestCase):
+    def test_decimal_kalshi_bucket_routes_to_kalshi(self):
+        self.assertEqual(_detect_venue("KXHIGHCHI-26AUG27-B82.5"), "kalshi")
+        self.assertEqual(_detect_venue("tc-temp-mdwhigh-2026-08-27-gte82f"), "polymarket")
+
+    def test_missing_or_mismatched_official_identity_cannot_grade(self):
+        bet = _bet(stake=5.2, shares=10)
+        base = {"resolved": True, "winner": "yes", "market_id": bet["market_id"], "venue": "kalshi"}
+        for replacement in [{"market_id": None}, {"market_id": "OTHER"}, {"venue": "polymarket"}, {"venue": None}]:
+            with self.subTest(replacement=replacement):
+                self.assertIsNone(_grade_bet_against_venue(bet, {**base, **replacement}, "kalshi"))
+
+    def test_nonfinite_or_empty_fill_cannot_become_settled_profit(self):
+        for values in [{"stake": float("nan")}, {"shares": float("inf")}, {"shares": 0}, {"stake": -1}]:
+            bet = _bet(stake=5.2, shares=10)
+            bet.update(values)
+            evidence = {"resolved": True, "winner": "yes", "market_id": bet["market_id"], "venue": "kalshi"}
+            self.assertIsNone(_grade_bet_against_venue(bet, evidence, "kalshi"))
 
 
 if __name__ == "__main__":

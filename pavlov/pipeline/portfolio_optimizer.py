@@ -3,6 +3,18 @@ from scipy.optimize import minimize
 from typing import List
 from loguru import logger
 
+
+def _validated_bankroll(bankroll: float) -> float:
+    """Reject invalid capital before constructing bounds or taking logarithms."""
+    try:
+        value = float(bankroll)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("INVALID_BANKROLL: bankroll must be finite and greater than zero") from exc
+    if not np.isfinite(value) or value <= 0:
+        raise ValueError("INVALID_BANKROLL: bankroll must be finite and greater than zero")
+    return value
+
+
 def expected_log_growth(x: np.ndarray, p_adj: np.ndarray, q_exec: np.ndarray, bankroll: float) -> float:
     """
     Negative expected log-wealth (minimize = maximize growth).
@@ -12,6 +24,7 @@ def expected_log_growth(x: np.ndarray, p_adj: np.ndarray, q_exec: np.ndarray, ba
     Relative wealth if j wins: 1 - f + x_j/bankroll where f = dollars/bankroll,
     matching dollar-fraction Kelly (binary: 1 - f + f/c).
     """
+    bankroll = _validated_bankroll(bankroll)
     total_cost = np.sum(q_exec * x)
     
     # If the total cost exceeds bankroll, return a massive penalty
@@ -44,9 +57,12 @@ def optimize_portfolio(
     Solve the mutually exclusive Kelly portfolio optimization problem.
     Returns the vector of shares to buy for each bucket.
     """
+    bankroll = _validated_bankroll(bankroll)
     p_adj = np.array(P_adj, dtype=float)
     q_exec = np.array(Q_exec, dtype=float)
     n_buckets = len(p_adj)
+    if n_buckets == 0:
+        return []
     net_edges = p_adj - q_exec
     event_bankroll_cap = 0.02 * bankroll
 

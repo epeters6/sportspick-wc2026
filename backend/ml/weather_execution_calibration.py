@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from loguru import logger
@@ -24,6 +25,14 @@ PRIOR_STRENGTH = 20.0
 ONE_SIDED_Z_90 = 1.2815515655446004
 MIN_CLOSE_CLV_SAMPLES = 30
 MAX_CLOSE_CLV_PENALTY = 0.05
+
+
+def _training_timestamp(value: Any) -> datetime | None:
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _metadata(value: Any) -> dict[str, Any]:
@@ -89,6 +98,7 @@ class WeatherCandidateCalibration:
     close_clv_samples: int
     average_close_clv: float | None
     close_clv_penalty: float
+    training_as_of: str | None = None
 
     def as_metadata(self) -> dict[str, Any]:
         return {
@@ -106,6 +116,7 @@ class WeatherCandidateCalibration:
             "execution_close_clv_samples": self.close_clv_samples,
             "execution_average_close_clv": self.average_close_clv,
             "execution_close_clv_penalty": self.close_clv_penalty,
+            "execution_training_as_of": self.training_as_of,
         }
 
 
@@ -116,10 +127,12 @@ class WeatherExecutionCalibrator:
         *,
         close_clv_samples: int,
         average_close_clv: float | None,
+        training_as_of: datetime | None = None,
     ) -> None:
         self.rows = rows
         self.close_clv_samples = int(close_clv_samples)
         self.average_close_clv = average_close_clv
+        self.training_as_of = training_as_of.isoformat() if training_as_of is not None else None
 
     def _cohort(self, metric: str, direction: str, probability: float) -> tuple[str, list[_WeatherHistoryRow]]:
         probability_bin = _probability_bin(probability)
@@ -183,6 +196,7 @@ class WeatherExecutionCalibrator:
                 close_clv_samples=self.close_clv_samples,
                 average_close_clv=self.average_close_clv,
                 close_clv_penalty=clv_penalty,
+                training_as_of=self.training_as_of,
             )
 
         samples = len(cohort)
@@ -236,6 +250,7 @@ class WeatherExecutionCalibrator:
             close_clv_samples=self.close_clv_samples,
             average_close_clv=self.average_close_clv,
             close_clv_penalty=clv_penalty,
+            training_as_of=self.training_as_of,
         )
 
 
@@ -244,23 +259,27 @@ def load_weather_execution_calibrator(
     *,
     history_limit: int = 500,
     clv_limit: int = 200,
+    venue: str | None = None,
+    as_of: datetime | None = None,
 ) -> WeatherExecutionCalibrator:
-    """Load bounded, resolved training history and recent closing-line evidence."""
+    """Load only official outcomes and closing observations known by ``as_of``."""
+    cutoff = _training_timestamp(as_of if as_of is not None else datetime.now(timezone.utc))
+    if cutoff is None:
+        raise ValueError("WEATHER_TRAINING_AS_OF_REQUIRES_TIMEZONE")
     prediction_rows: list[dict[str, Any]] = []
     try:
-        prediction_rows = (
+        query = (
             db.table("model_predictions")
-            .select("prob,is_correct,metadata,resolved_at")
+            .select("source,prob,is_correct,metadata,resolved_at")
             .eq("source", WEATHER_PREDICTION_SOURCE)
             .not_.is_("resolved_at", "null")
+            .lte("resolved_at", cutoff.isoformat())
             .eq("metadata->>label_source", "venue_official")
             .eq("metadata->>eligible_before_observation_gate", "true")
-            .order("resolved_at", desc=True)
-            .limit(max(1, int(history_limit)))
-            .execute()
-            .data
-            or []
         )
+        if venue is not None:
+            query = query.eq("metadata->>platform", venue)
+        prediction_rows = query.order("resolved_at", desc=True).limit(max(1, int(history_limit))).execute().data or []
     except Exception as exc:
         logger.warning("Weather execution calibration history lookup failed: {}", exc)
 
@@ -273,7 +292,14 @@ def load_weather_execution_calibrator(
             continue
         correct = row.get("is_correct")
         metric = str(meta.get("metric") or "")
-        if correct is None or metric not in {"high", "low"} or not math.isfinite(probability):
+        resolved = _training_timestamp(row.get("resolved_at"))
+        if (type(correct) is not bool or metric not in {"high", "low"}
+                or not math.isfinite(probability) or not 0 <= probability <= 1
+                or resolved is None or resolved > cutoff
+                or meta.get("label_source") != "venue_official"
+                or meta.get("eligible_before_observation_gate") not in (True, "true")
+                or row.get("source") != WEATHER_PREDICTION_SOURCE
+                or (venue is not None and meta.get("platform") != venue)):
             continue
         cost: float | None
         try:
@@ -297,23 +323,33 @@ def load_weather_execution_calibrator(
 
     close_clvs: list[float] = []
     try:
-        clv_rows = (
+        query = (
             db.table("clv_obligations")
-            .select("entry_market_price,entry_price,obs_close_price,metadata")
+            .select("platform,entry_market_price,entry_price,entry_ts,obs_close_price,obs_close_ts,status_close,metadata")
             .not_.is_("obs_close_price", "null")
+            .eq("status_close", "observed")
+            .lte("obs_close_ts", cutoff.isoformat())
             .eq("metadata->>model_version", MODEL_VERSION)
-            .order("obs_close_ts", desc=True)
-            .limit(max(1, int(clv_limit)))
-            .execute()
-            .data
-            or []
         )
+        if venue is not None:
+            query = query.eq("platform", venue)
+        clv_rows = query.order("obs_close_ts", desc=True).limit(max(1, int(clv_limit))).execute().data or []
         for row in clv_rows:
+            observed = _training_timestamp(row.get("obs_close_ts"))
+            entered = _training_timestamp(row.get("entry_ts"))
+            if (observed is None or observed > cutoff or entered is None or entered >= observed
+                    or row.get("status_close") != "observed"
+                    or _metadata(row.get("metadata")).get("model_version") != MODEL_VERSION
+                    or (venue is not None and row.get("platform") != venue)):
+                continue
             entry = row.get("entry_market_price")
             if entry is None:
                 entry = row.get("entry_price")
             try:
-                value = float(row.get("obs_close_price")) - float(entry)
+                close, entry_price = float(row.get("obs_close_price")), float(entry)
+                if not 0 <= close <= 1 or not 0 <= entry_price <= 1:
+                    continue
+                value = close - entry_price
             except (TypeError, ValueError):
                 continue
             if math.isfinite(value):
@@ -326,4 +362,5 @@ def load_weather_execution_calibrator(
         history,
         close_clv_samples=len(close_clvs),
         average_close_clv=average_clv,
+        training_as_of=cutoff,
     )

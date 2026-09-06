@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import os
 
-import data_paths as dp
+try:
+    from pavlov import data_paths as dp
+except ModuleNotFoundError as exc:
+    if exc.name != "pavlov":
+        raise
+    import data_paths as dp  # Standalone Pavlov deployment.
 
 _LOGS_POLY  = dp.logs_poly_dir()
 _DATA_POLY  = dp.data_poly_dir()

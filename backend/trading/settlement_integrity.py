@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -262,6 +263,10 @@ def verify_weather_autobet(
     except (TypeError, ValueError):
         return _invalid(SETTLEMENT_DATA_INCOMPLETE)
 
+    if (not all(math.isfinite(value) for value in (stake, shares, market_price))
+            or stake <= 0 or shares <= 0 or not 0 < market_price < 1):
+        return _invalid(SETTLEMENT_DATA_INCOMPLETE)
+
     metadata = _weather_metadata(bet)
     settlement = metadata.get("settlement") or {}
     if not isinstance(settlement, dict):
@@ -327,7 +332,7 @@ def verify_weather_autobet(
             expected_status=expected_status,
             expected_pnl=expected_pnl,
         )
-    if abs(stored_pnl - expected_pnl) > 0.0100001:
+    if not math.isfinite(stored_pnl) or abs(stored_pnl - expected_pnl) > 0.0100001:
         return _invalid(
             SETTLEMENT_PNL_MISMATCH,
             expected_status=expected_status,

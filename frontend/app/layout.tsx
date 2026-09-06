@@ -7,8 +7,8 @@ import Sidebar from "@/components/Sidebar";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "QuantBet | MLB + Weather Shadow Trading",
-  description: "Polymarket/Kalshi quant betting — shadow trading, model calibration, and live promotion gates for MLB and weather markets.",
+  title: "QuantBet Weather | Kalshi + Polymarket US",
+  description: "Private weather trading research on Kalshi and Polymarket US: temperature forecasts, paper execution, and official settlement verification.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

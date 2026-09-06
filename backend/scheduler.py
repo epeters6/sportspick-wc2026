@@ -97,6 +97,17 @@ def create_scheduler() -> AsyncIOScheduler:
         job_defaults={"misfire_grace_time": 60 * 10},
     )
 
+    if settings.trading_focus == "weather":
+        if settings.weather_api_scheduler_enabled:
+            async def weather_cycle():
+                from scripts.run_weather_cycle import run_cycle
+                await run_cycle()
+            scheduler.add_job(weather_cycle, CronTrigger(minute=17, timezone="UTC"),
+                              id="weather_cycle", max_instances=1, coalesce=True)
+        logger.info("Weather focus: legacy sports jobs disabled; weather API scheduler={}",
+                    settings.weather_api_scheduler_enabled)
+        return scheduler
+
     # ─── Main scrape + sync (every 30 min) ───────────────────────────────────
     scheduler.add_job(
         job_scrape_all,

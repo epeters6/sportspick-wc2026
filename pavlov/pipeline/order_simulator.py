@@ -72,6 +72,8 @@ def validate_orderbook_freshness(
         ):
             now = datetime.now(timezone.utc)
             age_ms = (now - received_timestamp).total_seconds() * 1000.0
+            if age_ms < 0:
+                raise ValueError("FUTURE_ORDERBOOK_TIMESTAMP")
             if age_ms > max_orderbook_age_ms:
                 logger.warning(
                     f"STALE_ORDERBOOK: received_timestamp age is {age_ms:.0f}ms "
@@ -83,6 +85,8 @@ def validate_orderbook_freshness(
 
     now = datetime.now(timezone.utc)
     age_ms = (now - orderbook_timestamp).total_seconds() * 1000.0
+    if age_ms < 0:
+        raise ValueError("FUTURE_ORDERBOOK_TIMESTAMP")
 
     if age_ms > max_orderbook_age_ms:
         logger.warning(f"STALE_ORDERBOOK: age is {age_ms:.0f}ms (max {max_orderbook_age_ms}ms)")

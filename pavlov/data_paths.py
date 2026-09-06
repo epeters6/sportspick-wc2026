@@ -11,7 +11,12 @@ from __future__ import annotations
 
 import os
 
-from config import CONFIG
+try:
+    from pavlov.config import CONFIG
+except ModuleNotFoundError as exc:
+    if exc.name != "pavlov":
+        raise
+    from config import CONFIG  # Standalone Pavlov deployment.
 
 _APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 

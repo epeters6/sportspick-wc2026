@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Awaitable, List, Optional
 
@@ -188,17 +189,26 @@ async def _normalize_fetch(
     side: str,
 ) -> FetchPriceResult:
     """Normalize fetch_price returns to (price, book_ts, received_ts)."""
+    def valid_price(value):
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            price = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return price if math.isfinite(price) and 0 < price < 1 else None
+
     result = await fetch_price(market_id, outcome_id, side)
     if result is None:
         return None, None, None
     if isinstance(result, (int, float)):
-        return float(result), None, None
+        return valid_price(result), None, None
     if isinstance(result, tuple):
         price = result[0] if len(result) > 0 else None
         book_ts = result[1] if len(result) > 1 else None
         received_ts = result[2] if len(result) > 2 else None
         return (
-            (float(price) if price is not None else None),
+            valid_price(price),
             _parse_ts(book_ts),
             _parse_ts(received_ts),
         )
@@ -224,16 +234,21 @@ def _accept_book_for_platform(
     price: Optional[float],
     book_ts: Optional[datetime],
     received_ts: Optional[datetime],
+    *,
+    allow_us_paper_receipt: bool = False,
 ) -> tuple[bool, Optional[str]]:
     """
-    Polymarket requires CLOB book_ts. Kalshi shadow may use receipt-only.
+    International CLOB requires book_ts. Explicit US paper research may use
+    its public HTTP receipt time, without inventing an exchange timestamp.
     Returns (ok, reject_reason).
     """
     if price is None or not (0.0 < float(price) < 1.0):
         return False, None
     plat = (platform or "").lower()
-    if plat == "polymarket":
+    if plat in {"polymarket", "polymarket_us"}:
         if book_ts is None:
+            if allow_us_paper_receipt and received_ts is not None:
+                return True, None
             return False, "MISSING_ORDERBOOK_TIMESTAMP"
         return True, None
     # Kalshi / unknown: prefer book_ts; allow receipt fallback for shadow freshness
@@ -242,14 +257,34 @@ def _accept_book_for_platform(
     return True, None
 
 
+def _obligation_rows(db, columns: str, *, pending_only: bool = False) -> list[dict]:
+    """Keyset pagination survives a server cap below our requested page size."""
+    rows = []
+    after = None
+    while True:
+        query = db.table("clv_obligations").select(columns).order("candidate_id").limit(500)
+        if pending_only:
+            query = query.or_("status_15m.eq.pending,status_1h.eq.pending,status_close.eq.pending")
+        if after is not None:
+            query = query.gt("candidate_id", after)
+        page = query.execute().data or []
+        if not page:
+            return rows
+        identifiers = [r.get("candidate_id") for r in page]
+        if (any(not isinstance(value, str) or not value for value in identifiers)
+                or identifiers != sorted(set(identifiers))
+                or (after is not None and identifiers[0] <= after)):
+            raise RuntimeError("CLV obligation pagination returned an invalid or stalled cursor")
+        rows.extend(page)
+        after = identifiers[-1]
+
+
 def count_clv_obligations(db=None) -> dict[str, int]:
     """Return total + per-status counts for reporting."""
     from backend.db import get_db
 
     db = db or get_db()
-    rows = db.table("clv_obligations").select(
-        "status_15m,status_1h,status_close"
-    ).execute().data or []
+    rows = _obligation_rows(db, "candidate_id,status_15m,status_1h,status_close")
     out = {
         "total": len(rows),
         "pending_15m": sum(1 for r in rows if r.get("status_15m") == "pending"),
@@ -289,14 +324,7 @@ async def update_clv_obligations(
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
 
-    rows = (
-        db.table("clv_obligations")
-        .select("*")
-        .or_("status_15m.eq.pending,status_1h.eq.pending,status_close.eq.pending")
-        .execute()
-        .data
-        or []
-    )
+    rows = _obligation_rows(db, "*", pending_only=True)
 
     stats = {"checked": 0, "updated": 0, "unavailable": 0, "errors": 0}
 
@@ -310,6 +338,14 @@ async def update_clv_obligations(
         patch: dict[str, Any] = {"updated_at": now.isoformat()}
         touched = False
         meta = dict(row.get("metadata") or {})
+        us_paper_receipt = (
+            platform in {"polymarket", "polymarket_us"}
+            and str(outcome_id).lower() in {"yes", "no"}
+            and meta.get("venue_product") == "polymarket_us"
+            and meta.get("mode") == "paper"
+            and bool(meta.get("experiment_id"))
+            and meta.get("paper_allow_receipt_timestamp") is True
+        )
 
         for checkpoint, due_key in (
             ("15m", "due_15m"),
@@ -412,8 +448,7 @@ async def update_clv_obligations(
             receipt = received_ts or now
             # Reject every post-start book for close (and any stamp after first pitch)
             if checkpoint == "close" and event_start is not None:
-                stamp = book_ts or received_ts
-                if stamp is not None and stamp >= event_start:
+                if any(stamp is not None and stamp >= event_start for stamp in (book_ts, received_ts)):
                     patch[status_col] = "unavailable"
                     patch[obs_ts_col] = receipt.isoformat()
                     meta[f"{checkpoint}_reason"] = "POST_START_BOOK"
@@ -429,8 +464,22 @@ async def update_clv_obligations(
                     )
                     continue
 
+            # A long batch cannot relabel a late HTTP response as timely using
+            # the scheduler's earlier cycle-start timestamp.
+            if checkpoint != "close" and receipt - due > overdue_grace:
+                patch[status_col] = "unavailable"
+                patch[obs_ts_col] = receipt.isoformat()
+                meta[f"{checkpoint}_reason"] = "OBSERVATION_OVERDUE"
+                meta[f"{checkpoint}_receipt_ts"] = receipt.isoformat()
+                meta[f"{checkpoint}_obs_delay_seconds"] = (receipt - due).total_seconds()
+                patch["metadata"] = meta
+                touched = True
+                stats["unavailable"] += 1
+                continue
+
             ok, reject_reason = _accept_book_for_platform(
-                platform, price, book_ts, received_ts
+                platform, price, book_ts, received_ts,
+                allow_us_paper_receipt=us_paper_receipt,
             )
             if ok and price is not None:
                 patch[status_col] = "observed"
@@ -453,7 +502,7 @@ async def update_clv_obligations(
                     f"CLV {checkpoint} observed for {candidate_id}: {price} "
                     f"(receipt={receipt.isoformat()})"
                 )
-            elif reject_reason == "MISSING_ORDERBOOK_TIMESTAMP" and platform == "polymarket":
+            elif reject_reason == "MISSING_ORDERBOOK_TIMESTAMP" and platform in {"polymarket", "polymarket_us"}:
                 # Within grace for 15m/1h: leave pending so a later stamp can land.
                 # For close (window ends at first pitch), mark unavailable if no stamp.
                 if checkpoint == "close":

@@ -986,19 +986,19 @@ def cmd_trade(args) -> None:
         print("(no actionable signals — nothing to trade)\n")
         return
 
-    positions = _load_json(_POSITIONS_FILE, [])
     placed = 0
 
     for sig in signals:
         ticker    = sig["ticker"]
         side      = sig["recommended_side"]
         contracts = sig["kelly_contracts"]
-        # Use the ask price for the side we're buying (with a 1¢ buffer).
+        # Display the same selected-side limit the shared order manager uses.
         if side == "yes":
             raw_price = sig.get("implied_prob", 0.5) * 100
         else:
             raw_price = (1 - sig.get("implied_prob", 0.5)) * 100
-        price_cents = max(1, min(99, round(raw_price) + 1))  # +1¢ taker buffer
+        price_buffer = max(0, min(50, int(CONFIG.get("AUTO_BET_PRICE_BUFFER_CENTS") or 5)))
+        price_cents = max(1, min(99, round(raw_price) + price_buffer))
 
         dir_label = {
             "above":    f"above {sig['threshold_f']}°F",
@@ -1018,29 +1018,21 @@ def cmd_trade(args) -> None:
             continue
 
         try:
-            result = kc.place_order(ticker, side, contracts, price_cents)
+            result = asyncio.run(order_manager.place_trade(sig, kc))
         except Exception as exc:
             print(f"    [FAIL] Order failed: {exc}\n")
             continue
 
-        status = result.get("status", "?")
         filled = result.get("filled_contracts", 0)
-        print(f"    [OK]   order_id={result.get('order_id','?')}  status={status}  filled={filled}\n")
-
-        positions.append({
-            **sig,
-            "order_id":     result.get("order_id", ""),
-            "status":       "open",
-            "price_cents":  price_cents,
-            "placed_at":    datetime.now(timezone.utc).isoformat(),
-        })
-        placed += 1
+        if result.get("pending"):
+            placed += 1
+            print(f"    [PENDING] order_id={result.get('order_id')} confirmed_fills={filled}\n")
+        print(f"    {result.get('error', 'Order attempt recorded')}\n")
+        if not result.get("success"):
+            break
 
     if not dry_run:
-        os.makedirs(os.path.dirname(_POSITIONS_FILE), exist_ok=True)
-        with open(_POSITIONS_FILE, "w", encoding="utf-8") as fh:
-            json.dump(positions, fh, indent=2, default=str)
-        print(f"Placed {placed} order(s). Positions saved to {_POSITIONS_FILE}\n")
+        print(f"Recorded {placed} order attempt(s) requiring venue reconciliation.\n")
 
 
 

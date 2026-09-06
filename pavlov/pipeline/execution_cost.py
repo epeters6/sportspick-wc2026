@@ -1,4 +1,5 @@
 from typing import List, Optional, Tuple
+import math
 from dataclasses import dataclass
 from loguru import logger
 
@@ -15,7 +16,7 @@ class ExecutableBucket:
     best_ask: float
     spread: float
 
-from pavlov.pipeline.fee_model import estimate_fee_per_share
+from pavlov.pipeline.fee_model import weather_fee_metadata
 
 # Opt-in only: evidence paths must pass default_depth_if_missing=None (the default)
 # so missing ask size yields depth 0 / INSUFFICIENT_DEPTH rather than assumed size.
@@ -32,7 +33,7 @@ def _as_probability(price) -> float:
         return 0.0
     if p > 1.0:
         p = p / 100.0
-    return p
+    return p if math.isfinite(p) else 0.0
 
 
 def _extract_ask_size(m: dict, default_depth_if_missing: Optional[float]) -> float:
@@ -44,9 +45,9 @@ def _extract_ask_size(m: dict, default_depth_if_missing: Optional[float]) -> flo
             size = float(raw)
         except (TypeError, ValueError):
             continue
-        if size > 0:
+        if math.isfinite(size) and size > 0:
             return size
-    if default_depth_if_missing is not None and default_depth_if_missing > 0:
+    if default_depth_if_missing is not None and math.isfinite(default_depth_if_missing) and default_depth_if_missing > 0:
         return float(default_depth_if_missing)
     return 0.0
 
@@ -69,6 +70,10 @@ def generate_executable_cost_vector(
     """
     Q_exec = []
     depth_caps = []
+    if platform.lower() not in {"kalshi", "polymarket", "polymarket_us"}:
+        raise ValueError(f"FEE_MODEL_UNAVAILABLE: {platform}")
+    if not math.isfinite(slippage_buffer) or slippage_buffer < 0:
+        raise ValueError("INVALID_SLIPPAGE_BUFFER")
     
     for m in raw_markets:
         ask = _as_probability(m.get("best_ask", m.get("yes_ask", 0.0)))
@@ -84,7 +89,9 @@ def generate_executable_cost_vector(
             depth_caps.append(0.0)
             continue
             
-        fee = estimate_fee_per_share(platform, ask, 1.0)
+        fee_metadata = weather_fee_metadata(platform, ask, m)
+        m["fee_estimate"] = fee_metadata
+        fee = fee_metadata["fee_per_share"]
         effective_cost = ask + fee + slippage_buffer
         
         if effective_cost >= 1.0:

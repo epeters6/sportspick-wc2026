@@ -332,6 +332,7 @@ async def resolve_weather_prediction_backlog(
     row_limit: int = 150,
     eligible_only: bool = True,
     resolution_fetcher=None,
+    source: str = WEATHER_PREDICTION_SOURCE,
 ) -> dict[str, Any]:
     """Relabel weather prediction history from exact official venue outcomes.
 
@@ -349,7 +350,7 @@ async def resolve_weather_prediction_backlog(
         query = (
             db.table("model_predictions")
             .select("id,event_key,outcome,is_correct,resolved_at,metadata")
-            .eq("source", WEATHER_PREDICTION_SOURCE)
+            .eq("source", source)
             .is_("metadata->>label_source", "null")
         )
         if eligible_only:

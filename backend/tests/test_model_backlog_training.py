@@ -34,6 +34,10 @@ class _Query:
         self.filters.append(("eq", key, value))
         return self
 
+    def lte(self, key, value):
+        self.filters.append(("lte", key, value))
+        return self
+
     def is_(self, key, value):
         self.filters.append(("is", key, value))
         return self
@@ -79,6 +83,9 @@ class _Query:
                 continue
             if operation == "eq":
                 matched = value_for(key) == value
+            elif operation == "lte":
+                candidate = value_for(key)
+                matched = candidate is not None and str(candidate) <= str(value)
             elif operation == "in":
                 matched = value_for(key) in value
             elif operation == "is":

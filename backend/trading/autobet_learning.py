@@ -109,14 +109,14 @@ def _fetch_settled_autobets(db=None, *, use_cache: bool = True) -> list[dict]:
     db = db or get_db()
     base_cols = (
         "id, status, stake, pnl, market_price, edge, model_prob, clv, "
-        "resolved_at, created_at, mode, match_id, "
+        "resolved_at, created_at, mode, match_id, market_id, "
         "matches:matches!autobets_match_id_fkey(sport)"
     )
     extended_cols = (
         "id, status, stake, pnl, outcome_name, bet_type, bet_line, bet_subject, "
         "shares, market_price, edge, model_prob, raw_confidence, clv, metadata, "
         "sport, strategy, event_date, settlement_version, settlement_match_id, "
-        "settlement_corrected_at, resolved_at, created_at, mode, match_id, "
+        "settlement_corrected_at, resolved_at, created_at, mode, match_id, market_id, "
         "matches:matches!autobets_match_id_fkey("
         "id, sport, external_id, home_team, away_team, scheduled_at, "
         "winner, is_final, home_score, away_score, match_stats)"
@@ -124,14 +124,24 @@ def _fetch_settled_autobets(db=None, *, use_cache: bool = True) -> list[dict]:
     schema_complete = False
     for cols in (extended_cols, base_cols):
         try:
-            rows = (
-                db.table("autobets")
-                .select(cols)
-                .in_("status", ["won", "lost"])
-                .order("resolved_at")
-                .execute()
-                .data or []
-            )
+            rows = []
+            cursor = None
+            while True:
+                query = (
+                    db.table("autobets").select(cols)
+                    .in_("status", ["won", "lost"]).order("id").limit(500)
+                )
+                if cursor is not None:
+                    query = query.gt("id", cursor)
+                page = query.execute().data or []
+                if not page:
+                    break
+                next_cursor = str(page[-1]["id"])
+                if cursor is not None and next_cursor <= cursor:
+                    raise RuntimeError("Settlement learning pagination did not advance")
+                rows.extend(page)
+                cursor = next_cursor
+            rows.sort(key=lambda row: str(row.get("resolved_at") or ""))
             schema_complete = cols == extended_cols
             break
         except Exception as exc:

@@ -3,6 +3,8 @@ import math
 import os
 import sys
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 # Ensure backend paths are loaded
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,6 +20,7 @@ class WeatherCalibration:
     station_samples: int
     pooled_samples: int
     source: str
+    training_as_of: str | None = None
 
 
 class WeatherMOS:
@@ -25,7 +28,24 @@ class WeatherMOS:
 
     def __init__(self):
         self.db = get_db()
-        self._cache: dict[tuple[str, str, int, str], WeatherCalibration] = {}
+        self._cache: dict[tuple[str, str, int, str, str], WeatherCalibration] = {}
+
+    @staticmethod
+    def _prior_observation(row: dict, cutoff: datetime) -> bool:
+        """Require a completed station-local date and an actual available by cutoff."""
+        from pavlov.pipeline.station_mapper import STATION_MAP, get_tz_for_city
+
+        city = next((city for city, station in STATION_MAP.items() if station.get("station") == row.get("station_id")), None)
+        if city is None:
+            return False
+        try:
+            target = date.fromisoformat(str(row.get("target_date")))
+            updated = datetime.fromisoformat(str(row.get("updated_at")).replace("Z", "+00:00"))
+            local_day = cutoff.astimezone(ZoneInfo(get_tz_for_city(city))).date()
+            return (updated.tzinfo is not None and updated.astimezone(timezone.utc) <= cutoff
+                    and target < min(cutoff.date(), local_day))
+        except (TypeError, ValueError, KeyError):
+            return False
 
     @staticmethod
     def _errors(rows: list[dict], metric: str) -> list[float]:
@@ -51,17 +71,23 @@ class WeatherMOS:
         model_name: str,
         lead_time_days: int,
         metric: str = "high",
+        *,
+        as_of: datetime | None = None,
     ) -> WeatherCalibration:
         """Return leakage-safe bias and total residual sigma.
 
-        Only rows with observed actuals can enter the residual sample, so a
-        future target day cannot train its own forecast. Station bias is shrunk
+        Training uses completed station-local target dates with actuals updated
+        no later than the explicit cutoff (default current UTC). Station bias is shrunk
         toward the metric/lead pool, while sigma may widen but never narrow the
         conservative v2 floor.
         """
         metric = "low" if str(metric).lower() == "low" else "high"
         lead = max(int(lead_time_days), 0)
-        cache_key = (station_id, model_name, lead, metric)
+        cutoff = as_of if as_of is not None else datetime.now(timezone.utc)
+        if not isinstance(cutoff, datetime) or cutoff.tzinfo is None:
+            raise ValueError("WEATHER_TRAINING_AS_OF_REQUIRES_TIMEZONE")
+        cutoff = cutoff.astimezone(timezone.utc)
+        cache_key = (station_id, model_name, lead, metric, cutoff.isoformat())
         if cache_key in self._cache:
             return self._cache[cache_key]
 
@@ -72,10 +98,12 @@ class WeatherMOS:
             pooled_rows = (
                 self.db.table("weather_verification")
                 .select(
-                    "station_id,target_date,predicted_high,predicted_low,actual_high,actual_low"
+                    "station_id,target_date,predicted_high,predicted_low,actual_high,actual_low,updated_at"
                 )
                 .eq("model_name", model_name)
                 .eq("lead_time_days", lead)
+                .lt("target_date", cutoff.date().isoformat())
+                .lte("updated_at", cutoff.isoformat())
                 .order("target_date", desc=True)
                 .limit(250)
                 .execute()
@@ -84,10 +112,11 @@ class WeatherMOS:
             )
         except Exception as exc:
             logger.warning("MOS pooled verification query failed: %s", exc)
-            result = WeatherCalibration(0.0, floor_sigma, 0, 0, "v2_floor")
+            result = WeatherCalibration(0.0, floor_sigma, 0, 0, "v2_floor", cutoff.isoformat())
             self._cache[cache_key] = result
             return result
 
+        pooled_rows = [row for row in pooled_rows if self._prior_observation(row, cutoff)]
         pooled_errors = self._errors(pooled_rows, metric)
         station_errors = self._errors(
             [row for row in pooled_rows if row.get("station_id") == station_id],
@@ -124,6 +153,7 @@ class WeatherMOS:
             station_samples=len(station_errors),
             pooled_samples=len(pooled_errors),
             source=source,
+            training_as_of=cutoff.isoformat(),
         )
         self._cache[cache_key] = result
         logger.info(
@@ -144,10 +174,12 @@ class WeatherMOS:
         model_name: str,
         lead_time_days: int,
         metric: str = "high",
+        *,
+        as_of: datetime | None = None,
     ) -> float:
         """Backward-compatible bias-only interface."""
         return self.calculate_calibration(
-            station_id, model_name, lead_time_days, metric
+            station_id, model_name, lead_time_days, metric, as_of=as_of
         ).bias_correction
 
 
