@@ -1,5 +1,7 @@
 -- Run as postgres after installing, provisioning the dedicated Vault secret,
 -- and merging the workflows' scheduled_for input and execution-time validation.
+-- External prerequisite: verify net/vault/weather_scheduler API profiles reject
+-- access and no exposed RPC/view grants arbitrary SQL or secret storage access.
 begin;
 do $activation$
 declare
@@ -7,12 +9,16 @@ declare
     credentials integer;
     role_name text;
 begin
+    if exists (select 1 from pg_catalog.pg_roles
+               where rolname in ('anon', 'authenticated') and rolcanlogin) then
+        raise exception 'UNTRUSTED_API_ROLES_MUST_HAVE_NOLOGIN';
+    end if;
     foreach role_name in array array['anon', 'authenticated', 'service_role'] loop
-        if has_table_privilege(role_name, 'net.http_request_queue', 'select,insert,update,delete,truncate,references,trigger')
-           or has_table_privilege(role_name, 'vault.decrypted_secrets', 'select,insert,update,delete,truncate,references,trigger')
-           or has_table_privilege(role_name, 'vault.secrets', 'select,insert,update,delete,truncate,references,trigger')
-           or has_schema_privilege(role_name, 'weather_scheduler', 'usage')
-           or has_function_privilege(role_name, 'weather_scheduler.dispatch(text,boolean)', 'execute') then
+        if has_schema_privilege(role_name, 'weather_scheduler', 'usage')
+           or has_function_privilege(role_name, 'weather_scheduler.dispatch(text,boolean)', 'execute')
+           or has_function_privilege(role_name, 'weather_scheduler.capture_responses()', 'execute')
+           or has_table_privilege(role_name, 'weather_scheduler.dispatch_audit',
+                'select,insert,update,delete,truncate,references,trigger') then
             raise exception 'DISPATCH_PRIVILEGE_HARDENING_REQUIRED';
         end if;
     end loop;
