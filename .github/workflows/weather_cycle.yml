@@ -2,10 +2,14 @@ name: Weather Paper Research
 
 on:
   schedule:
-    # Hourly orchestration supports fixed local decision windows across US zones.
-    # Forecasting is skipped outside the configured station windows.
+    # Fallback only; Supabase is the primary timed dispatcher (see ops runbook).
     - cron: '17 * * * *'
   workflow_dispatch:
+    inputs:
+      scheduled_for:
+        description: 'UTC dispatch time from Supabase; leave blank for a manual run'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -56,12 +60,19 @@ jobs:
       - name: Validate Supabase configuration
         run: python scripts/ci_check_env.py
 
+      - name: Require a current trigger with enough time before the UTC boundary
+        id: dispatch
+        env:
+          WEATHER_SCHEDULED_FOR: ${{ inputs.scheduled_for }}
+        run: python scripts/check_weather_dispatch.py weather
+
       # The orchestrator isolates forecast failures from settlement and reporting.
       - name: Settle, forecast, evaluate, and report weather paper experiment
+        if: steps.dispatch.outputs.execute == 'true'
         run: python -m scripts.run_weather_cycle --report reports/weather/latest.json
 
       - name: Upload weather evidence even when a stage fails
-        if: always()
+        if: always() && steps.dispatch.outputs.execute == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: weather-paper-${{ github.run_id }}-${{ github.run_attempt }}

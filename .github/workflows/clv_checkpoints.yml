@@ -5,10 +5,14 @@ name: CLV Checkpoints
 
 on:
   schedule:
-    # Offset from the top of the hour to reduce GitHub scheduler congestion.
-    # Collect 15m/1h/close evidence near due times; delays remain visible.
+    # Fallback only; Supabase is the primary timed dispatcher (see ops runbook).
     - cron: '2-57/5 * * * *'
   workflow_dispatch:
+    inputs:
+      scheduled_for:
+        description: 'UTC dispatch time from Supabase; leave blank for a manual run'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -57,5 +61,12 @@ jobs:
       - name: Validate Supabase secrets
         run: python scripts/ci_check_env.py
 
+      - name: Reject a queued trigger older than five minutes
+        id: dispatch
+        env:
+          WEATHER_SCHEDULED_FOR: ${{ inputs.scheduled_for }}
+        run: python scripts/check_weather_dispatch.py clv
+
       - name: Update CLV checkpoints (once)
+        if: steps.dispatch.outputs.execute == 'true'
         run: python scripts/run_clv_scheduler.py --once

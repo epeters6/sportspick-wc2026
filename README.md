@@ -9,7 +9,8 @@ Read the [implemented weather strategy and its limits](docs/weather_strategy.md)
 ## Active weather cycle
 
 ```text
-GitHub Actions: weather_cycle.yml (hourly at :17)
+Supabase Cron: hourly weather dispatch at :07, bounded watchdog at :27
+  └─ GitHub Actions: weather_cycle.yml (native :17 cron remains a fallback)
   └─ python -m scripts.run_weather_cycle --report reports/weather/latest.json
        ├─ verify and settle existing paper positions using official venue outcomes
        ├─ forecast only within fixed station decision windows
@@ -36,7 +37,7 @@ python -m unittest discover -s backend/tests -p "test_*.py" -v
 
 The cycle writes paper research data. Run it against the intended database only. The orchestration is paper-only and isolates settlement/reporting from forecast failures. A healthy cycle means the operations completed, not that the strategy is profitable. Review timestamps, failed stages, quarantined settlements, and per-venue balances before interpreting results.
 
-GitHub timing is approximate. The configured hourly cycle supports decision windows at 08:00, 11:00, and 14:00 in each station's local time; forecasting outside eligible windows is skipped. It is not a continuous low-latency execution service.
+Configure the [Supabase dispatch scheduler](supabase/ops/WEATHER_DISPATCH.md) separately; its installation starts inactive until the dedicated repository credential is provisioned and activation is verified. GitHub native cron missed eligible hours during initial activation, so it remains a fallback rather than the primary clock. External dispatch can still encounter runner queues. Expired requests are skipped, and weather execution requires enough time before the next UTC hour. The fixed station decision hours remain 08:00, 11:00, and 14:00 local.
 
 ## Setup
 
@@ -81,8 +82,8 @@ The dashboard uses `NEXT_PUBLIC_API_URL`, defaulting to `http://localhost:8000`.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `weather_cycle.yml` | Hourly at :17 UTC, or manual | Active weather paper experiment, independent settlement, report artifacts |
-| `clv_checkpoints.yml` | Every five minutes, or manual | Primary forward-weather closing-price observer, using public venue books; does not place orders |
+| `weather_cycle.yml` | Supabase hourly at :07 with bounded :27 watchdog; native :17 fallback; manual | Active weather paper experiment, independent settlement, report artifacts |
+| `clv_checkpoints.yml` | Supabase every five minutes; native cron fallback; manual | Primary forward-weather closing-price observer, using public venue books; does not place orders |
 | `unit_tests.yml` | Push, pull request, or manual | Backend tests and dashboard type checking without production secrets |
 | `sync_scrape.yml` | Manual only | Legacy influencer and sports collection |
 | `sync_ml.yml` | Manual only | Legacy broad ML cycle and sports shadow settlement |
