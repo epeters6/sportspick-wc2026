@@ -219,7 +219,7 @@ class TestWeatherCycle(unittest.IsolatedAsyncioTestCase):
             return real_import(name)
         with tempfile.TemporaryDirectory() as work, \
                 patch("scripts.run_weather_cycle.register_experiment", return_value=manifest), \
-                patch("scripts.run_weather_cycle.importlib.import_module", side_effect=import_stage):
+                patch("scripts.run_weather_cycle.importlib", SimpleNamespace(import_module=import_stage)):
             report = await run_cycle(db=MemoryDB(), now=datetime(2026, 9, 6, 12, tzinfo=timezone.utc),
                                      report_path=Path(work) / "report.json")
         self.assertEqual(calls, ["settle", "settle"])
@@ -256,3 +256,43 @@ class TestWeatherCycle(unittest.IsolatedAsyncioTestCase):
                 await run_cycle(db=db, stage_functions=functions, now=datetime(2026, 9, 6, 12, tzinfo=timezone.utc),
                                 report_path=Path(work) / "report.json")
         self.assertEqual(calls, ["forecast"])
+
+    async def test_failed_forecast_retains_claim_and_blocks_same_hour_retry(self):
+        from scripts.run_weather_cycle import run_cycle
+
+        config = read_config()
+        manifest = {"id": config["id"], "config": config, "config_hash": "fixed"}
+        calls, db = [], MemoryDB()
+        started = datetime(2026, 9, 6, 12, 7, tzinfo=timezone.utc)
+        claim_key = f"weather_forecast_slot:{config['id']}:20260906T12"
+
+        def failed_forecast():
+            calls.append("failed_attempt")
+            raise RuntimeError("provider unavailable")
+
+        with tempfile.TemporaryDirectory() as work, \
+                patch("scripts.run_weather_cycle.register_experiment", return_value=manifest):
+            first = await run_cycle(
+                db=db, stage_functions={"forecast": failed_forecast}, now=started,
+                report_path=Path(work) / "first.json",
+            )
+            original_claim = copy.deepcopy(next(
+                row for row in db.rows["app_settings"] if row["key"] == claim_key
+            ))
+            second = await run_cycle(
+                db=db, stage_functions={"forecast": lambda: calls.append("retry")},
+                now=started + timedelta(minutes=20),
+                report_path=Path(work) / "second.json",
+            )
+
+        self.assertEqual(first["stages"]["forecast"], {"status": "failed", "error": "RuntimeError"})
+        self.assertEqual(second["stages"]["forecast"], {
+            "status": "skipped", "reason": "FORECAST_SLOT_ALREADY_ATTEMPTED",
+        })
+        self.assertNotEqual(first["run_id"], second["run_id"])
+        self.assertEqual(calls, ["failed_attempt"])
+        claims = [row for row in db.rows["app_settings"] if row["key"] == claim_key]
+        self.assertEqual(claims, [original_claim])
+        self.assertEqual(original_claim["value"], {
+            "run_id": first["run_id"], "started_at": started.isoformat(),
+        })
