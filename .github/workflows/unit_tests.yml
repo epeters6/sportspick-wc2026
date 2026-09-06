@@ -81,3 +81,18 @@ jobs:
           node-version: '24'
       - name: Verify legacy observer leaves experiment rows untouched
         run: node --test supabase/functions/clv-checkpoints/ownership.test.mjs
+
+  scheduler-sql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install isolated PostgreSQL test runtime
+        run: npm install --prefix reports/weather-dispatch-sql-check --ignore-scripts --no-audit --no-fund --no-save @electric-sql/pglite@0.5.8
+      - name: Verify dispatch SQL without connecting to production
+        run: node supabase/ops/test_weather_dispatch_local.mjs reports/weather-dispatch-sql-check

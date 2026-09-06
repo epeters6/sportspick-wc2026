@@ -63,7 +63,8 @@ begin
     delete from weather_scheduler.dispatch_audit where attempt = 'watchdog';
     insert into public.app_settings (key, value)
     values (claim_key, '{"run_id":"synthetic-failed-attempt","status":"failed"}'::jsonb);
-    if weather_scheduler.dispatch('weather_cycle.yml', true) is not null
+    request_two := weather_scheduler.dispatch('weather_cycle.yml', true);
+    if request_two is not null
        or not exists (select 1 from weather_scheduler.dispatch_audit
                       where reason = 'FORECAST_SLOT_ALREADY_ATTEMPTED' and state = 'skipped') then
         raise exception 'FAILED_FORECAST_CLAIM_WAS_RETRIED';
@@ -74,7 +75,8 @@ begin
         'experiment', jsonb_build_object('id', 'weather_forward_2026_09_v1'),
         'timestamp', clock_timestamp()
     ));
-    if weather_scheduler.dispatch('weather_cycle.yml', true) is not null
+    request_two := weather_scheduler.dispatch('weather_cycle.yml', true);
+    if request_two is not null
        or not exists (select 1 from weather_scheduler.dispatch_audit
                       where reason = 'CURRENT_HOUR_CYCLE_RECORDED') then
         raise exception 'CURRENT_HOUR_REPORT_DID_NOT_SUPPRESS_WATCHDOG';

@@ -51,6 +51,27 @@ that file, then drop `weather_scheduler`; do not drop shared `pg_cron`, `pg_net`
 Vault, or the existing CLV cron job. Credential revocation is separate. Retain the
 queue/Vault privilege hardening; rollback does not restore secret-read access.
 
+## Local validation
+
+`test_weather_dispatch_local.mjs` executes the SQL function bodies in PGlite's
+PostgreSQL runtime with in-memory cron, HTTP and Vault fixtures. It makes no
+Supabase connection or HTTP request. Only the two hosted extension installation
+statements are removed; the production installer, activation/disable/evidence
+queries and rollback test bodies execute as written.
+
+```sh
+npm install --prefix reports/weather-dispatch-sql-check --ignore-scripts --no-audit --no-fund --no-save @electric-sql/pglite@0.5.8
+node supabase/ops/test_weather_dispatch_local.mjs reports/weather-dispatch-sql-check
+```
+
+The 15 local checks passed on PostgreSQL 18.3/PGlite 0.5.8. The deployed Supabase
+project uses PostgreSQL 17, so managed extension ownership/permissions and actual
+delivery must still be verified after deployment. The atomic unique constraint is
+the concurrency guard; local duplicate tests use a single database connection.
+`test_weather_dispatch_rollback.sql` is also provided for operator validation on an
+inactive installation before provisioning the real credential. Run that entire
+file in one transaction; its fake credentials and enqueued requests roll back.
+
 References: [GitHub dispatch API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event),
 [Supabase Cron](https://supabase.com/docs/guides/cron),
 [pg_net delivery and response retention](https://supabase.com/docs/guides/database/extensions/pg_net).
