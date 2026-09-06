@@ -23,6 +23,8 @@ select n.nspname, p.proname, p.prosecdef as security_definer,
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'weather_scheduler';
 
+-- Informational managed ACLs: true here is not evidence of Data API exposure.
+-- Verify actual Accept-Profile rejection separately as described in the runbook.
 select role_name,
        has_schema_privilege(role_name, 'net', 'usage') as net_usage,
        has_table_privilege(role_name, 'net.http_request_queue', 'select') as queue_select,

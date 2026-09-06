@@ -3,36 +3,37 @@
 -- with access to this repository only and Actions:write before activation.
 begin;
 
-create extension if not exists pg_cron with schema pg_catalog;
-create extension if not exists pg_net;
-
--- pg_net's queue contains outbound Authorization headers. Extension defaults can
--- expose it to application roles even though net is not a Data API schema.
--- These privileges must be removed BEFORE the dedicated token is provisioned.
--- Existing postgres-owned cron jobs retain access; no legacy job is reactivated.
--- Preserve generic net schema/functions/response access for existing consumers.
--- Queue UPDATE is also dangerous: it could redirect a queued authenticated call.
-revoke all on net.http_request_queue from public, anon, authenticated, service_role;
-revoke all on vault.decrypted_secrets from public, anon, authenticated, service_role;
-revoke all on vault.secrets from public, anon, authenticated, service_role;
--- Supabase extension objects may be owned by supabase_admin, so do not rely on
--- the PUBLIC grants just removed to give postgres its runtime access.
-grant usage on schema net, vault to postgres;
-grant select on net._http_response, vault.decrypted_secrets to postgres;
-grant execute on function net.http_post(text, jsonb, jsonb, jsonb, integer) to postgres;
-do $storage_privileges$
-declare
-    role_name text;
+-- This project already has both managed extensions. Even CREATE EXTENSION IF NOT
+-- EXISTS can fire Supabase's privilege-maintenance event trigger, so verify only.
+-- Missing extensions must be provisioned separately; never repair grants with CASCADE.
+do $hosted_extensions$
 begin
-    foreach role_name in array array['anon', 'authenticated', 'service_role'] loop
-        if has_table_privilege(role_name, 'net.http_request_queue', 'select,insert,update,delete,truncate,references,trigger')
-           or has_table_privilege(role_name, 'vault.decrypted_secrets', 'select,insert,update,delete,truncate,references,trigger')
-           or has_table_privilege(role_name, 'vault.secrets', 'select,insert,update,delete,truncate,references,trigger') then
-            raise exception 'APPLICATION_ROLE_CAN_READ_DISPATCH_CREDENTIAL_STORAGE';
-        end if;
-    end loop;
+    if (select count(*) from pg_catalog.pg_extension
+        where extname in ('pg_cron', 'pg_net')) <> 2 then
+        raise exception 'REQUIRED_PG_CRON_AND_PG_NET_EXTENSIONS_MISSING';
+    end if;
 end;
-$storage_privileges$;
+$hosted_extensions$;
+
+-- Preserve Supabase-managed net/Vault ACLs. The supported pattern relies on these
+-- schemas being outside the Data/GraphQL APIs and untrusted roles having NOLOGIN.
+-- Verify actual API profile rejection before activation; see WEATHER_DISPATCH.md.
+-- service_role is a trusted server role and may retain managed Vault privileges.
+do $managed_boundary$
+begin
+    if exists (select 1 from pg_catalog.pg_roles
+               where rolname in ('anon', 'authenticated') and rolcanlogin) then
+        raise exception 'UNTRUSTED_API_ROLES_MUST_HAVE_NOLOGIN';
+    end if;
+    if not has_schema_privilege('postgres', 'net', 'usage')
+       or not has_schema_privilege('postgres', 'vault', 'usage')
+       or not has_table_privilege('postgres', 'net._http_response', 'select')
+       or not has_table_privilege('postgres', 'vault.decrypted_secrets', 'select')
+       or not has_function_privilege('postgres', 'net.http_post(text,jsonb,jsonb,jsonb,integer)', 'execute') then
+        raise exception 'POSTGRES_MANAGED_EXTENSION_ACCESS_REQUIRED';
+    end if;
+end;
+$managed_boundary$;
 
 create schema if not exists weather_scheduler authorization postgres;
 revoke all on schema weather_scheduler from public, anon, authenticated, service_role;
@@ -254,6 +255,22 @@ alter function weather_scheduler.dispatch(text, boolean) owner to postgres;
 revoke all on all tables in schema weather_scheduler from public, anon, authenticated, service_role;
 revoke all on all sequences in schema weather_scheduler from public, anon, authenticated, service_role;
 revoke all on all functions in schema weather_scheduler from public, anon, authenticated, service_role;
+
+do $private_privileges$
+declare
+    role_name text;
+begin
+    foreach role_name in array array['anon', 'authenticated', 'service_role'] loop
+        if has_schema_privilege(role_name, 'weather_scheduler', 'usage')
+           or has_function_privilege(role_name, 'weather_scheduler.dispatch(text,boolean)', 'execute')
+           or has_function_privilege(role_name, 'weather_scheduler.capture_responses()', 'execute')
+           or has_table_privilege(role_name, 'weather_scheduler.dispatch_audit',
+                'select,insert,update,delete,truncate,references,trigger') then
+            raise exception 'PRIVATE_SCHEDULER_PRIVILEGES_REQUIRED';
+        end if;
+    end loop;
+end;
+$private_privileges$;
 
 -- These names only belong to this new dispatcher. Existing cron jobs are untouched.
 select cron.schedule('weather-github-hourly', '7 * * * *',

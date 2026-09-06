@@ -74,9 +74,13 @@ try {
     create function cron.alter_job(job_id bigint, active boolean)
       returns void language sql as $$update cron.job set active=$2 where jobid=$1$$;
   `);
-  const install = (await load('install_weather_dispatch.sql'))
-    .replace(/^create extension if not exists pg_cron with schema pg_catalog;\r?$/m, '')
-    .replace(/^create extension if not exists pg_net;\r?$/m, '');
+  const hostedInstall = await load('install_weather_dispatch.sql');
+  await expectRejected(hostedInstall, 'REQUIRED_PG_CRON_AND_PG_NET_EXTENSIONS_MISSING');
+  // Fixtures implement the extension interfaces without installing hosted packages.
+  // Bypass exactly the availability precondition; execute all remaining SQL intact.
+  const availabilityCheck = /^do \$hosted_extensions\$[\s\S]*?^\$hosted_extensions\$;\r?$/gm;
+  assert.equal([...hostedInstall.matchAll(availabilityCheck)].length, 1);
+  const install = hostedInstall.replace(availabilityCheck, '');
   await db.exec(install);
   await db.exec(install);
   check(await scalar('select count(*)::int from cron.job') === 4, 'install/reinstall produces exactly four jobs');
@@ -84,13 +88,16 @@ try {
   check(await scalar('select count(*)::int from net.http_request_queue') === 0, 'installation sends no HTTP requests');
   check(await scalar(`select bool_and(not has_schema_privilege(r, 'weather_scheduler', 'usage')
       and not has_function_privilege(r, 'weather_scheduler.dispatch(text,boolean)', 'execute')
-      and not has_table_privilege(r, 'net.http_request_queue', 'select,insert,update,delete,truncate,references,trigger')
-      and not has_table_privilege(r, 'vault.decrypted_secrets', 'select,insert,update,delete,truncate,references,trigger'))
-      from unnest(array['anon','authenticated','service_role']) as roles(r)`), 'application roles cannot access dispatcher or credential storage');
+      and not has_function_privilege(r, 'weather_scheduler.capture_responses()', 'execute')
+      and not has_table_privilege(r, 'weather_scheduler.dispatch_audit', 'select,insert,update,delete,truncate,references,trigger'))
+      from unnest(array['anon','authenticated','service_role']) as roles(r)`), 'application roles cannot access the private dispatcher or audit');
   check(await scalar(`select bool_and(has_schema_privilege(r, 'net', 'usage')
       and has_function_privilege(r, 'net.http_post(text,jsonb,jsonb,jsonb,integer)', 'execute')
-      and has_table_privilege(r, 'net._http_response', 'select'))
-      from unnest(array['anon','authenticated','service_role']) as roles(r)`), 'generic pg_net usage/functions/responses remain available');
+      and has_table_privilege(r, 'net._http_response', 'select')
+      and has_table_privilege(r, 'net.http_request_queue', 'select,insert,update,delete'))
+      from unnest(array['anon','authenticated','service_role']) as roles(r)`), 'managed pg_net ACLs remain unchanged');
+  check(await scalar(`select has_table_privilege('service_role','vault.decrypted_secrets','select')
+      and has_table_privilege('service_role','vault.secrets','select')`), 'trusted server role retains managed Vault access');
   check(await scalar(`select bool_and(not prosecdef) from pg_proc p join pg_namespace n
       on n.oid=p.pronamespace where n.nspname='weather_scheduler'`), 'scheduler functions are SECURITY INVOKER');
 
@@ -108,9 +115,12 @@ try {
   check(await scalar('select count(*)::int from cron.job where active') === 4, 'activation enables four jobs with a valid test credential');
   await db.exec(await load('disable_weather_dispatch.sql'));
   check(await scalar('select count(*)::int from cron.job where active') === 0, 'disable stops only the new jobs');
-  await db.exec('grant update on net.http_request_queue to anon');
+  await db.exec('grant update on weather_scheduler.dispatch_audit to anon');
   await expectRejected(activate, 'DISPATCH_PRIVILEGE_HARDENING_REQUIRED');
-  await db.exec('revoke update on net.http_request_queue from anon');
+  await db.exec('revoke update on weather_scheduler.dispatch_audit from anon');
+  await db.exec('alter role authenticated login');
+  await expectRejected(activate, 'UNTRUSTED_API_ROLES_MUST_HAVE_NOLOGIN');
+  await db.exec('alter role authenticated nologin');
   await db.exec(await load('weather_dispatch_evidence.sql'));
   check(true, 'evidence queries execute without credentials or raw request fields');
   console.log(`Completed ${checks} checks using ${await scalar('select version()')}. HTTP and cron are local stubs.`);
