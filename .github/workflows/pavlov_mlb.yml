@@ -1,17 +1,14 @@
-name: Pavlov MLB
+name: Legacy - Pavlov MLB
 
 on:
-  schedule:
-    # 14:00 & 20:00 UTC ≈ 10:00 & 16:00 ET (pregame windows)
-    - cron: '0 14,20 * * *'
-    # Midnight ET resolution ≈ 05:00 UTC
-    - cron: '0 5 * * *'
   workflow_dispatch:
     inputs:
       mode:
         description: 'cycle or resolve'
         required: false
-        default: cycle
+        type: choice
+        options: [resolve, cycle]
+        default: resolve
 
 jobs:
   mlb:
@@ -66,13 +63,9 @@ jobs:
         run: python scripts/ci_check_env.py
 
       - name: Pavlov MLB pregame cycle
-        if: >-
-          (github.event_name == 'workflow_dispatch' && inputs.mode == 'cycle') ||
-          (github.event_name == 'schedule' && github.event.schedule != '0 5 * * *')
+        if: inputs.mode == 'cycle'
         run: python scripts/run_pavlov_mlb.py
 
       - name: Pavlov MLB midnight resolution
-        if: >-
-          (github.event_name == 'workflow_dispatch' && inputs.mode == 'resolve') ||
-          (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *')
+        if: inputs.mode == 'resolve'
         run: python scripts/run_pavlov_mlb_resolve.py

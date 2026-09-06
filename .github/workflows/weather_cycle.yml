@@ -1,35 +1,39 @@
-name: Legacy - Sync ML
+name: Weather Paper Research
 
 on:
+  schedule:
+    # Hourly orchestration supports fixed local decision windows across US zones.
+    # Forecasting is skipped outside the configured station windows.
+    - cron: '17 * * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: weather-paper-research
+  cancel-in-progress: false
+
 jobs:
-  ml:
+  weather:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    concurrency:
-      group: quant-validation-${{ github.workflow }}
-      cancel-in-progress: false
-
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       OWM_API_KEY: ${{ secrets.OWM_API_KEY }}
-      KALSHI_API_KEY: ${{ secrets.KALSHI_API_KEY }}
-      KALSHI_PRIVATE_KEY_B64: ${{ secrets.KALSHI_PRIVATE_KEY_B64 }}
-      POLYMARKET_KEY_ID: ${{ secrets.POLYMARKET_KEY_ID }}
-      POLYMARKET_SECRET_KEY: ${{ secrets.POLYMARKET_SECRET_KEY }}
       APP_ENV: production
       LOG_LEVEL: INFO
       GITHUB_ACTIONS: "true"
       MODE: shadow
       LIVE_TRADING_ENABLED: "false"
       POLYMARKET_LIVE_ENABLED: "false"
-      POLY_AUTO_BET_ENABLED: "0"
       AUTO_BET_ENABLED: "0"
+      POLY_AUTO_BET_ENABLED: "0"
       POLY_MLB_AUTO_BET_ENABLED: "0"
+      POLY_MLB_INGAME_ENABLED: "0"
+      DISCORD_WEBHOOK_URL: ""
 
     steps:
       - name: Checkout
@@ -49,34 +53,22 @@ jobs:
           pip install -r backend/requirements.txt
           pip install -r pavlov/requirements.txt
 
-      - name: Validate Supabase secrets
+      - name: Validate Supabase configuration
         run: python scripts/ci_check_env.py
 
-      - name: Run ML-only sync
-        run: python scripts/run_sync.py --ml-only
+      # The orchestrator isolates forecast failures from settlement and reporting.
+      - name: Settle, forecast, evaluate, and report weather paper experiment
+        run: python -m scripts.run_weather_cycle --report reports/weather/latest.json
 
-      - name: Settle prior sports shadow positions
-        if: always()
-        run: python scripts/settle_sports_shadow.py --once
-
-      - name: Run Sports Shadow Validation
-        run: python scripts/run_sports_shadow_validation.py
-
-      - name: Upload validation artifacts
+      - name: Upload weather evidence even when a stage fails
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: quant-validation-${{ github.run_id }}
+          name: weather-paper-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 90
           path: |
-            sports_shadow_decisions.jsonl
-            sports_paper_fills.jsonl
-            sports_clv_tracking.jsonl
+            reports/weather/**
             weather_shadow_decisions.jsonl
             weather_sync_status.json
-            paper_fills.jsonl
-            clv_tracking.jsonl
             orderbook_snapshots.jsonl
-            sync_status.json
-            reports/sports_shadow/*.json

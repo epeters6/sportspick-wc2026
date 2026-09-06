@@ -45,8 +45,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="SportsPick API",
-    description="Track top sports pick influencers and get AI-powered consensus recommendations.",
+    title="Weather Trading Research API",
+    description="Private Kalshi and Polymarket US weather paper research with verified settlement evidence.",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -67,6 +67,29 @@ app.include_router(models.router)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+def _require_admin(request: Request) -> None:
+    from backend.trading.live_toggle import _authorize_admin
+    allowed, _actor, reason, status = _authorize_admin(request.headers.get("Authorization"))
+    if not allowed:
+        raise HTTPException(status_code=status, detail=reason)
+
+
+@app.get("/weather/experiment")
+def weather_experiment_status():
+    from backend.trading.weather_experiment import LATEST_KEY, metadata
+    try:
+        rows = get_db().table("app_settings").select("value").eq("key", LATEST_KEY).execute().data or []
+    except Exception:
+        raise HTTPException(status_code=503, detail="Weather experiment status unavailable")
+    if not rows:
+        return {"status": "never_run", "mode": "paper", "live_ready": False,
+                "timestamp": None, "stages": {}, "venues": {}}
+    report = metadata(rows[0].get("value"))
+    if not report.get("timestamp") or report.get("mode") != "paper":
+        raise HTTPException(status_code=503, detail="Invalid weather experiment status")
+    return report
 
 
 # ─── Influencers ─────────────────────────────────────────────────────────────
@@ -398,8 +421,13 @@ def trading_tracked_picks(
 
 
 @app.post("/trading/autobet/run")
-async def trading_autobet_run():
+async def trading_autobet_run(request: Request):
     """Manually trigger one autobet scan (respects paper/live mode + risk gates)."""
+    _require_admin(request)
+    from backend.config import get_settings
+    if get_settings().trading_focus == "weather":
+        from scripts.run_weather_cycle import run_cycle
+        return await run_cycle()
     from backend.trading.autobet import run_autobet, resolve_autobets
     summary = await run_autobet()
     resolved = resolve_autobets()
@@ -407,8 +435,9 @@ async def trading_autobet_run():
 
 
 @app.get("/trading/treasury")
-def get_treasury_status():
+def get_treasury_status(request: Request):
     """Returns live Kalshi/Polymarket balances."""
+    _require_admin(request)
     from backend.trading.treasury import get_unified_balances
     return get_unified_balances()
 
@@ -499,6 +528,10 @@ def get_trading_readiness():
 
     settings = get_settings()
     global_ready = assess_live_readiness()
+    weather_only = settings.trading_focus == "weather"
+    if weather_only:
+        global_ready = {**global_ready, "live_ready": False,
+                        "message": "Weather forward experiment is paper-only. See /weather/experiment for research evidence."}
     sport_stats = compute_sport_stats()
 
     guardian = {"halted": False, "reasons": [], "updated_at": None}
@@ -513,7 +546,7 @@ def get_trading_readiness():
         w = n / (n + k) if n > 0 else 0.0
         return (w * roi_frac) + ((1 - w) * 0.0)
 
-    tracked_domains = ["mlb", "weather", "football"]
+    tracked_domains = ["weather"] if weather_only else ["mlb", "weather", "football"]
     domains = []
     for sport in tracked_domains:
         s = sport_stats.get(sport, {})
@@ -522,7 +555,7 @@ def get_trading_readiness():
         roi_frac = roi_pct / 100.0
         shrunken = _shrink(roi_frac, settled)
         req = max(10, settings.polymarket_live_min_settled_bets // 5)
-        is_ready = settled >= req and shrunken > 0.0
+        is_ready = not weather_only and settled >= req and shrunken > 0.0
         domains.append({
             "domain": sport,
             "is_ready": is_ready,
@@ -644,6 +677,18 @@ def models_overview():
 @app.get("/models/readiness")
 def models_readiness():
     """Per-model readiness criteria for the dashboard."""
+    from backend.config import get_settings
+    if get_settings().trading_focus == "weather":
+        report = weather_experiment_status()
+        evidence = report.get("forward_evaluation") or {}
+        return {"weather_portfolio": {
+            "criteria": [{"label": f"{venue}: {name.replace('_', ' ')}", "met": bool(passed)}
+                         for venue, row in evidence.get("venues", {}).items()
+                         for name, passed in row.get("criteria", {}).items()],
+            "score": None, "ready": False,
+            "research_evidence_ready": evidence.get("research_evidence_ready", False),
+            "message": "Paper research only; live execution requires separate validation and authorization.",
+        }}
     from backend.trading.autobet_learning import assess_live_readiness, compute_sport_stats
 
     global_r = assess_live_readiness()
@@ -808,8 +853,12 @@ def stats_platforms():
 # ─── Admin: seed & manual sync ───────────────────────────────────────────────
 
 @app.post("/seed")
-async def seed_influencers():
+async def seed_influencers(request: Request):
     """Populate the influencer list with curated accounts. Run once."""
+    _require_admin(request)
+    from backend.config import get_settings
+    if get_settings().trading_focus == "weather":
+        raise HTTPException(status_code=409, detail="Sports seeding disabled in weather focus")
     from backend.scrapers.twitter_scraper import seed_twitter_influencers
     from backend.scrapers.tiktok_scraper import seed_tiktok_influencers
     from backend.scrapers.instagram_scraper import seed_instagram_influencers
@@ -821,8 +870,13 @@ async def seed_influencers():
 
 
 @app.post("/sync")
-async def manual_sync():
+async def manual_sync(request: Request):
     """Trigger a full scrape + WC data sync cycle immediately."""
+    _require_admin(request)
+    from backend.config import get_settings
+    if get_settings().trading_focus == "weather":
+        from scripts.run_weather_cycle import run_cycle
+        return await run_cycle()
     from backend.sports_data.worldcup_fetcher import (
         sync_matches, link_picks_to_matches,
     )

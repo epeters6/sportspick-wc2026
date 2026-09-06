@@ -1,16 +1,16 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   fetchCalibration, fetchAutobets, fetchPaperTrading, fetchWeatherPredictions,
-  fetchWeatherVerification, triggerAutobetRun,
+  fetchWeatherVerification,
 } from "@/lib/api";
 import BetTypeBadge from "@/components/BetTypeBadge";
 import { SportBadge } from "@/components/OutcomeBadge";
 import VibrantStatCard from "@/components/VibrantStatCard";
 import {
-  TrendingUp, Target, Activity, RefreshCw, CheckCircle,
+  TrendingUp, Target, Activity, CheckCircle,
   Clock, Banknote, Layers, CloudRain, Thermometer, BrainCircuit, Shield, BookOpen,
 } from "lucide-react";
 
@@ -44,8 +44,7 @@ function formatAutobetPick(b: { outcome_name: string; bet_type?: string; bet_lin
 
 export default function TradingPage() {
   const [tab, setTab] = useState<Tab>("positions");
-  const [sportFilter, setSportFilter] = useState<SportFilter>("all");
-  const qc = useQueryClient();
+  const [sportFilter, setSportFilter] = useState<SportFilter>("weather");
 
   const { data: abData, isLoading: abLoading } = useQuery({
     queryKey: ["autobets", 100], queryFn: () => fetchAutobets(100), refetchInterval: 60_000,
@@ -61,13 +60,6 @@ export default function TradingPage() {
   });
   const { data: wvData } = useQuery({
     queryKey: ["weather-verification"], queryFn: fetchWeatherVerification, refetchInterval: 300_000,
-  });
-  const { mutate: runAutobet, isPending: runPending } = useMutation({
-    mutationFn: triggerAutobetRun,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["autobets"] });
-      qc.invalidateQueries({ queryKey: ["paper-trading"] });
-    },
   });
 
   const ab = abData?.summary;
@@ -87,7 +79,7 @@ export default function TradingPage() {
             Trading Hub
           </h1>
           <p className="text-gray-400 text-sm mt-2 max-w-2xl">
-            Shadow paper trading on Polymarket & Kalshi. Open positions first; Basics and calibration in the other tabs.
+            Weather positions on Kalshi and Polymarket US. Historical sports positions remain available in the filters below.
           </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap justify-end">
@@ -101,10 +93,9 @@ export default function TradingPage() {
             }`}>
               {ab.mode === "live" ? "Live Trading" : "Shadow Mode"}
             </span>
-            <button onClick={() => runAutobet()} disabled={runPending} className="flex items-center gap-2 text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-50 px-4 py-2 rounded-xl font-medium transition-all hover:shadow-[0_0_20px_rgba(139,92,246,0.3)]">
-              <RefreshCw className={`w-4 h-4 ${runPending ? "animate-spin" : ""}`} />
-              {runPending ? "Running…" : "Force Evaluation"}
-            </button>
+            <Link href="/weather" className="flex items-center gap-2 text-sm bg-sky-700 hover:bg-sky-600 px-4 py-2 rounded-xl font-medium transition-all">
+              <CloudRain className="w-4 h-4" /> Weather experiment
+            </Link>
             </>
           )}
         </div>
@@ -113,20 +104,25 @@ export default function TradingPage() {
       {/* Summary stat row using VibrantStatCard */}
       {ab && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <VibrantStatCard label="Live Bankroll" value={money(ab.bankroll)} sub={`Started at ${money(ab.starting_bankroll)}`} icon={Banknote} color="emerald" />
+          <VibrantStatCard label={ab.mode === "live" ? "Live Bankroll" : "Paper Bankroll"} value={money(ab.bankroll)} sub={`All domains · started at ${money(ab.starting_bankroll)}`} icon={Banknote} color="emerald" />
           <VibrantStatCard label="Total P&L" value={`${ab.total_pnl >= 0 ? "+" : ""}${money(ab.total_pnl)}`} sub={`${ab.total_pnl >= 0 ? "+" : ""}${((ab.total_pnl / (ab.starting_bankroll || 1)) * 100).toFixed(1)}% ROI`} icon={TrendingUp} color={ab.total_pnl >= 0 ? "emerald" : "red"} />
           <VibrantStatCard label="Win Rate" value={pct(ab.win_rate)} sub={`Across ${ab.settled_bets} settled bets`} icon={Target} color="indigo" />
           <VibrantStatCard label="Open Exposure" value={money(ab.open_exposure)} sub={`${ab.open_bets} active positions`} icon={Activity} color="pink" />
         </div>
       )}
 
+      <p className="text-xs text-gray-400">
+        Summary totals cover the entire legacy ledger; the filters apply to the latest 100 position records only.
+        Recorded returns require official settlement reconciliation before they can establish performance.
+      </p>
+
       {/* Sport filter */}
       <div className="flex flex-wrap gap-2">
         {([
-          { value: "all", label: "All domains" },
-          { value: "mlb", label: "⚾ MLB" },
           { value: "weather", label: "🌤️ Weather" },
-          { value: "football", label: "⚽ Football" },
+          { value: "all", label: "All history" },
+          { value: "mlb", label: "MLB history" },
+          { value: "football", label: "Football history" },
         ] as const).map((s) => (
           <button
             key={s.value}
@@ -172,7 +168,7 @@ export default function TradingPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-400">
               <div className="bg-black/30 p-4 rounded-xl border border-white/5 space-y-2">
                 <h3 className="text-white font-semibold">1. Signal generation</h3>
-                <p>Models compute fair probability (MLB quant, weather ensemble+MOS, crowd consensus). Edge = model prob minus executable market price.</p>
+                <p>Weather ensembles and station corrections estimate each temperature outcome. Estimated edge is model probability minus executable cost; it is not verified profit.</p>
               </div>
               <div className="bg-black/30 p-4 rounded-xl border border-white/5 space-y-2">
                 <h3 className="text-white font-semibold">2. Kelly sizing</h3>
@@ -180,11 +176,11 @@ export default function TradingPage() {
               </div>
               <div className="bg-black/30 p-4 rounded-xl border border-white/5 space-y-2">
                 <h3 className="text-white font-semibold">3. Paper execution</h3>
-                <p>Shadow mode simulates fills against live orderbooks. Every bet logs CLV at close for calibration.</p>
+                <p>Paper mode simulates fills against available quotes. Closing-price observations and official outcomes must be verified before evaluating performance.</p>
               </div>
               <div className="bg-black/30 p-4 rounded-xl border border-white/5 space-y-2">
-                <h3 className="text-white font-semibold">4. Live promotion</h3>
-                <p>When paper ROI and sample size pass gates, enable live on the <Link href="/live" className="text-emerald-400 hover:underline">Live Readiness</Link> page.</p>
+                <h3 className="text-white font-semibold">4. Research review</h3>
+                <p>Review forward results, costs, and execution reliability on the <Link href="/live" className="text-emerald-400 hover:underline">Readiness</Link> page. Passing a model gate does not authorize live trading.</p>
               </div>
             </div>
           </section>
@@ -205,7 +201,7 @@ export default function TradingPage() {
               <h3 className="font-bold mb-4">ROI by domain</h3>
               <div className="grid grid-cols-3 gap-4">
                 {["mlb", "weather", "football"].map((sport) => {
-                  const s = ab.learning!.sport_stats[sport];
+                  const s = ab.learning?.sport_stats?.[sport];
                   if (!s) return (
                     <div key={sport} className="glass-card p-4 opacity-50">
                       <span className="capitalize text-gray-500 text-sm">{sport}</span>
@@ -496,7 +492,7 @@ export default function TradingPage() {
             <div className="h-48 animate-pulse bg-white/5 rounded-xl" />
           ) : (weatherData?.predictions?.length ?? 0) > 0 ? (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {weatherData!.predictions.map((wp: any) => (
+              {weatherData!.predictions.map((wp) => (
                 <div key={wp.id} className="bg-black/30 border border-white/5 hover:border-sky-500/30 p-4 rounded-xl transition-all group">
                   <div className="flex items-center gap-2 mb-2">
                     <Thermometer className="w-4 h-4 text-sky-500 opacity-70" />
@@ -511,12 +507,12 @@ export default function TradingPage() {
                     </div>
                     <div className="border-l border-white/5 pl-2">
                       <p className="text-[10px] text-gray-500 uppercase">Market</p>
-                      <p className="text-sm font-mono text-gray-400">{Math.round((wp.market_price || 0) * 100)}%</p>
+                      <p className="text-sm font-mono text-gray-400">{pct(wp.market_price)}</p>
                     </div>
                     <div className="border-l border-white/5 pl-2">
                       <p className="text-[10px] text-gray-500 uppercase">Edge</p>
-                      <p className={`text-sm font-bold ${wp.edge >= 0.05 ? "text-emerald-400" : "text-yellow-400"}`}>
-                        {wp.edge != null ? `+${(wp.edge * 100).toFixed(1)}%` : "—"}
+                      <p className={`text-sm font-bold ${(wp.edge ?? 0) >= 0.05 ? "text-emerald-400" : "text-yellow-400"}`}>
+                        {edge(wp.edge)}
                       </p>
                     </div>
                   </div>

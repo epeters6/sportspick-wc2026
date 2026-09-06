@@ -1,0 +1,20 @@
+{
+  "id": "weather_forward_2026_09_v1",
+  "prediction_source": "weather_forward_v1",
+  "mode": "paper",
+  "paper_allow_receipt_timestamp": true,
+  "venues": ["kalshi", "polymarket"],
+  "stations": ["KNYC", "KORD", "KMIA", "KLAX"],
+  "metrics": ["high"],
+  "max_lead_days": 1,
+  "decision_hours_local": [8, 11, 14],
+  "seed_per_venue": 500.0,
+  "min_net_edge": 0.05,
+  "max_event_risk_fraction": 0.005,
+  "max_open_risk_fraction": 0.05,
+  "daily_loss_fraction": 0.02,
+  "max_drawdown_fraction": 0.10,
+  "min_forward_events": 250,
+  "min_forward_days": 45,
+  "notes": "New simulated capital only. Original ledger remains intact. Polymarket means the existing Polymarket US integration. Fixed hourly decision windows; no live promotion is automatic."
+}

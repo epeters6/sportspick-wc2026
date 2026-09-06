@@ -16,9 +16,18 @@ import logging
 import os
 from datetime import datetime, timezone
 
-import data_paths as dp
-from config import CONFIG
-from pipeline import signal_learning_log
+try:
+    from pavlov import data_paths as dp
+    from pavlov.config import CONFIG
+    from pavlov.pipeline import signal_learning_log
+    from pavlov.pipeline.execution_ledger import begin_attempt, complete_attempt
+except ModuleNotFoundError as exc:
+    if exc.name != "pavlov":
+        raise
+    import data_paths as dp
+    from config import CONFIG
+    from pipeline import signal_learning_log
+    from pipeline.execution_ledger import begin_attempt, complete_attempt
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +64,8 @@ async def place_trade(signal: dict, kalshi_client) -> dict:
         signal:        Signal dict from signal_engine.calculate_edge().
         kalshi_client: The kalshi_client module (provides place_order()).
 
-    Returns:
-        {"success": True,  "order_id": str}   on success
-        {"success": False, "error":    str}   on failure
+    Accepted orders remain pending until venue fills and fees are reconciled.
+    No accepted order is treated as a fully filled position.
     """
     ticker          = signal["ticker"]
     side            = signal["recommended_side"]
@@ -73,6 +81,13 @@ async def place_trade(signal: dict, kalshi_client) -> dict:
     price_cents = max(1, min(99, round(raw_price) + buf))
 
     try:
+        attempt_id = begin_attempt(
+            _POSITIONS_FILE, signal, venue="kalshi", quantity=float(contracts), price=price_cents / 100,
+        )
+    except (OSError, ValueError) as exc:
+        return {"success": False, "error": str(exc)}
+
+    try:
         # place_order polls with time.sleep() — run in a thread so it doesn't
         # block the asyncio event loop and starve Discord interaction callbacks.
         result = await asyncio.to_thread(
@@ -85,52 +100,8 @@ async def place_trade(signal: dict, kalshi_client) -> dict:
     except Exception as exc:
         err = str(exc)
         logger.error("OrderManager: place_order raised – %s", err)
-        return {"success": False, "error": err}
-
-    # place_order returns {"order_id", "status", "filled_contracts", "price"}
-    status = result.get("status", "error")
-    if status == "error" or not result.get("order_id"):
-        err = result.get("error", f"unexpected status: {status!r}")
-        logger.error("OrderManager: order failed for %s – %s", ticker, err)
-        return {"success": False, "error": err}
-
-    # ── Persist position ──────────────────────────────────────────────
-    positions = _load_json(_POSITIONS_FILE, [])
-    positions.append(
-        {
-            "order_id":         result["order_id"],
-            "ticker":           ticker,
-            "city":             signal.get("city", ""),
-            "metric":           signal.get("metric", ""),
-            "direction":        signal.get("direction", ""),
-            "threshold_f":      signal.get("threshold_f"),
-            "market_date":      signal.get("market_date", ""),
-            "nws_predicted":    signal.get("nws_predicted"),
-            "ensemble_mean":    signal.get("ensemble_mean"),
-            "ensemble_spread":  signal.get("ensemble_spread"),
-            "days_out":         signal.get("days_out", 0),
-            "station":          signal.get("station", ""),
-            "recommended_side": side,
-            "kelly_contracts":  contracts,
-            "price_cents":      price_cents,
-            "placed_at":        datetime.now(timezone.utc).isoformat(),
-            "status":           "open",
-            "edge":             signal.get("edge"),
-            "model_prob":       signal.get("model_prob"),
-            "placed_via":       signal.get("placed_via", "manual"),
-            # resolved later by learning_loop
-            "resolved_at":      None,
-            "actual_temp_f":    None,
-            "pl":               None,
-        }
-    )
-    _save_json(_POSITIONS_FILE, positions)
-
-    logger.info(
-        "OrderManager: position opened – %s %s %d contracts @ %d¢  order=%s",
-        side.upper(), ticker, contracts, price_cents, result["order_id"],
-    )
-    return {"success": True, "order_id": result["order_id"]}
+        result = {"status": "submission_unknown", "error": err}
+    return complete_attempt(_POSITIONS_FILE, attempt_id, result)
 
 
 def log_skip(signal: dict) -> None:

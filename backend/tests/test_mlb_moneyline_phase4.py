@@ -533,17 +533,17 @@ class TestMoneylineShadowIntegration(unittest.TestCase):
             if venue == "polymarket":
                 # Favorite home: higher ask but strong positive edge
                 return {
-                    "best_bid": 0.23,
-                    "best_ask": 0.25,
+                    "best_bid": 0.18,
+                    "best_ask": 0.20,
                     "ask_size": 100.0,
                     "book_timestamp": now,
                     "received_timestamp": now,
                 }
             if str(token_id).lower() in {"yes", "y"}:
-                # Cheap underdog YES — positive but smaller net edge than favorite
+                # Cheap underdog YES — worse net edge than favorite after fees
                 return {
-                    "best_bid": 0.18,
-                    "best_ask": 0.20,
+                    "best_bid": 0.08,
+                    "best_ask": 0.10,
                     "ask_size": 100.0,
                     "book_timestamp": None,
                     "received_timestamp": now,

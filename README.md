@@ -1,305 +1,130 @@
-# SportsPick Tracker — World Cup 2026 Edition
+# QuantBet Weather
 
-Track 100+ sports pick influencers across Twitter, TikTok, and Instagram.
-Uses an Elo + accuracy ML model to rank them and surface the best consensus picks.
+Private weather-market research and automated paper trading on **Kalshi and Polymarket US**. The active experiment concentrates on daily high temperatures at KNYC, KORD, KMIA, and KLAX. Existing MLB, football, influencer, and arbitrage research remains available as history; it is no longer the scheduled development focus.
 
----
+**Current status: paper research, profitability unproven.** The project must demonstrate reliable official settlement, realistic execution costs, and positive forward performance before real capital is considered. This change does not authorize live orders or erase historical paper losses.
 
-## What it does
+Read the [implemented weather strategy and its limits](docs/weather_strategy.md) for the fixed universe, risk rules, calibration cutoffs, paper cost assumptions, and forward evaluation criteria.
 
-- **Scrapes** picks from influencers (Covers, YouTube, ActionNetwork, Pickswise, optional Twitter/TikTok) 3× daily
-- **Resolves** picks automatically when World Cup / MLB matches finish
-- **Ranks** influencers by Elo score (accuracy-weighted) on each ML run
-- **Computes consensus** — Elo-weighted vote aggregation blended with quant models (MLB Pavlov engine, WC team-Elo model, weather portfolio optimizer)
-- **Shadow-bets** the edges on Polymarket/Kalshi (paper mode), reports daily results to Discord, and gates live promotion on a proven paper track record
-- **Dashboard** — a Next.js web app to visualise everything in real time
+## Active weather cycle
 
----
+```text
+GitHub Actions: weather_cycle.yml (hourly at :17)
+  └─ python -m scripts.run_weather_cycle --report reports/weather/latest.json
+       ├─ verify and settle existing paper positions using official venue outcomes
+       ├─ forecast only within fixed station decision windows
+       ├─ evaluate the frozen weather experiment and record decisions
+       └─ persist experiment status and upload evidence even after stage failures
 
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  GitHub Actions (free cron scheduling)                               │
-│                                                                      │
-│  sync_scrape.yml (3×/day)    ──▶  match sync + all pick scrapers    │
-│  sync_ml.yml (3×/day)        ──▶  Elo + consensus + quant + autobet │
-│  pavlov_mlb.yml (3×/day)     ──▶  Pavlov MLB cycle + resolution     │
-│  daily_report.yml (1×/day)   ──▶  shadow results → Discord          │
-│  worldcup_sync.yml (manual)  ──▶  WC match results + resolve picks  │
-└──────────────────────────┬───────────────────────────────────────────┘
-                           │ reads/writes
-                           ▼
-          ┌────────────────────────────────┐
-          │   Supabase (PostgreSQL)        │
-          │   influencers · picks          │
-          │   matches · consensus_picks    │
-          └──────────┬─────────────────────┘
-                     │ reads
-          ┌──────────▼─────────────────────┐
-          │   Hugging Face Spaces (Docker) │
-          │   FastAPI REST API :7860       │
-          │   /influencers /matches        │
-          │   /recommendations /stats      │
-          └──────────┬─────────────────────┘
-                     │ NEXT_PUBLIC_API_URL
-          ┌──────────▼─────────────────────┐
-          │   Vercel (Next.js Dashboard)   │
-          │   Leaderboard · Matches        │
-          │   Recommendations              │
-          └────────────────────────────────┘
+Supabase: forecasts, immutable experiment records, positions, official labels
+  └─ FastAPI: /weather/experiment and /weather-predictions
+       └─ Next.js: /weather (default home), /trading, readiness and validation
 ```
 
----
+The experiment declares **$500 of simulated seed capital per venue**. Its balance is separate from the legacy paper ledger, whose losses remain available in Positions & history. Forecast and trade decisions must retain their experiment identity; a changed configuration belongs to a separately identified experiment.
 
-## Quick Start
+The current Polymarket integration is **Polymarket US**, not the international CLOB. Venue credentials, fees, settlement rules, and account eligibility must be handled according to the integrated venue. A similarly named contract on another venue does not establish identical settlement rules.
 
-### 1. Create a Supabase project
-1. Go to [supabase.com](https://supabase.com) → New project
-2. In the SQL editor, run `supabase/migrations/001_initial_schema.sql`
-3. Copy your **Project URL**, **anon key**, and **service_role key**
+### Operating commands
 
-### 2. Configure credentials
+From the repository root, with the Python environment activated and configured:
+
 ```bash
-cp .env.example .env
-# Edit .env with your keys:
-nano .env
+python -m scripts.run_weather_cycle --report reports/weather/latest.json
+python -m unittest discover -s backend/tests -p "test_*.py" -v
 ```
 
-**Required for World Cup data (free):**
-- Sign up at [wc2026api.com](https://wc2026api.com) → free tier → get API key
+The cycle writes paper research data. Run it against the intended database only. The orchestration is paper-only and isolates settlement/reporting from forecast failures. A healthy cycle means the operations completed, not that the strategy is profitable. Review timestamps, failed stages, quarantined settlements, and per-venue balances before interpreting results.
 
-**Required for Twitter scraping (free, cookie-based):**
-1. Log in to twitter.com in your browser
-2. Open DevTools → Application → Cookies → `twitter.com`
-3. Copy `auth_token` and `ct0` cookie values into `.env`
+GitHub timing is approximate. The configured hourly cycle supports decision windows at 08:00, 11:00, and 14:00 in each station's local time; forecasting outside eligible windows is skipped. It is not a continuous low-latency execution service.
 
-**For TikTok:** grab your `sessionid` cookie from tiktok.com after logging in
+## Setup
 
-**For Instagram:** just put your username/password in `.env`
+1. Install Python dependencies into a virtual environment:
 
-### 3. Install and run (local)
-```bash
-# Python backend
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r backend/requirements.txt
-playwright install chromium
+   ```bash
+   python -m venv .venv
+   # Windows: .venv\Scripts\activate
+   # macOS/Linux: source .venv/bin/activate
+   pip install -r backend/requirements.txt
+   pip install -r pavlov/requirements.txt
+   ```
 
-# Start API
-uvicorn backend.api.main:app --reload
+2. Copy `.env.example` to `.env` and configure the intended database. The dedicated weather paper cycle uses public market-data and settlement clients, without exchange signing credentials. Never commit `.env`, private keys, or service-role credentials. Apply the repository's required Supabase migrations in order for a new database; the initial schema alone does not include the later weather/trading features.
 
-# In another terminal — Next.js dashboard
-cd frontend
-npm install
-npm run dev
-```
+3. Keep all live-execution switches disabled:
 
-Visit:
-- Dashboard: http://localhost:3000
-- API docs: http://localhost:8000/docs
+   ```dotenv
+   LIVE_TRADING_ENABLED=false
+   POLYMARKET_LIVE_ENABLED=false
+   AUTO_BET_ENABLED=0
+   POLY_AUTO_BET_ENABLED=0
+   POLY_MLB_AUTO_BET_ENABLED=0
+   POLY_MLB_INGAME_ENABLED=0
+   ```
 
-### 4. Seed and first sync
-```bash
-curl -X POST http://localhost:8000/seed   # adds ~70 curated accounts
-curl -X POST http://localhost:8000/sync   # first scrape + WC data
-```
+4. Start the API and dashboard in separate terminals:
 
----
+   ```bash
+   uvicorn backend.api.main:app --reload
+   ```
 
-## Production Deployment (100% Free Stack)
+   ```bash
+   cd frontend
+   npm ci
+   npm run dev
+   ```
 
-Everything runs for free: GitHub Actions for cron jobs, Hugging Face Spaces for the API, Vercel for the dashboard, and Supabase for the database.
+The dashboard uses `NEXT_PUBLIC_API_URL`, defaulting to `http://localhost:8000`. Open `http://localhost:3000`; it routes to the weather workspace. Configure the real API origin when deploying the dashboard. Account secrets belong on the server, never in `NEXT_PUBLIC_*` values.
 
----
+## GitHub Actions
 
-### Step 1 — Supabase (database)
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| `weather_cycle.yml` | Hourly at :17 UTC, or manual | Active weather paper experiment, independent settlement, report artifacts |
+| `clv_checkpoints.yml` | Every five minutes, or manual | Primary forward-weather closing-price observer, using public venue books; does not place orders |
+| `unit_tests.yml` | Push, pull request, or manual | Backend tests and dashboard type checking without production secrets |
+| `sync_scrape.yml` | Manual only | Legacy influencer and sports collection |
+| `sync_ml.yml` | Manual only | Legacy broad ML cycle and sports shadow settlement |
+| `pavlov_mlb.yml` | Manual only; defaults to `resolve` | Legacy MLB resolution or explicitly selected cycle |
+| `daily_report.yml` | Manual only | Legacy report, including its existing Discord delivery |
+| `worldcup_sync.yml` | Manual only | Historical football result reconciliation |
 
-1. Go to [supabase.com](https://supabase.com) → **New project**
-2. In the SQL editor, run `supabase/migrations/001_initial_schema.sql`
-3. Copy your **Project URL**, **anon key**, and **service_role key** — you'll need them in every step below
+The new weather workflow sends no Discord messages. A manual legacy workflow may still contain its original external-reporting behavior; inspect it before dispatching. Historical settlement access remains available even though new sports cycles have no cron schedule.
 
----
+Weather workflow secrets:
 
-### Step 2 — GitHub (repo + Actions secrets)
-
-1. Push this repo to GitHub: `git push origin main`
-2. Go to your repo → **Settings → Secrets and variables → Actions**
-3. Add the following **repository secrets**:
-
-| Secret name | Value |
+| Secret | Use |
 |---|---|
-| `SUPABASE_URL` | Your Supabase project URL |
-| `SUPABASE_KEY` | Supabase **anon** key (alias: `SUPABASE_ANON_KEY`) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase **service_role** key |
-| `TWITTER_AUTH_TOKEN` | Twitter `auth_token` cookie |
-| `TWITTER_CT0` | Twitter `ct0` cookie |
-| `TWITTER_COOKIES` | Full cookie JSON (optional, for twikit) |
-| `TIKTOK_USERNAME` | TikTok username |
-| `TIKTOK_PASSWORD` | TikTok password |
-| `INSTAGRAM_USERNAME` | Instagram username |
-| `INSTAGRAM_PASSWORD` | Instagram password |
-| `WC_API_KEY` | World Cup 2026 API key |
-| `WC_API_BASE` | `https://api.wc2026api.com/v1` |
+| `SUPABASE_URL` | Database API origin |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-side research persistence |
+| `SUPABASE_ANON_KEY` or legacy `SUPABASE_KEY` | Existing environment validation/client compatibility |
+| `OWM_API_KEY` | Optional existing weather provider |
 
-4. GitHub Actions workflows will start running automatically on their cron schedules:
-   - `.github/workflows/sync_scrape.yml` — **09/15/21 UTC** (match sync + pick scrapers)
-   - `.github/workflows/sync_ml.yml` — **10/16/22 UTC** (Elo, consensus, quant models, autobet, shadow validation)
-   - `.github/workflows/pavlov_mlb.yml` — **14/20 UTC** pregame + **05 UTC** resolution
-   - `.github/workflows/daily_report.yml` — **12 UTC** (yesterday's shadow results → Discord)
-   - `.github/workflows/worldcup_sync.yml` — manual dispatch (WC results + resolve picks)
+Exchange signing keys are intentionally absent from the new paper workflow. Actions artifacts retain the cycle reports for 90 days. The latest status is persisted in the database for the dashboard; local report files alone are not treated as deployed API state. Source edits take effect remotely only after an authorized push/deployment. This repository can use free service tiers, but quotas and provider terms still apply; free hosting does not eliminate execution fees or prove a trading advantage.
 
-> You can trigger any workflow manually via the **Actions** tab → select workflow → **Run workflow**.
+**Before the first forward-weather cycle in a new deployment:** deploy the updated `supabase/functions/clv-checkpoints` observer that excludes records with `metadata.experiment_id`, or disable its existing cron. GitHub is the primary observer for the new experiment; the Supabase edge observer is legacy-only. Leaving the old edge code active can write incompatible checkpoint evidence into the new experiment. For the existing project, the corrected edge function was deployed and verified on September 6, 2026, and its legacy cron was paused. Exchange signing credentials are not required by the public weather observer.
 
----
+## Reading the dashboard
 
-### Step 3 — Hugging Face Spaces (FastAPI API)
+- **Weather research:** current experiment status, per-venue paper balances, and the latest available model bucket records. Loading failures are shown as unavailable rather than a healthy status or zero balance.
+- **Positions & history:** defaults to weather and preserves historical sports filters. Aggregate legacy metrics cover all domains; the table filters only the latest fetched records.
+- **Readiness gates:** research and execution requirements. Passing a numeric gate does not independently authorize funding or live orders.
+- **Historical sports research:** the original MLB, model, influencer, match, and scraper routes remain accessible.
 
-1. Sign up at [huggingface.co](https://huggingface.co) (free)
-2. Click **New Space** → name it `sportspick-tracker-api`
-3. Choose **Docker** SDK
-4. In **Space Settings → Variables**, add:
-   - `SUPABASE_URL` — your project URL
-   - `SUPABASE_ANON_KEY` — anon key
-   - `SUPABASE_SERVICE_ROLE_KEY` — service role key
-   - `WC_API_KEY` — WC API key
-   - `APP_ENV` — `production`
-5. Push the Space contents — copy the files from `huggingface/` to the Space repo root:
+The recent prediction feed is not a complete performance sample. Bucket rows from the same event are correlated, and pooled accuracy is not trading profit. Performance decisions must use immutable forward records, officially resolved outcomes, modeled fees and executable prices, and event-aware uncertainty. Do not loosen gates just to create activity or reset a losing experiment under the same identity.
 
-```bash
-# One-time: clone your HF Space and add the API files
-git clone https://huggingface.co/spaces/YOUR_HF_USERNAME/sportspick-tracker-api hf-space
-cp huggingface/Dockerfile        hf-space/Dockerfile
-cp huggingface/requirements-hf.txt hf-space/requirements-hf.txt
-cp huggingface/main_hf.py        hf-space/main_hf.py
-cp -r backend/                   hf-space/backend/
-cd hf-space && git add . && git commit -m "deploy api" && git push
-```
+## Code map
 
-6. HF Spaces will build the Docker image and start the API on port 7860
-7. Note your Space URL: `https://YOUR_HF_USERNAME-sportspick-tracker-api.hf.space`
+| Location | Responsibility |
+|---|---|
+| `scripts/run_weather_cycle.py` | Dedicated weather orchestration and durable report |
+| `backend/models/weather/` | Venue discovery, station forecasts, calibration, and weather decisions |
+| `backend/trading/` | Accounting, settlement verification, risk controls, and experiment support |
+| `backend/api/` | Dashboard API |
+| `frontend/app/weather/` | Weather-first workspace |
+| `supabase/migrations/` | Schema and access-policy history |
+| `backend/tests/` | Financial, model, and orchestration regression checks |
+| `reports/weather/` | Generated cycle evidence; not source code |
 
----
-
-### Step 4 — Vercel (Next.js dashboard)
-
-1. Go to [vercel.com](https://vercel.com) → **Add New Project** → import your GitHub repo
-2. Set the **Root Directory** to `frontend`
-3. Add this **Environment Variable** in Vercel's project settings:
-
-   | Key | Value |
-   |---|---|
-   | `NEXT_PUBLIC_API_URL` | `https://YOUR_HF_USERNAME-sportspick-tracker-api.hf.space` |
-
-4. Click **Deploy** — Vercel will build and host the dashboard automatically
-5. Update `frontend/vercel.json` with your actual HF Space URL
-
-> Every `git push` to `main` will redeploy the dashboard automatically.
-
----
-
-### Step 5 — Seed the database (one-time)
-
-Once all three services are deployed, seed the influencer list:
-
-```bash
-curl -X POST https://YOUR_HF_USERNAME-sportspick-tracker-api.hf.space/seed
-```
-
-This populates ~70 curated sports pick accounts. The cron workflows will pick up from there.
-
----
-
-## ML Model: How ranking works
-
-Each influencer starts at **Elo 1000**. For every resolved pick:
-- **Correct pick** → Elo increases (K=32, scaled by recency weight)
-- **Incorrect pick** → Elo decreases
-- Picks older than 30 days are down-weighted (half-life decay)
-
-**Consensus picks** are computed by having each influencer cast an Elo-weighted vote for their predicted winner. The result is the confidence score shown on the dashboard.
-
----
-
-## Adding more influencers
-
-Edit the seed lists in each scraper file:
-- `backend/scrapers/twitter_scraper.py` → `TOP_TWITTER_SPORTS_ACCOUNTS`
-- `backend/scrapers/tiktok_scraper.py` → `TOP_TIKTOK_SPORTS_ACCOUNTS`
-- `backend/scrapers/instagram_scraper.py` → `TOP_INSTAGRAM_SPORTS_ACCOUNTS`
-
-Or call the API directly:
-```bash
-curl -X POST http://localhost:8000/seed
-```
-
-You can also add influencers directly in Supabase's table editor.
-
----
-
-## Expanding beyond World Cup
-
-The schema is sport-agnostic. The `sport` column on `matches` already supports:
-`football`, `basketball`, `baseball`, `nfl`, `nhl`, `stocks`
-
-To add a new sport:
-1. Add a new data fetcher in `backend/sports_data/`
-2. Schedule it in `backend/scheduler.py`
-3. Add sport-specific keywords to `backend/scrapers/pick_extractor.py`
-
----
-
-## Project structure
-
-```
-Scraper/
-├── .github/
-│   └── workflows/
-│       ├── sync_scrape.yml        Cron 3×/day: match sync + pick scrapers
-│       ├── sync_ml.yml            Cron 3×/day: ML + quant + autobet + shadow validation
-│       ├── pavlov_mlb.yml         Cron 3×/day: Pavlov MLB cycle + midnight resolution
-│       ├── daily_report.yml       Cron 1×/day: shadow results → Discord
-│       └── worldcup_sync.yml      Manual: WC results + resolve picks
-├── backend/
-│   ├── scrapers/
-│   │   ├── twitter_scraper.py     Twitter/X via twikit (cookie auth)
-│   │   ├── tiktok_scraper.py      TikTok via unofficial API + Playwright
-│   │   ├── instagram_scraper.py   Instagram via Instaloader
-│   │   └── pick_extractor.py      NLP pick parser (rule-based + regex)
-│   ├── ml/
-│   │   ├── elo_ranker.py          Elo scoring engine
-│   │   ├── consensus_engine.py    Weighted vote aggregation
-│   │   └── accuracy_scorer.py     Streaks, leaderboard, consensus scores
-│   ├── sports_data/
-│   │   └── worldcup_fetcher.py    WC 2026 match data (wc2026api + fallback)
-│   ├── api/
-│   │   └── main.py                FastAPI REST API
-│   ├── scheduler.py               APScheduler (local dev only)
-│   ├── config.py                  Pydantic settings
-│   └── db.py                      Supabase client
-├── frontend/
-│   ├── app/
-│   │   ├── page.tsx               Dashboard home
-│   │   ├── leaderboard/           Influencer leaderboard + detail pages
-│   │   ├── matches/               Match list + match detail + pick breakdown
-│   │   └── recommendations/       Top consensus picks
-│   ├── components/
-│   │   ├── Sidebar.tsx
-│   │   ├── StatCard.tsx
-│   │   ├── PlatformBadge.tsx
-│   │   └── ConfidenceBar.tsx
-│   ├── lib/api.ts                 Typed API client
-│   └── vercel.json                Vercel deployment config
-├── huggingface/
-│   ├── Dockerfile                 Docker config for HF Spaces (port 7860)
-│   ├── main_hf.py                 FastAPI entrypoint (no scheduler)
-│   ├── requirements-hf.txt        Trimmed deps (no scrapers/Playwright)
-│   └── README.md                  HF Spaces metadata header
-├── supabase/
-│   └── migrations/001_initial_schema.sql
-├── scripts/
-│   ├── setup.sh                   Local dev setup script
-│   ├── start.sh                   Start both services locally
-│   └── seed_and_sync.sh           Initial seed + sync
-└── .env.example
-```
+The repository began as SportsPick Tracker for World Cup 2026. Its older scrapers, sports models, and separate arbitrage scanner are preserved for reference and historical settlement, rather than expanded as part of the active weather experiment.

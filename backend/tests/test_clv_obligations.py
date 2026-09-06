@@ -35,7 +35,11 @@ class TestClvObligationsUpdater(unittest.TestCase):
 
         db = MagicMock()
         select_chain = MagicMock()
-        select_chain.or_.return_value.execute.return_value.data = [row]
+        select_chain.order.return_value = select_chain
+        select_chain.limit.return_value = select_chain
+        select_chain.or_.return_value = select_chain
+        select_chain.gt.return_value = select_chain
+        select_chain.execute.side_effect = [MagicMock(data=[row]), MagicMock(data=[])]
         db.table.return_value.select.return_value = select_chain
         update_chain = MagicMock()
         db.table.return_value.update.return_value = update_chain
@@ -92,7 +96,11 @@ class TestClvObligationsUpdater(unittest.TestCase):
         }
         db = MagicMock()
         select_chain = MagicMock()
-        select_chain.or_.return_value.execute.return_value.data = [row]
+        select_chain.order.return_value = select_chain
+        select_chain.limit.return_value = select_chain
+        select_chain.or_.return_value = select_chain
+        select_chain.gt.return_value = select_chain
+        select_chain.execute.side_effect = [MagicMock(data=[row]), MagicMock(data=[])]
         db.table.return_value.select.return_value = select_chain
         update_chain = MagicMock()
         db.table.return_value.update.return_value = update_chain
@@ -136,7 +144,11 @@ class TestClvObligationsUpdater(unittest.TestCase):
         }
         db = MagicMock()
         select_chain = MagicMock()
-        select_chain.or_.return_value.execute.return_value.data = [row]
+        select_chain.order.return_value = select_chain
+        select_chain.limit.return_value = select_chain
+        select_chain.or_.return_value = select_chain
+        select_chain.gt.return_value = select_chain
+        select_chain.execute.side_effect = [MagicMock(data=[row]), MagicMock(data=[])]
         db.table.return_value.select.return_value = select_chain
         update_chain = MagicMock()
         db.table.return_value.update.return_value = update_chain
@@ -176,7 +188,11 @@ class TestClvObligationsUpdater(unittest.TestCase):
         }
         db = MagicMock()
         select_chain = MagicMock()
-        select_chain.or_.return_value.execute.return_value.data = [row]
+        select_chain.order.return_value = select_chain
+        select_chain.limit.return_value = select_chain
+        select_chain.or_.return_value = select_chain
+        select_chain.gt.return_value = select_chain
+        select_chain.execute.side_effect = [MagicMock(data=[row]), MagicMock(data=[])]
         db.table.return_value.select.return_value = select_chain
         update_chain = MagicMock()
         db.table.return_value.update.return_value = update_chain
@@ -210,7 +226,11 @@ class TestClvObligationsUpdater(unittest.TestCase):
         }
         db = MagicMock()
         select_chain = MagicMock()
-        select_chain.or_.return_value.execute.return_value.data = [row]
+        select_chain.order.return_value = select_chain
+        select_chain.limit.return_value = select_chain
+        select_chain.or_.return_value = select_chain
+        select_chain.gt.return_value = select_chain
+        select_chain.execute.side_effect = [MagicMock(data=[row]), MagicMock(data=[])]
         db.table.return_value.select.return_value = select_chain
         update_chain = MagicMock()
         db.table.return_value.update.return_value = update_chain
@@ -247,7 +267,11 @@ class TestClvObligationsUpdater(unittest.TestCase):
         }
         db = MagicMock()
         select_chain = MagicMock()
-        select_chain.or_.return_value.execute.return_value.data = [row]
+        select_chain.order.return_value = select_chain
+        select_chain.limit.return_value = select_chain
+        select_chain.or_.return_value = select_chain
+        select_chain.gt.return_value = select_chain
+        select_chain.execute.side_effect = [MagicMock(data=[row]), MagicMock(data=[])]
         db.table.return_value.select.return_value = select_chain
         update_chain = MagicMock()
         db.table.return_value.update.return_value = update_chain
@@ -286,7 +310,11 @@ class TestClvObligationsUpdater(unittest.TestCase):
         }
         db = MagicMock()
         select_chain = MagicMock()
-        select_chain.or_.return_value.execute.return_value.data = [row]
+        select_chain.order.return_value = select_chain
+        select_chain.limit.return_value = select_chain
+        select_chain.or_.return_value = select_chain
+        select_chain.gt.return_value = select_chain
+        select_chain.execute.side_effect = [MagicMock(data=[row]), MagicMock(data=[])]
         db.table.return_value.select.return_value = select_chain
         update_chain = MagicMock()
         db.table.return_value.update.return_value = update_chain

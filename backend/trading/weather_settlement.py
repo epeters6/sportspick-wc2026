@@ -1,27 +1,17 @@
 import asyncio
+import copy
 import httpx
+import math
 import re
 from datetime import datetime, timezone
+from urllib.parse import quote
 from loguru import logger
 from backend.db import get_db
 from backend.trading.kalshi_client import KalshiClient
 from backend.trading.settlement_integrity import WEATHER_SETTLEMENT_VERSION
 
-import os
-import sys
-
-# Add pavlov to path for poly_client (lazy — avoid requiring secrets at import)
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../pavlov")))
-
-
-def _poly_client():
-    """Lazy import so unit tests can load settlement helpers without trading secrets."""
-    os.environ.setdefault("PAVLOV_BYPASS_CONFIG", "1")
-    from polymarket import poly_client as _pc
-    return _pc
-
 # Kalshi tickers are typically uppercase: KXHIGHTDC-26JUL06-T84
-_KALSHI_TICKER_RE = re.compile(r'^[A-Z]{2,}[A-Z0-9-]+$')
+_KALSHI_TICKER_RE = re.compile(r'^[A-Z]{2,}[A-Z0-9.-]+$')
 # Pattern to extract date from Kalshi ticker: e.g. 26JUL06 -> 2026-07-06
 _KALSHI_DATE_RE = re.compile(r'-(\d{2})([A-Z]{3})(\d{2})-')
 _MONTH_MAP = {
@@ -132,8 +122,7 @@ def _grade_bet_against_actual(bet: dict, market_date: datetime) -> dict | None:
 
     stake = bet.get("stake") or 0.0
     shares = bet.get("shares") or 0.0
-    price = bet.get("market_price") or 0.0
-    pnl = round(shares * (1 - price), 2) if won else round(-stake, 2)
+    pnl = round(shares - stake, 2) if won else round(-stake, 2)
     logger.info(
         f"Graded weather bet {bet['id'][:8]} vs actual {metric}={observed}°F "
         f"(bucket [{lo_v}, {hi_v}]) -> {'won' if won else 'lost'}"
@@ -151,34 +140,36 @@ def _grade_bet_against_actual(bet: dict, market_date: datetime) -> dict | None:
     }
 
 
-def _ensure_poly_configured():
-    """Ensure poly_client can make unauthenticated requests for settlement checks."""
-    poly_client = _poly_client()
-    if not poly_client.poly_configured():
-        # Override to allow reading public settlement data without trading keys
-        poly_client.poly_configured = lambda: True
-        def mock_get_client():
-            from polymarket_us import PolymarketUS
-            return PolymarketUS(key_id="dummy", secret_key="dummy")
-        poly_client.get_client = mock_get_client
-    return poly_client
-
-
 async def check_polymarket_resolution(slug: str) -> dict | None:
-    """Check Polymarket US API for market resolution using poly_client."""
-    poly_client = _ensure_poly_configured()
+    """Read the public Polymarket US settlement; never alter trading clients."""
+    if not slug:
+        return None
     try:
-        # get_market_result returns 'yes' or 'no' if settled, else None
-        res = poly_client.get_market_result(slug)
-        if res:
-            return {
-                "closed": True,
-                "active": False,
-                "resolved": True,
-                "winner": str(res).lower(),
-                "venue": "polymarket",
-                "market_id": slug,
-            }
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.get(
+                "https://gateway.polymarket.us/v1/markets/"
+                f"{quote(slug, safe='')}/settlement"
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            data = response.json()
+        if not isinstance(data, dict) or data.get("slug") != slug:
+            return None
+        value = data.get("settlement")
+        # Reject refunds/fractional outcomes, missing fields, and booleans.
+        if isinstance(value, bool) or value not in (0, 1, "0", "1"):
+            return None
+        return {
+            "closed": True,
+            "active": False,
+            "resolved": True,
+            "winner": "yes" if str(value) == "1" or value == 1 else "no",
+            "venue": "polymarket",
+            "venue_product": "polymarket_us",
+            "market_id": data["slug"],
+            "settlement_value": value,
+        }
     except Exception as e:
         logger.warning(f"Error fetching Polymarket resolution for {slug}: {e}")
     return None
@@ -192,15 +183,17 @@ async def check_kalshi_resolution(ticker: str) -> dict | None:
             data = await client._get(http_client, f"/markets/{ticker}")
             if data and "market" in data:
                 m = data["market"]
+                if m.get("ticker") != ticker:
+                    return None
                 status = str(m.get("status") or "").lower()
                 result = str(m.get("result") or "").lower() or None
                 return {
                     "closed": status in ("closed", "settled", "determined", "finalized"),
-                    "resolved": status in ("settled", "determined", "finalized")
+                    "resolved": status in ("settled", "finalized")
                     and result in ("yes", "no"),
                     "winner": result,
                     "venue": "kalshi",
-                    "market_id": ticker,
+                    "market_id": m["ticker"],
                     "status": status,
                     "settled_at": m.get("settlement_ts") or m.get("settled_time"),
                     "settlement_value": (
@@ -309,13 +302,19 @@ def _grade_bet_against_venue(
     if winner not in {"yes", "no"} or backed not in {"yes", "no"}:
         return None
     market_id = str(bet.get("market_id") or "")
-    reported_market_id = str(status_data.get("market_id") or market_id)
+    reported_market_id = str(status_data.get("market_id") or "")
     if not market_id or reported_market_id != market_id:
+        return None
+    if venue not in {"kalshi", "polymarket"}:
+        return None
+    if status_data.get("venue") != venue:
         return None
     try:
         stake = float(bet.get("stake") or 0.0)
         shares = float(bet.get("shares") or 0.0)
     except (TypeError, ValueError):
+        return None
+    if not math.isfinite(stake) or not math.isfinite(shares) or stake <= 0 or shares <= 0:
         return None
     won = winner == backed
     return {
@@ -324,6 +323,7 @@ def _grade_bet_against_venue(
         "version": WEATHER_SETTLEMENT_VERSION,
         "source": f"{venue}_official",
         "venue": venue,
+        "venue_product": status_data.get("venue_product") or venue,
         "market_id": market_id,
         "official_result": winner,
         "settled_at": status_data.get("settled_at"),
@@ -353,7 +353,23 @@ def _apply_resolution(
             meta = {}
     if not isinstance(meta, dict):
         meta = {}
-    meta = dict(meta)
+    meta = copy.deepcopy(meta)
+    if correction:
+        history = meta.get("settlement_history", [])
+        if not isinstance(history, list):
+            logger.error("Invalid settlement history for {}; refusing to overwrite it", bet["id"])
+            return False
+        meta["settlement_history"] = history + [{
+            "replaced_at": now.isoformat(),
+            "reason": note,
+            "status": bet.get("status"),
+            "pnl": bet.get("pnl"),
+            "resolved_at": bet.get("resolved_at"),
+            "settlement_version": bet.get("settlement_version"),
+            "settlement_corrected_at": bet.get("settlement_corrected_at"),
+            "resolution_source": meta.get("resolution_source"),
+            "settlement": copy.deepcopy(meta.get("settlement")),
+        }]
     src = resolution_source
     if not src:
         if "observed temp" in (note or ""):
@@ -384,7 +400,19 @@ def _apply_resolution(
     if settlement_version:
         update["settlement_version"] = settlement_version
     try:
-        db.table("autobets").update(update).eq("id", bet["id"]).execute()
+        query = db.table("autobets").update(update).eq("id", bet["id"])
+        # Preserve the prior evidence and correction in one row update. A stale
+        # reconciliation must not overwrite a concurrently changed settlement.
+        for field in ("status", "pnl", "settlement_version", "settlement_corrected_at"):
+            if field in bet:
+                query = (query.is_(field, "null") if bet[field] is None
+                         else query.eq(field, bet[field]))
+        result = query.execute()
+        if not result.data:
+            logger.warning("Weather settlement not updated (row changed or inaccessible): {}", bet["id"])
+            return False
+        from backend.trading.autobet_learning import invalidate_learning_cache
+        invalidate_learning_cache()
         logger.info(
             f"Resolved weather bet {bet['id'][:8]} [{bet.get('market_id')}] "
             f"-> {new_status} (PnL: {new_pnl}; {note}; source={src})"
@@ -423,11 +451,13 @@ async def resolve_weather_autobets() -> int:
         # Auto-detect venue from market_id format (no 'venue' column in DB yet)
         stored_venue = bet.get("venue") or ""  # might not exist → empty string
         venue = stored_venue.lower() if stored_venue else _detect_venue(market_id)
+        if venue == "polymarket_us":
+            venue = "polymarket"
 
         status_data = None
         if venue == "kalshi":
             status_data = await check_kalshi_resolution(market_id)
-        else:
+        elif venue == "polymarket":
             # Polymarket (slug-based)
             status_data = await check_polymarket_resolution(market_id)
 

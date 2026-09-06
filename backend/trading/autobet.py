@@ -17,6 +17,7 @@ verifiable track record before risking a cent.
 from __future__ import annotations
 
 from collections import defaultdict
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -322,10 +323,14 @@ async def _evaluate_autobet_candidate(
 
 
 def normalize_open_autobet_stakes() -> int:
-    """Cap inflated open paper stakes to the current paper position limit."""
+    """Legacy normalization is disabled for weather: never rewrite past fills."""
     db = get_db()
     s = get_settings()
+    if getattr(s, "trading_focus", "weather") == "weather":
+        return 0
     bankroll = _current_bankroll(db)
+    if not math.isfinite(bankroll) or bankroll <= 0:
+        raise ValueError("NON_POSITIVE_BANKROLL")
     cap = round(bankroll * s.polymarket_paper_max_position_pct, 2)
     open_bets = (
         db.table("autobets")
@@ -359,7 +364,7 @@ def _current_bankroll(db) -> float:
         settled = (
             db.table("autobets")
             .select(
-                "id, match_id, sport, outcome_name, mode, status, pnl, stake, shares, "
+                "id, market_id, match_id, sport, outcome_name, mode, status, pnl, stake, shares, "
                 "market_price, bet_type, bet_line, bet_subject, created_at, resolved_at, "
                 "metadata, settlement_version, settlement_match_id, "
                 "settlement_corrected_at, "
@@ -388,10 +393,10 @@ def _current_bankroll(db) -> float:
         return s.polymarket_bankroll + realised
     except Exception as exc:
         logger.error(
-            "Bankroll integrity verification failed closed; using configured bankroll: {}",
+            "Bankroll integrity verification failed closed; no trading capital available: {}",
             exc,
         )
-        return s.polymarket_bankroll
+        return 0.0
 
 
 def _open_exposures(db) -> tuple[float, dict[str, float]]:
@@ -416,6 +421,9 @@ def _open_exposures(db) -> tuple[float, dict[str, float]]:
 async def run_autobet() -> dict[str, Any]:
     """Scan markets, evaluate edges, and place (paper/live) bets. Returns summary."""
     s = get_settings()
+    if getattr(s, "trading_focus", "weather") == "weather":
+        return {"mode": "paper", "evaluated": 0, "placed": 0, "rejected": 0,
+                "reason": "SPORTS_TRADING_DISABLED_WEATHER_FOCUS"}
     db = get_db()
     client = VenueRouter()
     from backend.trading.live_toggle import is_live_mode

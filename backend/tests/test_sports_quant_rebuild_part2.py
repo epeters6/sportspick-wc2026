@@ -253,7 +253,7 @@ class TestSportsQuantRebuildPart2(unittest.TestCase):
         _call_sync({"platform": "test"}, f, 1.2, 0.0, 100, 1000, caps, mode="shadow")
         with open("sports_shadow_decisions.jsonl", "r") as ff:
             dec = json.loads(ff.readlines()[-1])
-            self.assertEqual(dec["rejection_reason"], "EFFECTIVE_COST_NOT_TRADABLE")
+            self.assertEqual(dec["rejection_reason"], "INVALID_FEE_PRICE")
             self.assertIsNone(dec["paper_fill"])
             
     def test_sports_effective_cost_above_one_rejected(self):

@@ -8,11 +8,18 @@ can run unchanged.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Any
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
-from config import CONFIG
+try:
+    from pavlov.config import CONFIG
+except ModuleNotFoundError as exc:
+    if exc.name != "pavlov":
+        raise
+    from config import CONFIG  # Standalone Pavlov deployment.
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +27,18 @@ _EVENT_END_CACHE: dict[str, str] = {}
 
 # Lazy client singleton
 _client: Any = None
+_public_client: Any = None
+
+
+def get_public_client():
+    """Credential-free public market resources, separate from the trading client."""
+    global _public_client
+    if _public_client is None:
+        from polymarket_us import PolymarketUS
+
+        public = PolymarketUS()
+        _public_client = SimpleNamespace(markets=public.markets, events=public.events)
+    return _public_client
 
 
 def poly_configured() -> bool:
@@ -612,7 +631,7 @@ def _bbo_dict_from_list_row(m: dict) -> dict | None:
 
 def get_weather_markets() -> list[dict]:
     """Fetch active markets and return those that look like daily temperature props."""
-    client = get_client()
+    client = get_public_client()
     out: list[dict] = []
 
     received_at = datetime.now(timezone.utc)
@@ -698,7 +717,7 @@ def get_weather_markets() -> list[dict]:
 def get_orderbook_as_parsed(slug: str) -> dict | None:
     """Fetch a current executable YES top-of-book snapshot for one market."""
     try:
-        patch = _bbo_from_book(get_client().markets.book(slug))
+        patch = _bbo_from_book(get_public_client().markets.book(slug))
     except Exception as exc:
         logger.debug("PolyClient: orderbook refresh %s failed — %s", slug, exc)
         return None
@@ -711,6 +730,8 @@ def get_orderbook_as_parsed(slug: str) -> dict | None:
         "yes_ask": ask,
         "best_bid": bid,
         "best_ask": ask,
+        "yes_bid_size": _qty_to_float(patch.get("yes_bid_size")) or 0.0,
+        "bid_size": _qty_to_float(patch.get("yes_bid_size")) or 0.0,
         "yes_ask_size": _qty_to_float(patch.get("yes_ask_size")) or 0.0,
         "yes_ask_qty": _qty_to_float(patch.get("yes_ask_qty")) or 0.0,
         "ask_size": _qty_to_float(patch.get("ask_size")) or 0.0,
@@ -724,7 +745,7 @@ def get_market_result(slug: str) -> str | None:
     """Return 'yes' or 'no' if settled, else None.
     Matches Polymarket US ``MarketSettlement``: ``settlement`` (0 or 1).
     """
-    client = get_client()
+    client = get_public_client()
     try:
         raw = client.markets.settlement(slug)
     except Exception as exc:
@@ -741,24 +762,109 @@ def get_market_result(slug: str) -> str | None:
     return None
 
 
+def _execution_summary(response: dict, requested: float, side: str) -> dict:
+    """Read confirmed fills; an accepted order ID is never evidence of a fill."""
+    executions = []
+    seen = set()
+    filled = 0.0
+    priced_shares = 0.0
+    fill_notional = 0.0
+    cumulative = 0.0
+    snapshot = {}
+    state = ""
+    malformed = False
+    for execution in response.get("executions") or []:
+        if not isinstance(execution, dict):
+            malformed = True
+            continue
+        identity = execution.get("id")
+        if identity and identity in seen:
+            continue
+        if identity:
+            seen.add(identity)
+        order = execution.get("order") or {}
+        if order.get("id") and order["id"] != response.get("id"):
+            malformed = True
+            continue
+        executions.append(execution)
+        qty = _qty_to_float(order.get("cumQuantity"))
+        if qty is not None and math.isfinite(qty) and qty >= cumulative:
+            cumulative = qty
+            snapshot = order
+        state = order.get("state") or state
+        if execution.get("type") not in ("EXECUTION_TYPE_FILL", "EXECUTION_TYPE_PARTIAL_FILL"):
+            continue
+        qty = _qty_to_float(execution.get("lastShares"))
+        if qty is None or not math.isfinite(qty):
+            malformed = True
+            continue
+        filled += qty
+        px = _amount_to_prob(execution.get("lastPx"))
+        if px is not None and math.isfinite(px) and 0 <= px <= 1:
+            fill_notional += qty * px
+            priced_shares += qty
+
+    # Cumulative quantities include fills not necessarily repeated in this response.
+    filled = max(filled, cumulative)
+    if filled > requested:
+        malformed = True
+    average_yes_price = _amount_to_prob(snapshot.get("avgPx"))
+    if cumulative != filled or average_yes_price is None or not math.isfinite(average_yes_price):
+        average_yes_price = fill_notional / filled if filled > 0 and priced_shares == filled else None
+    if average_yes_price is not None and not 0 <= average_yes_price <= 1:
+        average_yes_price = None
+        malformed = True
+    terminal = state in {
+        "ORDER_STATE_FILLED", "ORDER_STATE_CANCELED", "ORDER_STATE_REJECTED", "ORDER_STATE_EXPIRED"
+    }
+    if state == "ORDER_STATE_FILLED" and filled != requested:
+        malformed = True
+    remaining = 0.0 if terminal else max(0.0, requested - filled)
+    fee = _amount_to_prob(snapshot.get("commissionNotionalTotalCollected"))
+    if fee is not None and (not math.isfinite(fee) or fee < 0):
+        fee = None
+        malformed = True
+    return {
+        "filled_contracts": filled,
+        "remaining_contracts": remaining,
+        "requested_contracts": requested,
+        "order_status": state or ("filled" if filled == requested else "accepted"),
+        "average_fill_price": (
+            average_yes_price if side == "yes" or average_yes_price is None else 1.0 - average_yes_price
+        ),
+        "fees_paid": fee,
+        "executions": executions,
+        "requires_order_reconciliation": malformed or remaining > 0 or (filled > 0 and (average_yes_price is None or fee is None)),
+    }
+
+
 def place_order(
     market_slug: str,
     side: str,
-    quantity: int,
+    quantity: float,
     price_prob: float,
 ) -> dict:
-    """Place a limit order. *price_prob* is 0–1 (USD per $1 payoff).
+    """Place a limit order. *price_prob* is the selected side's cost per share.
 
-    Returns Kalshi-shaped {order_id, status, error, filled_contracts, price}.
+    ``price`` remains a selected-side limit, never an assumed execution price.
+    Actual quantities/prices and pending order metadata come from venue executions.
     """
-    client = get_client()
     side_l = side.lower()
+    try:
+        quantity = float(quantity)
+        price_prob = float(price_prob)
+    except (TypeError, ValueError, OverflowError):
+        return {"status": "error", "error": "invalid order quantity or price"}
+    if not math.isfinite(quantity) or quantity <= 0 or not math.isfinite(price_prob) or not 0 < price_prob < 1:
+        return {"status": "error", "error": "invalid order quantity or price"}
+    side_limit = min(0.99, max(0.01, price_prob + 0.01))
     if side_l == "yes":
         intent = "ORDER_INTENT_BUY_LONG"
-        raw_px = min(0.99, max(0.01, price_prob + 0.01))
+        raw_px = side_limit
     elif side_l == "no":
         intent = "ORDER_INTENT_BUY_SHORT"
-        raw_px = min(0.99, max(0.01, (1.0 - price_prob) + 0.01))
+        # The venue's price is always YES-basis; apply the buffer to NO cost first.
+        raw_px = 1.0 - side_limit
     else:
         return {"status": "error", "error": f"bad side {side!r}"}
 
@@ -768,9 +874,11 @@ def place_order(
         "intent":     intent,
         "type":       "ORDER_TYPE_LIMIT",
         "price":      {"value": px_str, "currency": "USD"},
-        "quantity":   int(quantity),
+        "quantity":   int(quantity) if quantity.is_integer() else quantity,
         "tif":        "TIME_IN_FORCE_GOOD_TILL_CANCEL",
+        "synchronousExecution": True,
     }
+    client = get_client()
     try:
         resp = client.orders.create(body)
     except Exception as exc:
@@ -781,16 +889,11 @@ def place_order(
     if not oid:
         return {"status": "error", "error": "no order id in response", "raw": resp}
 
-    fills = 0
-    for ex in resp.get("executions") or []:
-        try:
-            fills += int(ex.get("lastShares") or 0)
-        except (TypeError, ValueError):
-            pass
-
     return {
         "order_id":          oid,
         "status":            "ok",
-        "filled_contracts":  fills or int(quantity),
-        "price":             float(px_str),
+        "price":             float(px_str) if side_l == "yes" else round(1.0 - float(px_str), 2),
+        "yes_price":         float(px_str),
+        "time_in_force":     body["tif"],
+        **_execution_summary(resp, quantity, side_l),
     }

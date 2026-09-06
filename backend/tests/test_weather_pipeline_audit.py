@@ -197,9 +197,10 @@ class TestWeatherPipelineAudit(unittest.TestCase):
         self.assertEqual(hi3, lo4)
 
     def test_execution_cost_converts_cents_quotes(self):
-        raw_markets = [{"yes_ask": 40, "ask_size": 25}]  # 40¢
+        raw_markets = [{"yes_ask": 40, "ask_size": 25, "fee_type": "quadratic",
+                        "fee_multiplier": 1, "fee_source": "official_test_series"}]  # 40¢
         q_exec, depth = generate_executable_cost_vector(raw_markets, "kalshi")
-        self.assertAlmostEqual(q_exec[0], 0.40 + 0.07 * 0.40 * 0.60 + 0.005, places=5)
+        self.assertAlmostEqual(q_exec[0], 0.40 + 0.02 + 0.005, places=5)
         self.assertEqual(depth[0], 25.0)
 
     def test_execution_cost_no_assumed_depth_when_missing(self):

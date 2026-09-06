@@ -10,13 +10,10 @@ from pavlov.pipeline.order_simulator import validate_orderbook_freshness, simula
 from backend.tests.clv_test_isolation import isolate_clv_db
 
 def make_candidate(p=0.6, c=0.5, bankroll=1000.0, depth=100.0):
-    # Reverse engineer the correct best_ask to match the target executable cost `c`
-    # cost = best_ask + fee + slippage
-    # polymarket fee = 0.02 * best_ask
-    # c = best_ask * 1.02 + 0.005
-    # best_ask = (c - 0.005) / 1.02
-    best_ask = (c - 0.005) / 1.02
-    fee = 0.02 * best_ask
+    # These midpoint fixtures reserve two cents per whole contract under the
+    # current US quadratic schedule, plus the half-cent execution buffer.
+    best_ask = c - 0.025
+    fee = estimate_fee_per_share("polymarket", best_ask, 1)
     now = datetime.now(timezone.utc)
     return TradeCandidate(
         strategy="test",
@@ -68,11 +65,11 @@ class TestExecutionLayer(unittest.TestCase):
     # Fee Model
     def test_fee_model_used_by_execution_cost(self):
         fee = estimate_fee_per_share("polymarket", 0.5, 1.0)
-        self.assertAlmostEqual(fee, 0.01)
+        self.assertAlmostEqual(fee, 0.02)
 
     def test_static_fee_fallback_logged(self):
         fee = estimate_fee_per_share("kalshi", 0.5, 1.0)
-        self.assertAlmostEqual(fee, 0.07 * 0.5 * 0.5)
+        self.assertAlmostEqual(fee, 0.02)  # Conservative non-direct cent precision.
 
     def test_missing_fee_model_rejects_trade(self):
         with self.assertRaisesRegex(ValueError, "FEE_MODEL_UNAVAILABLE"):

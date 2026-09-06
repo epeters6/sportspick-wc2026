@@ -9,10 +9,18 @@ import math
 import os
 from datetime import datetime, timezone
 
-from config import CONFIG
-from pipeline import signal_learning_log
-from polymarket import paths as poly_paths
-from polymarket import poly_client
+try:
+    from pavlov.config import CONFIG
+    from pavlov.pipeline import signal_learning_log
+    from pavlov.pipeline.execution_ledger import begin_attempt, complete_attempt
+    from pavlov.polymarket import paths as poly_paths, poly_client
+except ModuleNotFoundError as exc:
+    if exc.name != "pavlov":
+        raise
+    from config import CONFIG
+    from pipeline import signal_learning_log
+    from pipeline.execution_ledger import begin_attempt, complete_attempt
+    from polymarket import paths as poly_paths, poly_client
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +73,14 @@ async def place_trade(signal: dict) -> dict:
             contracts = need
 
     try:
+        attempt_id = begin_attempt(
+            poly_paths.POSITIONS, signal, venue="poly_us", quantity=float(contracts),
+            price=min(0.99, price_prob + 0.01),
+        )
+    except (OSError, ValueError) as exc:
+        return {"success": False, "error": str(exc)}
+
+    try:
         result = await asyncio.to_thread(
             poly_client.place_order,
             slug,
@@ -74,57 +90,8 @@ async def place_trade(signal: dict) -> dict:
         )
     except Exception as exc:
         logger.error("PolyOrderManager: place_order raised – %s", exc)
-        return {"success": False, "error": str(exc)}
-
-    if result.get("status") == "error" or not result.get("order_id"):
-        err = result.get("error", "unknown error")
-        logger.error("PolyOrderManager: order failed for %s – %s", slug, err)
-        return {"success": False, "error": err}
-
-    fill_px = result.get("price")
-    try:
-        price_cents = int(round(float(fill_px) * 100)) if fill_px is not None else int(
-            round(price_prob * 100)
-        )
-    except (TypeError, ValueError):
-        price_cents = int(round(price_prob * 100))
-
-    positions = _load_json(poly_paths.POSITIONS, [])
-    positions.append(
-        {
-            "venue":            "poly_us",
-            "order_id":         result["order_id"],
-            "ticker":           slug,
-            "city":             signal.get("city", ""),
-            "metric":           signal.get("metric", ""),
-            "direction":        signal.get("direction", ""),
-            "threshold_f":      signal.get("threshold_f"),
-            "market_date":      signal.get("market_date", ""),
-            "nws_predicted":    signal.get("nws_predicted"),
-            "ensemble_mean":    signal.get("ensemble_mean"),
-            "ensemble_spread":  signal.get("ensemble_spread"),
-            "days_out":         signal.get("days_out", 0),
-            "station":          signal.get("station", ""),
-            "recommended_side": side,
-            "kelly_contracts":  contracts,
-            "price_cents":      price_cents,
-            "placed_at":        datetime.now(timezone.utc).isoformat(),
-            "status":           "open",
-            "edge":             signal.get("edge"),
-            "model_prob":       signal.get("model_prob"),
-            "placed_via":       signal.get("placed_via", "manual"),
-            "resolved_at":      None,
-            "actual_temp_f":    None,
-            "pl":               None,
-        }
-    )
-    _save_json(poly_paths.POSITIONS, positions)
-
-    logger.info(
-        "PolyOrderManager: position opened – %s %s %d @ ~%d¢ order=%s",
-        side.upper(), slug, contracts, price_cents, result["order_id"],
-    )
-    return {"success": True, "order_id": result["order_id"]}
+        result = {"status": "submission_unknown", "error": str(exc)}
+    return complete_attempt(poly_paths.POSITIONS, attempt_id, result)
 
 
 def log_skip(signal: dict) -> None:

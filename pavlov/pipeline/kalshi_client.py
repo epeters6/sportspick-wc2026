@@ -27,8 +27,10 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import os
 import time
+from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -52,6 +54,8 @@ BASE_URL = "https://external-api.kalshi.com/trade-api/v2"
 _CACHE_FILE = os.path.join(dp.data_dir(), "market_cache.json")
 
 _MARKET_CACHE_TTL_SECONDS = 20 * 60           # 20 minutes
+_FEE_CACHE_TTL_SECONDS = 300
+_FEE_CACHE: dict[tuple[str, str], tuple[float, dict, str]] = {}
 _CLOSE_WINDOW_HOURS       = 60                # 2.5 days — catches Day 1, 2, 3 markets
 _ORDER_POLL_TIMEOUT       = 30                # seconds
 _ORDER_POLL_INTERVAL      = 2                 # seconds
@@ -516,11 +520,16 @@ def _parse_market(raw: dict, series_ticker: str = "") -> dict:
     that markets whose titles omit the city name (KXHIGHT*/KXLOWT* series)
     can still be correctly attributed.
     """
-    def _dollars_to_cents(val) -> int | None:
+    def _dollars(val) -> float | None:
         try:
-            return round(float(val) * 100)
+            value = float(val)
+            return value if math.isfinite(value) and 0 <= value <= 1 else None
         except (TypeError, ValueError):
             return None
+
+    def _dollars_to_cents(val) -> int | None:
+        value = _dollars(val)
+        return round(value * 100) if value is not None else None
 
     def _contract_size(*keys: str) -> float:
         for key in keys:
@@ -542,6 +551,10 @@ def _parse_market(raw: dict, series_ticker: str = "") -> dict:
         "floor_strike":  raw.get("floor_strike"),       # lower bound int
         "yes_ask":       _dollars_to_cents(raw.get("yes_ask_dollars")),
         "yes_bid":       _dollars_to_cents(raw.get("yes_bid_dollars")),
+        # Explicit unit-bearing input becomes dollar aliases. In particular,
+        # one cent must not be confused with a one-dollar probability value.
+        "best_ask":      _dollars(raw.get("yes_ask_dollars")),
+        "best_bid":      _dollars(raw.get("yes_bid_dollars")),
         "no_ask":        _dollars_to_cents(raw.get("no_ask_dollars")),
         "no_bid":        _dollars_to_cents(raw.get("no_bid_dollars")),
         # Fixed-point top-of-book sizes are the authoritative executable
@@ -579,7 +592,9 @@ def _top_of_book_from_orderbook_fp(payload: dict) -> dict:
             if not isinstance(level, (list, tuple)) or len(level) < 2:
                 continue
             try:
-                parsed.append((float(level[0]), float(level[1])))
+                price, size = float(level[0]), float(level[1])
+                if math.isfinite(price) and math.isfinite(size) and 0 <= price <= 1 and size > 0:
+                    parsed.append((price, size))
             except (TypeError, ValueError):
                 continue
         if not parsed:
@@ -594,12 +609,103 @@ def _top_of_book_from_orderbook_fp(payload: dict) -> dict:
     return {
         "yes_bid": round(yes_bid * 100, 4) if yes_bid is not None else None,
         "yes_ask": round(yes_ask * 100, 4) if yes_ask is not None else None,
+        "best_bid": round(yes_bid, 6) if yes_bid is not None else None,
+        "best_ask": round(yes_ask, 6) if yes_ask is not None else None,
         "yes_bid_size": yes_bid_size,
         "yes_ask_size": no_bid_size,
         "yes_bid_qty": yes_bid_size,
         "yes_ask_qty": no_bid_size,
         "ask_size": no_bid_size,
     }
+
+
+def _cached_fee_data(kind: str, identity: str, fetcher) -> tuple[dict, str]:
+    key = (kind, identity)
+    cached = _FEE_CACHE.get(key)
+    if cached and time.monotonic() - cached[0] < _FEE_CACHE_TTL_SECONDS:
+        payload, stamp = cached[1], cached[2]
+    else:
+        stamp = datetime.now(timezone.utc).isoformat()
+        try:
+            payload = fetcher()
+        except Exception as exc:
+            payload = {"fee_error": f"KALSHI_FEE_SCHEDULE_UNAVAILABLE: {type(exc).__name__}"}
+        _FEE_CACHE[key] = (time.monotonic(), payload, stamp)
+    if payload.get("fee_error"):
+        raise ValueError(payload["fee_error"])
+    return payload, stamp
+
+
+def get_weather_fee_metadata(ticker: str) -> dict:
+    """Fetch current series fees plus complete event overrides, unsigned.
+
+    Cache by series/event for five minutes, including failed lookups. Future
+    event changes are retained in the cache and evaluated against the current
+    time on every call. Missing/unsupported metadata never becomes a free fee.
+    """
+    try:
+        from pavlov.pipeline.fee_model import estimate_trade_fee
+        parts = str(ticker).split("-")
+        if len(parts) < 3 or not parts[0].startswith("KX"):
+            raise ValueError("KALSHI_FEE_MARKET_ID_INVALID")
+        series_ticker = parts[0]
+        event_ticker = "-".join(parts[:-1])
+        series_data, series_stamp = _cached_fee_data(
+            "series", series_ticker,
+            lambda: _get(f"/series/{quote(series_ticker, safe='')}", signed=False),
+        )
+        series = series_data.get("series") or {}
+        if series.get("ticker") != series_ticker:
+            raise ValueError("KALSHI_FEE_SERIES_ID_MISMATCH")
+
+        def fetch_changes():
+            changes, seen = [], set()
+            cursor = ""
+            while True:
+                params = {"event_ticker": event_ticker, "limit": 1000}
+                if cursor:
+                    params["cursor"] = cursor
+                data = _get("/events/fee_changes", params=params, signed=False)
+                page = data.get("event_fee_changes")
+                if not isinstance(page, list):
+                    raise ValueError("KALSHI_EVENT_FEE_CHANGES_MISSING")
+                changes.extend(page)
+                cursor = str(data.get("cursor") or "")
+                if not cursor:
+                    return {"event_fee_changes": changes}
+                if cursor in seen:
+                    raise ValueError("KALSHI_EVENT_FEE_PAGINATION_STALLED")
+                seen.add(cursor)
+
+        events, event_stamp = _cached_fee_data("event", event_ticker, fetch_changes)
+        fee_type, multiplier = series.get("fee_type"), series.get("fee_multiplier")
+        now = datetime.now(timezone.utc)
+        effective = []
+        for change in events["event_fee_changes"]:
+            if change.get("event_ticker") != event_ticker or change.get("series_ticker") != series_ticker:
+                raise ValueError("KALSHI_EVENT_FEE_ID_MISMATCH")
+            stamp = datetime.fromisoformat(str(change["scheduled_ts"]).replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                raise ValueError("KALSHI_EVENT_FEE_TIME_INVALID")
+            if stamp <= now:
+                effective.append((stamp, change))
+        if effective:
+            latest = max(effective, key=lambda item: item[0])[1]
+            if latest.get("fee_type_override") is not None:
+                fee_type = latest["fee_type_override"]
+            if latest.get("fee_multiplier_override") is not None:
+                multiplier = latest["fee_multiplier_override"]
+        source = f"{BASE_URL}/series/{series_ticker};{BASE_URL}/events/fee_changes?event_ticker={event_ticker}"
+        # Validate all metadata before allowing the cost layer to consume it.
+        estimate_trade_fee("kalshi", 0.5, 1, fee_type=fee_type, fee_multiplier=multiplier,
+                           fee_source=source, require_verified_schedule=True)
+        return {"fee_type": fee_type, "fee_multiplier": multiplier, "fee_source": source,
+                "fee_schedule_checked_at": min(series_stamp, event_stamp),
+                "fee_schedule_max_age_seconds": _FEE_CACHE_TTL_SECONDS, "fee_error": None}
+    except Exception as exc:
+        logger.warning("KalshiClient: cannot verify fees for %s: %s", ticker, exc)
+        return {"fee_type": None, "fee_multiplier": None, "fee_source": None,
+                "fee_error": f"KALSHI_FEE_SCHEDULE_UNVERIFIED: {exc}"}
 
 
 def _refresh_orderbook_depth(markets: list[dict]) -> list[dict]:
@@ -612,6 +718,9 @@ def _refresh_orderbook_depth(markets: list[dict]) -> list[dict]:
     if not markets:
         return markets
     by_ticker = {str(m.get("ticker") or ""): m for m in markets if m.get("ticker")}
+    # Fees are refreshed before book receipt timestamps are captured.
+    for ticker, market in by_ticker.items():
+        market.update(get_weather_fee_metadata(ticker))
     tickers = list(by_ticker)
     for start in range(0, len(tickers), 100):
         chunk = tickers[start:start + 100]
@@ -822,6 +931,7 @@ def get_market_as_parsed(ticker: str) -> dict | None:
 
 def get_orderbook_as_parsed(ticker: str) -> dict | None:
     """Fetch an executable YES top-of-book snapshot for one market."""
+    fee_metadata = get_weather_fee_metadata(ticker)
     try:
         data = _get(
             f"/markets/{ticker}/orderbook",
@@ -840,6 +950,7 @@ def get_orderbook_as_parsed(ticker: str) -> dict | None:
             "execution_price_source": "orderbook",
         }
     )
+    parsed.update(fee_metadata)
     return parsed
 
 

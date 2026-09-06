@@ -368,8 +368,81 @@ export async function triggerAutobetRun(): Promise<{ summary: AutobetSummary; re
   return data;
 }
 
-export async function fetchWeatherPredictions(limit = 20) {
+export interface WeatherPrediction {
+  id: string;
+  event_key: string;
+  outcome: string;
+  prob: number;
+  market_price: number | null;
+  edge: number | null;
+  created_at: string;
+  is_correct?: boolean | null;
+  resolved_at?: string | null;
+  metadata?: {
+    platform?: string;
+    station?: string;
+    target_date?: string;
+    metric?: string;
+    bucket_label?: string;
+    executable_cost?: number;
+    selected?: boolean;
+    label_source?: string;
+    model_version?: string;
+  } | null;
+}
+
+export async function fetchWeatherPredictions(limit = 20): Promise<{
+  predictions: WeatherPrediction[];
+  total: number;
+}> {
   const { data } = await api.get("/weather-predictions", { params: { limit } });
+  return data;
+}
+
+export interface WeatherExperimentStatus {
+  status: "healthy" | "degraded" | "failed" | "never_run";
+  mode: "paper";
+  live_ready: false;
+  timestamp?: string;
+  experiment?: {
+    id: string;
+    config_hash: string;
+    config?: { stations?: string[]; metrics?: string[]; seed_per_venue?: number };
+  };
+  venues?: Record<string, {
+    initial_bankroll: number;
+    equity: number;
+    available_cash: number;
+    reserved: number;
+    realized_pnl: number;
+    settled: number;
+    open: number;
+    quarantined: number;
+    blocked_reasons?: string[];
+  }>;
+  forward_evaluation?: {
+    generated_at: string;
+    live_ready: false;
+    research_evidence_ready: boolean;
+    read_errors?: string[];
+    venues: Record<string, {
+      research_evidence_ready: boolean;
+      independent_traded_events: number;
+      distinct_traded_dates: number;
+      verified_realized_pnl: number;
+      verified_stake: number;
+      net_roi: number | null;
+      net_roi_95pct_day_cluster_interval: [number, number] | null;
+      closing_clv_event_coverage: number;
+      mean_net_closing_clv: number | null;
+      criteria: Record<string, boolean>;
+      blocked_reasons: string[];
+    }>;
+  } | null;
+}
+
+export async function fetchWeatherExperiment(): Promise<WeatherExperimentStatus> {
+  const { data } = await api.get("/weather/experiment");
   return data;
 }
 

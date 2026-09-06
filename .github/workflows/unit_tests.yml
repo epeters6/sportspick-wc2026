@@ -16,6 +16,7 @@ jobs:
       LIVE_TRADING_ENABLED: "false"
       POLYMARKET_LIVE_ENABLED: "false"
       AUTO_BET_ENABLED: "0"
+      POLY_AUTO_BET_ENABLED: "0"
       POLY_MLB_AUTO_BET_ENABLED: "0"
       MODE: shadow
       # Dummy values so import-time settings resolve without real secrets
@@ -47,3 +48,36 @@ jobs:
       - name: Run backend unit tests
         run: |
           python -m unittest discover -s backend/tests -p "test_*.py" -v
+
+  frontend-types:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dashboard dependencies
+        run: npm ci
+      - name: Check all dashboard types
+        run: npx tsc --noEmit --incremental false
+
+  edge-ownership:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify legacy observer leaves experiment rows untouched
+        run: node --test supabase/functions/clv-checkpoints/ownership.test.mjs

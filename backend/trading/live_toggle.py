@@ -341,6 +341,15 @@ def request_live_toggle(
             "actor": effective_actor,
         }
 
+    from backend.config import get_settings
+    if get_settings().trading_focus == "weather":
+        reason = "Weather forward experiment is paper-only; live execution requires separate validation and authorization"
+        _write_audit(db=db, previous_value=previous_value, requested_value=requested_value,
+                     actor=effective_actor, readiness={"live_ready": False}, reason=reason, allowed=False)
+        return {"allowed": False, "toggle": previous_value, "reason": reason,
+                "status": _STATUS_CONFLICT, "http_status": _STATUS_CONFLICT,
+                "readiness": {"live_ready": False}, "actor": effective_actor}
+
     gh_block = _github_live_blocked()
     if gh_block:
         _write_audit(
@@ -463,6 +472,11 @@ def is_live_mode(settings=None, db=None) -> bool:
         from backend.config import get_settings
 
         settings = get_settings()
+
+    if getattr(settings, "trading_focus", None) == "weather":
+        # Weather experiment only simulates fills. Real order lifecycle and
+        # forward profitability require separate validation before promotion.
+        return False
 
     enabled = bool(getattr(settings, "polymarket_live_enabled", False))
     if not enabled:

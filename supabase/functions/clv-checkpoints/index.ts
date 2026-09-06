@@ -223,6 +223,9 @@ Deno.serve(async (request: Request) => {
   const nowIso = now.toISOString();
   const query = new URL(`${baseUrl}/rest/v1/clv_obligations`);
   query.searchParams.set("select", "*");
+  // Versioned experiments use the Python observer's venue/product and paper
+  // timestamp policy. This legacy collector must never grade those rows.
+  query.searchParams.set("metadata->>experiment_id", "is.null");
   query.searchParams.set(
     "or",
     `(` +
@@ -254,9 +257,15 @@ Deno.serve(async (request: Request) => {
     unavailable: 0,
     conflicts: 0,
     errors: 0,
+    skipped_experiment: 0,
   };
 
   for (const row of rows) {
+    // Defense in depth if a stale proxy/query adapter returns excluded rows.
+    if (row.metadata?.experiment_id !== undefined && row.metadata.experiment_id !== null) {
+      summary.skipped_experiment += 1;
+      continue;
+    }
     const metadata = { ...(row.metadata ?? {}) } as Record<string, unknown>;
     const patch: Record<string, unknown> = { updated_at: now.toISOString() };
     let touched = false;

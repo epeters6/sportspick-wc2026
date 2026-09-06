@@ -1,14 +1,17 @@
 name: CLV Checkpoints
 
-# Bounded CLV observation workflow — independent of Sync ML.
-# Runs ~every 5 minutes so 15m/1h checkpoints are collected near their due times.
+# Primary observer for forward-weather CLV using unsigned public venue books.
+# Supabase's edge observer is reserved for legacy rows without experiment_id.
 
 on:
   schedule:
     # Offset from the top of the hour to reduce GitHub scheduler congestion.
-    # Supabase Cron is primary; this remains a five-minute fallback.
+    # Collect 15m/1h/close evidence near due times; delays remain visible.
     - cron: '2-57/5 * * * *'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   clv:
@@ -22,10 +25,6 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      KALSHI_API_KEY: ${{ secrets.KALSHI_API_KEY }}
-      KALSHI_PRIVATE_KEY_B64: ${{ secrets.KALSHI_PRIVATE_KEY_B64 }}
-      POLYMARKET_KEY_ID: ${{ secrets.POLYMARKET_KEY_ID }}
-      POLYMARKET_SECRET_KEY: ${{ secrets.POLYMARKET_SECRET_KEY }}
       APP_ENV: production
       LOG_LEVEL: INFO
       GITHUB_ACTIONS: "true"
@@ -33,7 +32,9 @@ jobs:
       LIVE_TRADING_ENABLED: "false"
       POLYMARKET_LIVE_ENABLED: "false"
       AUTO_BET_ENABLED: "0"
+      POLY_AUTO_BET_ENABLED: "0"
       POLY_MLB_AUTO_BET_ENABLED: "0"
+      DISCORD_WEBHOOK_URL: ""
 
     steps:
       - name: Checkout

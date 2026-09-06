@@ -71,6 +71,10 @@ def get_model_calibration():
 
 @router.get("/readiness")
 def get_model_readiness():
+    from backend.config import get_settings
+    if get_settings().trading_focus == "weather":
+        from backend.api.main import models_readiness
+        return models_readiness()
     # Uses the same calculation as overview to build the readiness checklist
     overview = get_models_overview()
     results = {}

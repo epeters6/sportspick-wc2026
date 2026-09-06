@@ -1,61 +1,39 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  BarChart2, Zap, TrendingUp, Tv2, CloudRain, BrainCircuit, Shield,
-} from "lucide-react";
+import { CloudRain, TrendingUp, Shield, ClipboardCheck, Archive } from "lucide-react";
 import SyncCountdown from "./SyncCountdown";
 
 const nav = [
-  { href: "/",           label: "Dashboard",      icon: BarChart2 },
-  { href: "/trading",    label: "Trading",        icon: TrendingUp },
-  { href: "/live",       label: "Live Readiness", icon: Shield },
-  { href: "/models",     label: "Model Calibrations", icon: BrainCircuit },
-  { href: "/mlb",        label: "MLB",            icon: Tv2 },
-  { href: "/weather",    label: "Weather",        icon: CloudRain },
-  { href: "/quant-validation", label: "Shadow Audit", icon: Zap },
+  { href: "/weather", label: "Weather research", icon: CloudRain },
+  { href: "/trading", label: "Positions & history", icon: TrendingUp },
+  { href: "/live", label: "Readiness gates", icon: Shield },
+  { href: "/quant-validation", label: "Validation records", icon: ClipboardCheck },
+];
+const archive = [
+  { href: "/mlb", label: "MLB history" },
+  { href: "/models", label: "Legacy model analysis" },
+  { href: "/leaderboard", label: "Influencer history" },
+  { href: "/matches", label: "Sports matches" },
+  { href: "/sources", label: "Scraper sources" },
 ];
 
 export default function Sidebar() {
   const path = usePathname();
   return (
-    <aside className="fixed left-0 top-0 h-full w-64 glass-panel border-r-0 border-r-white/5 flex flex-col rounded-none rounded-r-2xl shadow-2xl z-50">
-      <div className="p-5 border-b border-gray-800">
-        <div className="flex items-center gap-2">
-          <Zap className="w-6 h-6 text-emerald-400" />
-          <span className="font-bold text-lg tracking-tight">QuantBet</span>
-        </div>
-        <p className="text-xs text-gray-400 mt-1">MLB + Weather · Shadow/Live</p>
-      </div>
-
-      <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+    <aside className="fixed left-0 top-0 h-full w-64 glass-panel border-r-white/5 flex flex-col rounded-none rounded-r-2xl shadow-2xl z-50">
+      <div className="p-5 border-b border-gray-800"><Link href="/weather" className="flex items-center gap-2"><CloudRain className="w-6 h-6 text-sky-400" /><span className="font-bold text-lg tracking-tight">QuantBet Weather</span></Link><p className="text-xs text-gray-400 mt-2">Kalshi + Polymarket US</p></div>
+      <nav aria-label="Main navigation" className="flex-1 p-4 space-y-1 overflow-y-auto">
         {nav.map(({ href, label, icon: Icon }) => {
-          const active = path === href || (href !== "/" && path.startsWith(href));
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                active
-                  ? "bg-indigo-600 text-white"
-                  : "text-gray-400 hover:text-white hover:bg-gray-800"
-              }`}
-            >
-              <Icon className="w-4 h-4 flex-shrink-0" />
-              {label}
-              {href === "/live" && (
-                <span className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-800 text-emerald-200 uppercase tracking-wide">
-                  Gate
-                </span>
-              )}
-            </Link>
-          );
+          const active = path === href || path.startsWith(href + "/");
+          return <Link key={href} href={href} aria-current={active ? "page" : undefined} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${active ? "bg-sky-700 text-white" : "text-gray-400 hover:text-white hover:bg-gray-800"}`}><Icon className="w-4 h-4 shrink-0" />{label}</Link>;
         })}
+        <details className="pt-6" open={archive.some(({ href }) => path === href || path.startsWith(href + "/"))}>
+          <summary className="text-xs text-gray-500 cursor-pointer px-3 py-2"><Archive className="inline w-3 h-3 mr-2" />Historical sports research</summary>
+          {archive.map(({ href, label }) => <Link key={href} href={href} aria-current={path === href ? "page" : undefined} className={`block rounded-lg px-3 py-2 text-xs ${path === href ? "bg-gray-800 text-white" : "text-gray-500 hover:text-gray-200"}`}>{label}</Link>)}
+        </details>
       </nav>
-
-      <div className="p-4 border-t border-gray-800">
-        <SyncCountdown />
-      </div>
+      <div className="p-4 border-t border-gray-800"><SyncCountdown /></div>
     </aside>
   );
 }
