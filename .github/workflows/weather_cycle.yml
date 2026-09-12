@@ -69,7 +69,7 @@ jobs:
       # The orchestrator isolates forecast failures from settlement and reporting.
       - name: Settle, forecast, evaluate, and report weather paper experiment
         if: steps.dispatch.outputs.execute == 'true'
-        run: python -m scripts.run_weather_cycle --report reports/weather/latest.json
+        run: python -m scripts.run_weather_cycle --suite --report reports/weather/latest.json
 
       - name: Upload weather evidence even when a stage fails
         if: always() && steps.dispatch.outputs.execute == 'true'

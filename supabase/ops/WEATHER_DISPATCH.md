@@ -41,7 +41,7 @@ secret-bearing views, or the managed schemas. API exposure must be rechecked if
 those settings or public database functions change.
 
 Hourly weather requests run at minute 7. The minute-27 watchdog skips a current-hour
-forecast claim, a current-hour report for the frozen experiment, or a primary
+forecast claim, a current-hour report for the active baseline experiment, or a primary
 request less than 15 minutes old. Otherwise it sends at most one additional request
 in that hour. GitHub may have accepted the first request but delayed execution;
 the workflow concurrency group, execution-time expiry and immutable forecast-hour
@@ -67,6 +67,27 @@ that file, then drop `weather_scheduler`; do not drop shared `pg_cron`, `pg_net`
 Vault, or the existing CLV cron job. Credential revocation is separate. Managed
 queue/Vault privileges are not changed by installation or rollback.
 
+## Advancing the paper baseline
+
+For an already installed, active scheduler, apply only
+`upgrade_weather_dispatch_experiment.sql` as `postgres`. It replaces
+`weather_scheduler.dispatch(text,boolean)` without changing cron jobs, their active
+states, permissions, credentials or audit history. Do not rerun the installer:
+installation deliberately marks dispatcher jobs inactive.
+
+The watchdog reads `weather_cycle_latest.experiment.id` once and checks only that
+experiment's immutable forecast-hour claim. Supported identities have the form
+`weather_forward_YYYY_MM_vN` (a valid two-digit month and positive version); v1 and
+v2 both work. Historical v1 claims remain intact when v2 becomes active. A missing,
+empty or unsupported identity records `ACTIVE_WEATHER_EXPERIMENT_UNKNOWN` and skips
+the watchdog; primary hourly delivery still bootstraps a new cycle report. The
+existing time gates and primary-request duplicate protection remain in effect.
+
+After applying the incremental SQL, use `weather_dispatch_evidence.sql` to confirm
+that all four jobs remain active, then verify actual GitHub cycle completion and
+the next eligible forecast claim for the new baseline. SQL request acceptance
+alone does not establish that a forecast executed.
+
 ## Local validation
 
 `test_weather_dispatch_local.mjs` executes the SQL function bodies in PGlite's
@@ -81,7 +102,8 @@ npm install --prefix reports/weather-dispatch-sql-check --ignore-scripts --no-au
 node supabase/ops/test_weather_dispatch_local.mjs reports/weather-dispatch-sql-check
 ```
 
-The 18 local checks passed on PostgreSQL 18.3/PGlite 0.5.8. The deployed Supabase
+The 22 local checks passed on PostgreSQL 18.3/PGlite 0.5.8, including v1/v2
+watchdog claims, invalid identities, and incremental-upgrade preservation. The deployed Supabase
 project uses PostgreSQL 17, so managed extension ownership/permissions and actual
 delivery must still be verified after deployment. The atomic unique constraint is
 the concurrency guard; local duplicate tests use a single database connection.

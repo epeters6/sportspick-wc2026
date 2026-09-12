@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Awaitable, List, Optional
 
+import httpx
 from loguru import logger
+from postgrest.exceptions import APIError
 
 from pavlov.pipeline.clv_tracker import CLVRecord
 
@@ -257,6 +260,31 @@ def _accept_book_for_platform(
     return True, None
 
 
+def _read_obligation_page(query):
+    """Retry an obligation SELECT only; writes must never use this helper."""
+    delays = (1.0, 2.0)
+    for attempt in range(len(delays) + 1):
+        try:
+            return query.execute()
+        except Exception as exc:
+            transient = isinstance(
+                exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
+            )
+            if isinstance(exc, APIError):
+                # Gateway errors may expose HTTP codes as integers or strings.
+                transient = str(exc.code) in {"502", "503", "504", "PGRST003"}
+            elif isinstance(exc, httpx.HTTPStatusError):
+                transient = exc.response.status_code in {502, 503, 504}
+            if not transient or attempt == len(delays):
+                raise
+            # Keep request URLs, headers and database contents out of retry logs.
+            logger.warning(
+                "Transient CLV obligation SELECT failure ({}); retry {}/{} in {}s",
+                type(exc).__name__, attempt + 1, len(delays), delays[attempt],
+            )
+            time.sleep(delays[attempt])
+
+
 def _obligation_rows(db, columns: str, *, pending_only: bool = False) -> list[dict]:
     """Keyset pagination survives a server cap below our requested page size."""
     rows = []
@@ -267,7 +295,7 @@ def _obligation_rows(db, columns: str, *, pending_only: bool = False) -> list[di
             query = query.or_("status_15m.eq.pending,status_1h.eq.pending,status_close.eq.pending")
         if after is not None:
             query = query.gt("candidate_id", after)
-        page = query.execute().data or []
+        page = _read_obligation_page(query).data or []
         if not page:
             return rows
         identifiers = [r.get("candidate_id") for r in page]
@@ -320,11 +348,13 @@ async def update_clv_obligations(
     from backend.db import get_db
 
     db = db or get_db()
+    rows = _obligation_rows(db, "*", pending_only=True)
+
+    # Database retries must finish before taking the batch fallback timestamp.
+    # Actual observations still use each price fetch's receipt timestamp below.
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-
-    rows = _obligation_rows(db, "*", pending_only=True)
 
     stats = {"checked": 0, "updated": 0, "unavailable": 0, "errors": 0}
 

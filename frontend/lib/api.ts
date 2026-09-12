@@ -404,10 +404,22 @@ export interface WeatherExperimentStatus {
   mode: "paper";
   live_ready: false;
   timestamp?: string;
+  completed_at?: string;
+  experiments?: Record<string, WeatherExperimentStatus>;
+  active_experiment_ids?: string[];
+  display_scope?: string;
+  retired_experiments?: { id: string; reason?: string }[];
   experiment?: {
     id: string;
     config_hash: string;
-    config?: { stations?: string[]; metrics?: string[]; seed_per_venue?: number };
+    config?: {
+      stations?: string[];
+      metrics?: string[];
+      seed_per_venue?: number;
+      research_label?: string;
+      execution_calibration_mode?: "required" | "observe_only";
+      exploratory?: boolean;
+    };
   };
   venues?: Record<string, {
     initial_bankroll: number;
@@ -439,6 +451,31 @@ export interface WeatherExperimentStatus {
       blocked_reasons: string[];
     }>;
   } | null;
+}
+
+export function weatherResearchArms(report?: WeatherExperimentStatus): [string, WeatherExperimentStatus | undefined][] {
+  if (!report) return [];
+  const ids = report.active_experiment_ids?.length
+    ? report.active_experiment_ids
+    : Object.keys(report.experiments ?? {});
+  if (ids.length) return ids.map((id) => [id, report.experiments?.[id]]);
+  return report.experiment?.id ? [[report.experiment.id, report]] : [];
+}
+
+export function weatherResearchLabel(id: string, report?: WeatherExperimentStatus) {
+  return report?.experiment?.config?.research_label || id;
+}
+
+export function weatherReportNotice(report?: WeatherExperimentStatus) {
+  if (!report) return "Selected experiment report is unavailable.";
+  const recorded = Date.parse(report.completed_at || report.timestamp || "");
+  const now = Date.now();
+  if (!Number.isFinite(recorded) || recorded > now + 60_000) {
+    return "Report time is unavailable or invalid. Current cycle health is unknown.";
+  }
+  return now - recorded > 3 * 60 * 60_000
+    ? "This report is more than three hours old. Balances and evidence below are historical; current cycle health is unknown."
+    : null;
 }
 
 export async function fetchWeatherExperiment(): Promise<WeatherExperimentStatus> {

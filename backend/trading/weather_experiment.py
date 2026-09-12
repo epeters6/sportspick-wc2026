@@ -21,10 +21,13 @@ IMPLEMENTATION_FILES = (
     "backend/models/weather/sync_weather.py",
     "backend/trading/weather_experiment.py",
     "backend/trading/weather_forward_report.py",
+    "backend/trading/weather_research.py",
+    "backend/trading/weather_clv_repair.py",
     "backend/trading/settlement_integrity.py",
     "backend/trading/weather_settlement.py",
     "backend/ml/weather_execution_calibration.py",
     "backend/ml/weather_mos.py",
+    "backend/ml/weather_verification.py",
     "pavlov/pipeline/probability_model.py",
     "pavlov/pipeline/nowcast_features.py",
     "pavlov/pipeline/market_probability.py",
@@ -79,6 +82,11 @@ def read_config(path: Path = CONFIG_PATH) -> dict:
             raise ValueError(f"INVALID_WEATHER_CONFIG:{key}")
     if config["max_event_risk_fraction"] > config["max_open_risk_fraction"]:
         raise ValueError("EVENT_RISK_EXCEEDS_OPEN_RISK")
+    mode = config.get("execution_calibration_mode", "required")
+    if mode not in {"required", "observe_only"}:
+        raise ValueError("INVALID_WEATHER_CALIBRATION_MODE")
+    if mode == "observe_only" and config.get("exploratory") is not True:
+        raise ValueError("WEATHER_OBSERVE_ONLY_REQUIRES_EXPLORATORY_PAPER")
     return config
 
 

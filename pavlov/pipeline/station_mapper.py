@@ -13,6 +13,9 @@ get_city_for_market(market_title) -> str | None
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 # ---------------------------------------------------------------------------
 # Station map
@@ -293,5 +296,193 @@ def get_city_for_market(market_title: str) -> str | None:
             return city_key
 
     return None
+
+
+# Versioned station registry for new research. Do not change STATION_MAP above:
+# old evidence was produced with those city coordinates. These coordinates and
+# timezones were checked against https://api.weather.gov/stations/{station}
+# on 2026-09-12. In particular Chicago Midway and O'Hare are separate targets.
+_VERIFIED_STATIONS: dict[str, dict] = {
+    "KNYC": {"city": "New York", "lat": 40.78333, "lon": -73.96667,
+             "timezone": "America/New_York", "cli": "CLINYC"},
+    "KMDW": {"city": "Chicago", "lat": 41.78417, "lon": -87.75528,
+             "timezone": "America/Chicago", "cli": "CLIMDW"},
+    "KORD": {"city": "Chicago", "lat": 41.97972, "lon": -87.90444,
+             "timezone": "America/Chicago"},
+    "KMIA": {"city": "Miami", "lat": 25.79056, "lon": -80.31639,
+             "timezone": "America/New_York", "cli": "CLIMIA"},
+    "KLAX": {"city": "Los Angeles", "lat": 33.93806, "lon": -118.38889,
+             "timezone": "America/Los_Angeles", "cli": "CLILAX"},
+    "KSFO": {"city": "San Francisco", "lat": 37.61961, "lon": -122.36558,
+             "timezone": "America/Los_Angeles", "cli": "CLISFO"},
+    "KDEN": {"city": "Denver", "lat": 39.84658, "lon": -104.65622,
+             "timezone": "America/Denver", "cli": "CLIDEN"},
+    "KPHL": {"city": "Philadelphia", "lat": 39.87327, "lon": -75.22678,
+             "timezone": "America/New_York", "cli": "CLIPHL"},
+    "KAUS": {"city": "Austin", "lat": 30.18304, "lon": -97.67987,
+             "timezone": "America/Chicago", "cli": "CLIAUS"},
+}
+
+# Actual open-contract rules checked on 2026-09-12, not inferred from a city:
+# https://external-api.kalshi.com/trade-api/v2/markets?series_ticker=...&status=open
+# A series is a cross-check, never a substitute for absent contract metadata.
+_VERIFIED_KALSHI_SERIES = {
+    "KXHIGHNY": "KNYC", "KXHIGHCHI": "KMDW", "KXHIGHMIA": "KMIA",
+    "KXHIGHLAX": "KLAX", "KXHIGHTSFO": "KSFO", "KXHIGHDEN": "KDEN",
+    "KXHIGHPHIL": "KPHL", "KXHIGHAUS": "KAUS",
+}
+_CLI_STATIONS = {meta["cli"]: code for code, meta in _VERIFIED_STATIONS.items() if meta.get("cli")}
+_STATION_NAMES = {
+    "central park": "KNYC", "chicago midway airport": "KMDW",
+    "chicago o'hare international airport": "KORD",
+    "miami international airport": "KMIA",
+    "los angeles international airport": "KLAX",
+    "san francisco international airport": "KSFO",
+    "denver international airport": "KDEN",
+    "philadelphia international airport": "KPHL",
+    "austin-bergstrom international airport": "KAUS",
+}
+
+
+class StationMappingError(ValueError):
+    """A contract cannot safely be assigned to a supported settlement station."""
+
+
+@dataclass(frozen=True)
+class StationResolution:
+    station: str
+    city: str
+    timezone: str
+    settlement_source: str
+    provenance: str
+
+
+def get_station_metadata(station: str) -> dict | None:
+    """Return a copy of vetted station metadata; never fall back by city."""
+    code = str(station or "").strip().upper()
+    meta = _VERIFIED_STATIONS.get(code)
+    return {**meta, "station": code} if meta else None
+
+
+def standard_timezone_for_station(station: str) -> str:
+    """Fixed standard-time zone for the vetted US stations' CLI reporting day.
+
+    NWS: https://www.weather.gov/lot/weather_observations_faq. Daily observations
+    span midnight-to-midnight standard time, including during daylight saving.
+    January 1 is standard time for every station in this US-only registry.
+    """
+    meta = get_station_metadata(station)
+    if not meta:
+        raise StationMappingError("UNSUPPORTED_SETTLEMENT_STATION")
+    offset = datetime(2026, 1, 1, tzinfo=ZoneInfo(meta["timezone"])).utcoffset()
+    if offset is None or offset.total_seconds() % 3600:
+        raise StationMappingError("UNVERIFIED_OBSERVATION_DAY")
+    hours = -int(offset.total_seconds() / 3600)  # IANA Etc/GMT signs are reversed.
+    return f"Etc/GMT{hours:+d}" if hours else "Etc/GMT"
+
+
+def resolve_observation_timezone(market: dict, platform: str,
+                                 resolution: StationResolution, target: date) -> str:
+    """Require a verified daily reporting convention, separately from city time.
+
+    Kalshi daily-period guidance explicitly specifies standard time:
+    https://help.kalshi.com/en/articles/13823837-weather-markets. Current vetted
+    series refer to CLI stations but name The Weather Company; their actual
+    close instant must also match the standard-day end. This does not relabel
+    The Weather Company as NWS or infer the rule from a city name.
+    """
+    observation_tz = standard_timezone_for_station(resolution.station)
+    if resolution.settlement_source == "NWS CLI":
+        return observation_tz
+    series = str(market.get("series_ticker") or market.get("ticker") or "").split("-")[0]
+    if (platform != "kalshi" or series not in _VERIFIED_KALSHI_SERIES
+            or resolution.settlement_source != "The Weather Company"):
+        raise StationMappingError("UNVERIFIED_OBSERVATION_DAY")
+    cli = _VERIFIED_STATIONS[resolution.station].get("cli")
+    primary = str(market.get("rules_primary") or "")
+    if not cli or not re.search(r"\b" + re.escape(cli) + r"\b", primary):
+        raise StationMappingError("UNVERIFIED_OBSERVATION_DAY")
+    try:
+        actual_end = datetime.fromisoformat(str(market.get("close_time")).replace("Z", "+00:00"))
+        expected_end = datetime.combine(target + timedelta(days=1), time(), ZoneInfo(observation_tz))
+        if actual_end.tzinfo is None or actual_end.astimezone(timezone.utc) != expected_end.astimezone(timezone.utc):
+            raise ValueError("wrong day end")
+    except (TypeError, ValueError):
+        raise StationMappingError("CONFLICTING_OBSERVATION_DAY") from None
+    return observation_tz
+
+
+def resolve_market_station(market: dict, platform: str) -> StationResolution:
+    """Resolve explicit settlement metadata, rejecting conflicts and city guesses.
+
+    Only settlement/rules fields are evidence. Titles, slugs and city hints do
+    not establish a station. Supported Kalshi series constrain explicit rules
+    as an additional check. Polymarket US is resolved independently; its public
+    descriptions currently specify ICAO stations and NWS daily climate reports.
+    """
+    if platform not in {"kalshi", "polymarket", "poly_us", "polymarket_us"}:
+        raise StationMappingError("UNSUPPORTED_WEATHER_VENUE")
+    candidates: set[str] = set()
+    evidence: set[str] = set()
+    texts: list[str] = []
+    containers = [market]
+    if isinstance(market.get("metadata"), dict):
+        containers.append(market["metadata"])
+    for container in containers:
+        for field in ("settlement_station", "settlementStation", "station_id", "weather_station"):
+            raw = container.get(field)
+            if raw is None or raw == "":
+                continue
+            code = str(raw).strip().upper()
+            code = _CLI_STATIONS.get(code, code)
+            if len(code) == 3:
+                code = "K" + code
+            if code not in _VERIFIED_STATIONS:
+                raise StationMappingError("UNSUPPORTED_SETTLEMENT_STATION")
+            candidates.add(code)
+            evidence.add("structured_station")
+        for field in ("rules_primary", "rules_secondary", "description", "resolution_source",
+                      "resolutionSource", "settlement_source", "settlementSource"):
+            raw = container.get(field)
+            if isinstance(raw, str) and raw.strip():
+                texts.append(raw)
+    for text in texts:
+        for token in re.findall(r"\b(?:K[A-Z0-9]{3}|CLI[A-Z]{3})\b", text):
+            code = _CLI_STATIONS.get(token, token)
+            if code not in _VERIFIED_STATIONS:
+                raise StationMappingError("UNSUPPORTED_SETTLEMENT_STATION")
+            candidates.add(code)
+            evidence.add("contract_rules")
+        for name, code in _STATION_NAMES.items():
+            if name in text.lower():
+                candidates.add(code)
+                evidence.add("contract_rules")
+    if not candidates:
+        raise StationMappingError("MISSING_EXPLICIT_SETTLEMENT_STATION")
+    if len(candidates) != 1:
+        raise StationMappingError("CONFLICTING_SETTLEMENT_STATIONS")
+    station = next(iter(candidates))
+    meta = _VERIFIED_STATIONS[station]
+    hinted_city = market.get("city_hint")
+    if hinted_city and hinted_city != meta["city"]:
+        raise StationMappingError("CONFLICTING_SETTLEMENT_CITY")
+    if platform == "kalshi":
+        series = str(market.get("series_ticker") or market.get("ticker") or "").split("-")[0]
+        expected = _VERIFIED_KALSHI_SERIES.get(series)
+        if expected and expected != station:
+            raise StationMappingError("CONFLICTING_SERIES_SETTLEMENT_STATION")
+        if expected:
+            evidence.add("verified_kalshi_series")
+    # Preserve the actual authority. Kalshi's current rules name The Weather
+    # Company even though the location is expressed as a CLI station code.
+    source_text = " ".join(texts).lower()
+    if "the weather company" in source_text or "weather.com/kalshi" in source_text:
+        source = "The Weather Company"
+    elif "national weather service" in source_text or "nws" in source_text:
+        source = "NWS CLI"
+    else:
+        source = "Venue official settlement"
+    return StationResolution(station, meta["city"], meta["timezone"], source,
+                             "+".join(sorted(evidence)))
 
 

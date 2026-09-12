@@ -547,8 +547,13 @@ def _parse_market(raw: dict, series_ticker: str = "") -> dict:
     return {
         "ticker":        raw.get("ticker", ""),
         "title":         raw.get("title", ""),
+        "rules_primary": raw.get("rules_primary", ""),
+        "rules_secondary": raw.get("rules_secondary", ""),
+        "series_ticker": series_ticker or str(raw.get("ticker", "")).split("-")[0],
+        "settlement_station": raw.get("settlement_station"),
         "strike_type":   raw.get("strike_type", ""),   # 'greater'|'less'|'between'
         "floor_strike":  raw.get("floor_strike"),       # lower bound int
+        "cap_strike":    raw.get("cap_strike"),
         "yes_ask":       _dollars_to_cents(raw.get("yes_ask_dollars")),
         "yes_bid":       _dollars_to_cents(raw.get("yes_bid_dollars")),
         # Explicit unit-bearing input becomes dollar aliases. In particular,

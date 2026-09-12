@@ -22,7 +22,11 @@ from backend.trading.weather_experiment import (
 
 def _forecast_window_open(config: dict, now: datetime) -> bool:
     from zoneinfo import ZoneInfo
-    from pavlov.pipeline.station_mapper import STATION_MAP, get_tz_for_city
+    from pavlov.pipeline.station_mapper import STATION_MAP, get_tz_for_city, get_station_metadata
+
+    if config.get("require_verified_station"):
+        return any(now.astimezone(ZoneInfo(get_station_metadata(station)["timezone"])).hour
+                   in config["decision_hours_local"] for station in config["stations"])
 
     return any(
         row["station"] in config["stations"]
@@ -44,7 +48,9 @@ def _claim_forecast_slot(db, experiment_id: str, run_id: str, now: datetime) -> 
 
 
 async def run_cycle(*, report_path: str | Path = "reports/weather/latest.json", db=None,
-                    stage_functions: dict | None = None, now: datetime | None = None) -> dict:
+                    stage_functions: dict | None = None, now: datetime | None = None,
+                    experiment_config: dict | None = None, shared_inputs: dict | None = None,
+                    persist_latest: bool = True, include_global_stages: bool = True) -> dict:
     """Persist an honest cycle result even when individual data stages fail."""
     if db is None:
         from backend.db import get_db
@@ -63,6 +69,7 @@ async def run_cycle(*, report_path: str | Path = "reports/weather/latest.json", 
             degraded = isinstance(value, dict) and (
                 bool(value.get("errors")) or bool(value.get("read_errors")) or bool(value.get("venue_errors"))
                 or bool(value.get("ensemble_fail")) or bool(value.get("persistence_reject"))
+                or bool(value.get("normalization_reject")) or bool(value.get("timing_reject"))
                 or any("FEE_SCHEDULE" in reason or "SNAPSHOT" in reason or "LEDGER_WRITE" in reason
                        for reason in value.get("rejection_reasons", {}))
             )
@@ -77,7 +84,7 @@ async def run_cycle(*, report_path: str | Path = "reports/weather/latest.json", 
                 report["status"] = "degraded"
             return None
 
-    manifest = await stage("experiment", lambda: register_experiment(db))
+    manifest = await stage("experiment", lambda: register_experiment(db, config=experiment_config))
     if manifest is None:
         report["status"] = "failed"
     else:
@@ -92,7 +99,7 @@ async def run_cycle(*, report_path: str | Path = "reports/weather/latest.json", 
             "settlement_before": lambda: invoke("backend.trading.weather_settlement", "resolve_weather_autobets"),
             "verification": lambda: invoke("backend.ml.weather_verification", "backfill_actuals", max_rows=100),
             "legacy_official_labels": lambda: invoke("backend.ml.prediction_evaluation", "resolve_weather_prediction_backlog", db, row_limit=150, eligible_only=False),
-            "forecast": lambda: invoke("backend.models.weather.sync_weather", "sync_weather_predictions", experiment=manifest, run_id=run_id),
+            "forecast": lambda: invoke("backend.models.weather.sync_weather", "sync_weather_predictions", experiment=manifest, run_id=run_id, shared_inputs=shared_inputs),
             "settlement_after": lambda: invoke("backend.trading.weather_settlement", "resolve_weather_autobets"),
             "forward_official_labels": lambda: invoke("backend.ml.prediction_evaluation", "resolve_weather_prediction_backlog",
                 db, row_limit=250, eligible_only=False, source=manifest["config"]["prediction_source"]),
@@ -101,11 +108,20 @@ async def run_cycle(*, report_path: str | Path = "reports/weather/latest.json", 
 
     # Outcome processing is independent of experiment registration or forecasting.
     for name in ("settlement_before", "verification", "legacy_official_labels"):
-        if name in stage_functions:
+        if include_global_stages and name in stage_functions:
             await stage(name, stage_functions[name])
 
     if manifest is not None:
+        if manifest["config"].get("require_verified_station"):
+            from backend.trading.weather_clv_repair import ensure_weather_clv_obligations
+            await stage("clv_recovery", lambda: ensure_weather_clv_obligations(
+                db, fetch_experiment_bets(db, manifest["id"])))
         window_open = await stage("forecast_window", lambda: _forecast_window_open(manifest["config"], now))
+        if (window_open and shared_inputs and shared_inputs.get("forecast_hour")
+                and datetime.now(timezone.utc).strftime("%Y%m%dT%H") != shared_inputs["forecast_hour"]):
+            window_open = False
+            report["status"] = "degraded"
+            report["stages"]["forecast_window"] = {"status": "degraded", "reason": "WEATHER_RESEARCH_HOUR_EXPIRED"}
         if window_open:
             claimed = await stage("forecast_slot", lambda: _claim_forecast_slot(db, manifest["id"], run_id, now))
             if claimed and "forecast" in stage_functions:
@@ -113,7 +129,7 @@ async def run_cycle(*, report_path: str | Path = "reports/weather/latest.json", 
             elif claimed is False:
                 report["stages"]["forecast"] = {"status": "skipped", "reason": "FORECAST_SLOT_ALREADY_ATTEMPTED"}
         elif window_open is False:
-            report["stages"]["forecast"] = {"status": "skipped", "reason": "OUTSIDE_FIXED_LOCAL_WINDOWS"}
+            report["stages"]["forecast"] = {"status": "skipped", "reason": report["stages"]["forecast_window"].get("reason", "OUTSIDE_FIXED_LOCAL_WINDOWS")}
 
     if "settlement_after" in stage_functions:
         await stage("settlement_after", stage_functions["settlement_after"])
@@ -134,8 +150,9 @@ async def run_cycle(*, report_path: str | Path = "reports/weather/latest.json", 
 
     report["completed_at"] = datetime.now(timezone.utc).isoformat()
     try:
-        db.table("app_settings").upsert({"key": LATEST_KEY, "value": report,
-                                        "updated_at": report["completed_at"]}, on_conflict="key").execute()
+        if persist_latest:
+            db.table("app_settings").upsert({"key": LATEST_KEY, "value": report,
+                                            "updated_at": report["completed_at"]}, on_conflict="key").execute()
     except Exception as exc:
         report["status"] = "failed"
         report["stages"]["persist_report"] = {"status": "failed", "error": type(exc).__name__}
@@ -150,12 +167,17 @@ async def run_cycle(*, report_path: str | Path = "reports/weather/latest.json", 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", default="reports/weather/latest.json")
+    parser.add_argument("--suite", action="store_true", help="Run the predefined, independent paper research arms")
     args = parser.parse_args()
     # Defense in depth; forecast pipeline itself is paper-only as well.
     os.environ.update({"LIVE_TRADING_ENABLED": "false", "POLYMARKET_LIVE_ENABLED": "false",
                        "AUTO_BET_ENABLED": "0", "POLY_AUTO_BET_ENABLED": "0",
                        "PAVLOV_BYPASS_CONFIG": "1", "DISCORD_WEBHOOK_URL": ""})
-    report = asyncio.run(run_cycle(report_path=args.report))
+    if args.suite:
+        from backend.trading.weather_research import run_research_suite
+        report = asyncio.run(run_research_suite(report_path=args.report))
+    else:
+        report = asyncio.run(run_cycle(report_path=args.report))
     print(json.dumps({"status": report["status"], "mode": "paper", "run_id": report["run_id"],
                       "stages": {key: value["status"] for key, value in report["stages"].items()}}))
     return 1 if report["status"] == "failed" or any(stage["status"] == "failed" for stage in report["stages"].values()) else 0

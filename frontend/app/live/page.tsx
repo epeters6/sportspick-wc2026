@@ -1,9 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { CheckCircle, Circle, Lock, Shield, RefreshCw } from "lucide-react";
-import { fetchWeatherExperiment } from "@/lib/api";
+import { fetchWeatherExperiment, weatherResearchArms, weatherResearchLabel, weatherReportNotice } from "@/lib/api";
 
 const criterionLabels: Record<string, string> = {
   reads_complete: "Complete evidence reads",
@@ -21,10 +22,17 @@ function percent(value: number | null | undefined) {
 }
 
 export default function WeatherReadinessPage() {
+  const [selectedArm, setSelectedArm] = useState("");
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ["weather-experiment"], queryFn: fetchWeatherExperiment, refetchInterval: 120_000,
   });
-  const forward = data?.forward_evaluation;
+  const arms = weatherResearchArms(data);
+  const primaryId = data?.experiment?.id || arms[0]?.[0] || "";
+  const selectedId = arms.some(([id]) => id === selectedArm) ? selectedArm : primaryId;
+  const selected = arms.length ? arms.find(([id]) => id === selectedId)?.[1] : data;
+  const forward = selected?.forward_evaluation;
+  const reportNotice = weatherReportNotice(selected);
+  const exploratoryForecast = selected?.experiment?.config?.execution_calibration_mode === "observe_only";
   return (
     <div className="space-y-7 pb-12">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-white/10 pb-6">
@@ -37,20 +45,34 @@ export default function WeatherReadinessPage() {
         <p className="text-sm text-amber-100/80 mt-2">The weather cycle does not place exchange orders and keeps live readiness false. Passing every research gate means the evidence is ready for review. Funding and any future live execution require a separate decision and execution validation.</p>
       </section>
 
+      {arms.length > 0 && <section className="glass-panel p-5 space-y-3">
+        <label htmlFor="readiness-research-arm" className="block text-sm font-medium">Research arm</label>
+        <select id="readiness-research-arm" value={selectedId} onChange={(event) => setSelectedArm(event.target.value)} className="w-full md:max-w-xl rounded-lg border border-white/20 bg-slate-950 px-3 py-2 text-sm">
+          {arms.map(([id, arm]) => <option key={id} value={id}>{weatherResearchLabel(id, arm)}{id === primaryId ? " · Primary baseline" : ""}</option>)}
+        </select>
+        <p className="text-xs text-gray-400">Evidence and balances below belong only to this arm, with each venue evaluated separately.</p>
+        {selected && <><p className="text-sm text-sky-300">{exploratoryForecast ? "Exploratory forecast" : "Historical calibration required"}</p><p className="text-xs text-gray-400">{exploratoryForecast ? "The historical calibration filter is recorded for comparison but is not required for entry in this paper arm." : "Entries in this arm must pass the historical calibration filter."}</p></>}
+      </section>}
+
       {isError ? <div role="alert" className="glass-panel p-6 text-amber-300">Experiment evidence is unavailable. No readiness, balance, or risk status is assumed.</div>
         : isLoading ? <div aria-label="Loading evidence" className="glass-panel h-48 animate-pulse" />
         : !forward ? <div className="glass-panel p-6"><h2 className="font-semibold">No forward evaluation available</h2><p className="text-sm text-gray-400 mt-2">The deployed weather cycle must publish a report before these gates can be evaluated. Existing legacy profits or sample counts do not fill this gap.</p></div>
         : <>
+          {reportNotice && <p role="alert" className="text-sm text-amber-300">{reportNotice}</p>}
+          {selected?.status !== "healthy" && <p role="alert" className="text-sm text-amber-300">Selected arm cycle: {selected?.status || "unavailable"}.</p>}
+          {data?.experiments && data.status !== "healthy" && <p role="alert" className="text-sm text-amber-300">Research suite: {data.status}. Check all arms before relying on current evidence.</p>}
           <p className="text-sm text-gray-400">Last evaluation: {new Date(forward.generated_at).toLocaleString(undefined, { timeZone: "UTC" })} UTC. A historical passing report is not current execution authorization.</p>
           {(forward.read_errors?.length ?? 0) > 0 && <div role="alert" className="glass-panel p-4 text-sm text-amber-300">Some evidence could not be read. Review the cycle report; these results cannot establish readiness.</div>}
           <div className="grid xl:grid-cols-2 gap-5">
             {(["kalshi", "polymarket"] as const).map((venue) => {
               const evidence = forward.venues[venue];
-              const account = data?.venues?.[venue];
+              const account = selected?.venues?.[venue];
               return <section key={venue} className="glass-panel p-5 space-y-5">
-                <div className="flex flex-wrap justify-between gap-3"><h2 className="font-semibold text-xl">{venue === "kalshi" ? "Kalshi" : "Polymarket US"}</h2><span className="text-xs text-sky-300">{evidence?.research_evidence_ready ? "Research evidence ready for review" : "Research requirements pending"}</span></div>
+                <div className="flex flex-wrap justify-between gap-3"><h2 className="font-semibold text-xl">{venue === "kalshi" ? "Kalshi" : "Polymarket US"}</h2><span className="text-xs text-sky-300">{!evidence ? "Evaluation unavailable" : evidence.research_evidence_ready ? "Research evidence ready for review" : "Research requirements pending"}</span></div>
                 {!evidence ? <p className="text-sm text-gray-400">Venue evaluation unavailable.</p> : <>
                   <dl className="grid grid-cols-2 gap-4 text-sm">
+                    <div><dt className="text-gray-500 text-xs">Paper equity</dt><dd className="font-semibold mt-1">{typeof account?.equity === "number" && Number.isFinite(account.equity) ? `$${account.equity.toFixed(2)}` : "—"}</dd></div>
+                    <div><dt className="text-gray-500 text-xs">Verified realized P&amp;L</dt><dd className="font-semibold mt-1">{Number.isFinite(evidence.verified_realized_pnl) ? `$${evidence.verified_realized_pnl.toFixed(2)}` : "—"}</dd></div>
                     <div><dt className="text-gray-500 text-xs">Traded weather events</dt><dd className="font-semibold mt-1">{evidence.independent_traded_events} / 250</dd></div>
                     <div><dt className="text-gray-500 text-xs">Traded target dates</dt><dd className="font-semibold mt-1">{evidence.distinct_traded_dates} / 45</dd></div>
                     <div><dt className="text-gray-500 text-xs">Verified paper ROI</dt><dd className="font-semibold mt-1">{percent(evidence.net_roi)}</dd></div>

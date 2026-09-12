@@ -57,15 +57,18 @@ def record_prediction(
 
 
 def _station_city(station_id: str) -> str | None:
-    from pipeline.station_mapper import STATION_MAP
+    from pavlov.pipeline.station_mapper import STATION_MAP, get_station_metadata
 
+    verified = get_station_metadata(station_id)
+    if verified:
+        return verified["city"]
     for city, meta in STATION_MAP.items():
         if meta.get("station") == station_id:
             return city
     return None
 
 
-def fetch_actual_extremes(station_id: str, target_date: str) -> dict:
+def fetch_actual_extremes(station_id: str, target_date: str, *, model_name: str = "ensemble") -> dict:
     """Observed high/low (°F) for a station on a station-local calendar date.
 
     Uses the Aviation Weather Center METAR archive (~96h of history). Returns
@@ -73,7 +76,7 @@ def fetch_actual_extremes(station_id: str, target_date: str) -> dict:
     """
     import requests
     from zoneinfo import ZoneInfo
-    from pipeline.station_mapper import get_tz_for_city
+    from pavlov.pipeline.station_mapper import get_tz_for_city, get_station_metadata, standard_timezone_for_station
 
     out: dict = {"high": None, "low": None}
     try:
@@ -82,6 +85,20 @@ def fetch_actual_extremes(station_id: str, target_date: str) -> dict:
         return out
 
     now = datetime.now(timezone.utc)
+    verified = get_station_metadata(station_id)
+    city = _station_city(station_id)
+    if not city:
+        return out
+    tz_name = verified["timezone"] if verified else get_tz_for_city(city)
+    if model_name == "ensemble_station_v2":
+        if not verified:
+            return out
+        tz_name = standard_timezone_for_station(station_id)
+    tz = ZoneInfo(tz_name)
+    # At 02:00 UTC yesterday's UTC date is still today at US stations. Filling
+    # a partial day's extrema here would permanently poison the MOS residual.
+    if target >= now.astimezone(tz).date():
+        return out
     hours_ago = int((now - datetime(target.year, target.month, target.day, tzinfo=timezone.utc)).total_seconds() / 3600)
     hours_back = min(96, max(24, hours_ago + 30))
 
@@ -99,9 +116,6 @@ def fetch_actual_extremes(station_id: str, target_date: str) -> dict:
 
     if not isinstance(data, list):
         return out
-
-    city = _station_city(station_id)
-    tz = ZoneInfo(get_tz_for_city(city)) if city else timezone.utc
 
     temps: list[float] = []
     for obs in data:
@@ -150,8 +164,8 @@ def backfill_actuals(max_rows: int = 100) -> int:
         logger.warning(f"weather_verification query failed: {exc}")
         return 0
 
-    # One METAR fetch per (station, date), shared across lead-time rows
-    actuals_cache: dict[tuple[str, str], dict] = {}
+    # Keep standard-day v2 actuals separate from civil-day legacy data.
+    actuals_cache: dict[tuple[str, str, str], dict] = {}
     updated = 0
 
     for row in rows:
@@ -162,9 +176,10 @@ def backfill_actuals(max_rows: int = 100) -> int:
         if isinstance(tdate, date_type):
             tdate = tdate.isoformat()
 
-        key = (station, tdate)
+        model_name = row.get("model_name") or "ensemble"
+        key = (station, tdate, model_name)
         if key not in actuals_cache:
-            actuals_cache[key] = fetch_actual_extremes(station, tdate)
+            actuals_cache[key] = fetch_actual_extremes(station, tdate, model_name=model_name)
         actual = actuals_cache[key]
 
         patch = {}

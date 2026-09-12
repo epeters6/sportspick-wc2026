@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, timezone
 import math
 import random
+import re
 
 from backend.trading.settlement_integrity import verify_weather_autobet
 from backend.trading.weather_experiment import fetch_experiment_bets, metadata
@@ -259,10 +260,28 @@ def _venue_report(venue, bets, clv, manifest, valid_snapshots, reads_complete, f
     observed_count = 0
     for trade in trades:
         event_trades[trade["event"]].append(trade)
-        row = clv_by_candidate.get(trade["meta"].get("candidate_id"))
+        bet = trade["bet"]
+        signal_id = trade["meta"].get("candidate_id")
+        fill_id = f"weather-fill:{bet['id']}"
+        if not isinstance(signal_id, str) or not signal_id:
+            quarantine["INVALID_TRADED_CLOSING_CLV"] += 1
+            continue
+        # The execution pipeline keys obligations by durable fill identity.
+        # Retain the original signal-key layout for existing paper evidence,
+        # but never silently choose between two obligations for the same fill.
+        linked = [clv_by_candidate[key] for key in (fill_id, signal_id)
+                  if key in clv_by_candidate]
+        if len(linked) > 1:
+            quarantine["AMBIGUOUS_TRADED_CLOSING_CLV"] += 1
+            continue
+        row = linked[0] if linked else None
         if not row or row.get("status_close") != "observed":
             continue
-        meta, bet = metadata(row.get("metadata")), trade["bet"]
+        meta = metadata(row.get("metadata"))
+        if ((row["candidate_id"] == fill_id and meta.get("signal_candidate_id") != signal_id)
+                or (meta.get("signal_candidate_id") is not None and meta["signal_candidate_id"] != signal_id)):
+            quarantine["INVALID_TRADED_CLOSING_CLV"] += 1
+            continue
         close, effective = _number(row.get("obs_close_price")), _number(row.get("entry_effective_cost"))
         observed, due, entry = _timestamp(row.get("obs_close_ts")), _timestamp(row.get("due_close")), _timestamp(row.get("entry_ts"))
         if (row.get("market_id") != bet.get("market_id") or str(row.get("side")).lower() != str(bet.get("outcome_name")).lower()
@@ -314,7 +333,12 @@ def _venue_report(venue, bets, clv, manifest, valid_snapshots, reads_complete, f
 def build_forward_report(db, manifest, bets=None) -> dict:
     """Select experiment evidence and evaluate research gates; never enable live trading."""
     config = manifest.get("config", manifest)
-    if not manifest.get("id") or config.get("prediction_source") != "weather_forward_v1":
+    source = config.get("prediction_source")
+    calibration_mode = config.get("execution_calibration_mode", "required")
+    if (not manifest.get("id") or not isinstance(source, str)
+            or re.fullmatch(r"weather_forward_[A-Za-z0-9_]+", source) is None
+            or config.get("mode", "paper") != "paper"
+            or calibration_mode not in ("required", "observe_only")):
         raise ValueError("INVALID_WEATHER_FORWARD_MANIFEST")
     errors = []
     try:
@@ -337,10 +361,16 @@ def build_forward_report(db, manifest, bets=None) -> dict:
     venues = {venue: _venue_report(venue, bets, clv, manifest, valid_snapshots, not errors, forecast["quarantined"] == 0) for venue in VENUES}
     return {
         "experiment_id": manifest["id"], "prediction_source": config["prediction_source"],
+        "execution_calibration_mode": calibration_mode,
+        "historical_execution_filter_required": calibration_mode == "required",
+        "research_label": config.get("research_label", "Frozen weather paper research"),
+        "exploratory": config.get("exploratory") is True,
         "generated_at": datetime.now(timezone.utc).isoformat(), "live_ready": False,
         "research_evidence_ready": all(row["research_evidence_ready"] for row in venues.values()),
         "research_evidence_ready_venues": [venue for venue, row in venues.items() if row["research_evidence_ready"]],
         "forecast": forecast, "venues": venues, "read_errors": errors,
         "bootstrap": {"method": "target-date cluster percentile", "replicates": BOOTSTRAP_REPLICATES, "seed": BOOTSTRAP_SEED, "confidence": 0.95},
-        "limitations": ["Paper fill assumptions are not verified live execution.", "Research evidence never grants live trading permission.", "Repeated report inspection and strategy selection are not adjusted in the exploratory confidence interval."],
+        "limitations": ["Paper fill assumptions are not verified live execution.", "Research evidence never grants live trading permission.", "Repeated report inspection and strategy selection are not adjusted in the exploratory confidence interval."]
+        + (["This exploratory arm records historical calibration but does not enforce its execution filter."]
+           if calibration_mode == "observe_only" else []),
     }
