@@ -32,6 +32,9 @@ jobs:
       APP_ENV: production
       LOG_LEVEL: INFO
       GITHUB_ACTIONS: "true"
+      # Public quote clients share legacy package imports but need no bot/signing keys.
+      PYTHONPATH: ${{ github.workspace }}/pavlov:${{ github.workspace }}
+      PAVLOV_BYPASS_CONFIG: "1"
       MODE: shadow
       LIVE_TRADING_ENABLED: "false"
       POLYMARKET_LIVE_ENABLED: "false"
@@ -60,6 +63,9 @@ jobs:
 
       - name: Validate Supabase secrets
         run: python scripts/ci_check_env.py
+
+      - name: Validate public weather quote client startup
+        run: python -c "from pavlov.pipeline import kalshi_client; from pavlov.polymarket import poly_client"
 
       - name: Reject a queued trigger older than five minutes
         id: dispatch
