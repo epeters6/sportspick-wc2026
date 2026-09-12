@@ -28,10 +28,11 @@ import time
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import requests
 
-from pipeline.station_mapper import STATION_MAP
+from pipeline.station_mapper import STATION_MAP, get_station_metadata, standard_timezone_for_station
 
 import data_paths as dp
 
@@ -157,7 +158,12 @@ def _save_cache(cache: dict) -> None:
         json.dump(cache, fh, indent=2, default=str)
 
 
-def _cache_key(city: str, metric: str) -> str:
+def _cache_key(city: str, metric: str, settlement_station: str | None = None,
+               observation_timezone: str | None = None) -> str:
+    if settlement_station:
+        # Station/location and local-day semantics differ from legacy city data.
+        day_zone = observation_timezone or standard_timezone_for_station(settlement_station)
+        return f"ens_station_v2_{settlement_station.upper()}_{metric}_{day_zone}"
     # v2 prefix keeps new per-model format separate from old flat-list entries.
     return f"ens_v2_{city.lower().replace(' ', '_')}_{metric}"
 
@@ -194,6 +200,8 @@ def _fetch_model(
     daily_var: str,
     model: str,
     bias: float,
+    *,
+    local_timezone: str | None = None,
 ) -> dict[str, list[float]] | None:
     """Fetch ensemble members for a single model.
 
@@ -206,6 +214,9 @@ def _fetch_model(
         f"&forecast_days=7"
         f"&models={model}"
     )
+    if local_timezone:
+        # Daily extrema must cover the station-local date, not UTC midnight.
+        url += f"&timezone={quote(local_timezone, safe='')}"
     data: dict | None = None
     max_attempts = 5 if os.environ.get("GITHUB_ACTIONS", "").lower() == "true" else 3
     for attempt in range(max_attempts):
@@ -274,24 +285,32 @@ def _fetch_model(
 def _fetch_members(
     city: str,
     metric: str,
+    *,
+    settlement_station: str | None = None,
+    observation_timezone: str | None = None,
 ) -> dict[str, dict[str, list[float]]] | None:
     """Return {date_str: {model_name: [member_values]}} for all models.
 
     Fetches each model separately so vote weights can be applied.
     Results are cached per city+metric for _CACHE_TTL seconds.
     """
-    station = STATION_MAP.get(city)
+    station = get_station_metadata(settlement_station) if settlement_station else STATION_MAP.get(city)
     if not station:
+        return None
+    if settlement_station and station["city"] != city:
         return None
 
     cache = _load_cache()
-    key   = _cache_key(city, metric)
+    key = _cache_key(city, metric, settlement_station, observation_timezone)
     if key in cache and _cache_fresh(cache[key]):
         return cache[key]["by_date"]
 
     lat, lon   = station["lat"], station["lon"]
     daily_var  = "temperature_2m_max" if metric == "high" else "temperature_2m_min"
-    bias       = _BIAS.get(city, 0.0)
+    # Never reuse a city/O'Hare bias for a verified Midway forecast. A station
+    # correction is separately keyed by metric and starts at zero.
+    bias_key = f"{station['station']}:{metric}" if settlement_station else city
+    bias = _BIAS.get(bias_key, 0.0)
 
     # Fetch each model and merge into {date: {model: [values]}}.
     combined: dict[str, dict[str, list[float]]] = {}
@@ -299,7 +318,11 @@ def _fetch_members(
 
     models = _active_models()
     for model in models:
-        by_date = _fetch_model(lat, lon, daily_var, model, bias)
+        if settlement_station:
+            by_date = _fetch_model(lat, lon, daily_var, model, bias,
+                                   local_timezone=observation_timezone or standard_timezone_for_station(settlement_station))
+        else:
+            by_date = _fetch_model(lat, lon, daily_var, model, bias)
         if not by_date:
             continue
         for date, members in by_date.items():
@@ -352,6 +375,9 @@ def get_ensemble_prob(
     metric: str = "high",
     threshold_lo: float | None = None,
     threshold_hi: float | None = None,
+    *,
+    settlement_station: str | None = None,
+    observation_timezone: str | None = None,
 ) -> dict | None:
     """Calculate weighted-ensemble probability for a Kalshi weather market.
 
@@ -369,7 +395,14 @@ def get_ensemble_prob(
     """
     import math
     
-    by_date_all = _fetch_members(city, metric)
+    station_data = get_station_metadata(settlement_station) if settlement_station else STATION_MAP.get(city)
+    if not station_data or (settlement_station and station_data["city"] != city):
+        return None
+    if settlement_station:
+        by_date_all = _fetch_members(city, metric, settlement_station=settlement_station,
+                                     observation_timezone=observation_timezone)
+    else:
+        by_date_all = _fetch_members(city, metric)
     if not by_date_all:
         return None
 
@@ -387,7 +420,8 @@ def get_ensemble_prob(
     try:
         from zoneinfo import ZoneInfo
         from pipeline.station_mapper import get_tz_for_city
-        local_today = datetime.now(ZoneInfo(get_tz_for_city(city))).date()
+        tz_name = station_data["timezone"] if settlement_station else get_tz_for_city(city)
+        local_today = datetime.now(ZoneInfo(tz_name)).date()
         target_date = datetime.fromisoformat(date_str).date()
         lead_time_days = (target_date - local_today).days
     except Exception:
@@ -449,8 +483,6 @@ def get_ensemble_prob(
             if backend_path not in sys.path:
                 sys.path.insert(0, backend_path)
             from backend.ml.intraday_nowcast import apply_hrrr_nowcast_shift
-            from pipeline.station_mapper import STATION_MAP
-            station_data = STATION_MAP.get(city)
             if station_data:
                 mean_f, spread_f = apply_hrrr_nowcast_shift(city, station_data["station"], mean_f, spread_f)
         except Exception as exc:

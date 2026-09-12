@@ -10,6 +10,7 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
+from copy import deepcopy
 
 # Running as `python backend/models/weather/sync_weather.py` puts this file's
 # directory on sys.path[0], NOT the repo root — so `import backend` fails unless
@@ -169,10 +170,13 @@ def record_weather_prediction_vector(
             }
         )
     if experiment is not None:
-        save_prediction_snapshot(
+        saved = save_prediction_snapshot(
             db, manifest=experiment, run_id=str(run_id), event_key=event_key,
             rows=rows, decision_at=datetime.now(timezone.utc).isoformat(),
         )
+        if experiment["config"].get("require_verified_station"):
+            # Research arms never overwrite the legacy calibration training source.
+            return saved
     return replace_prediction_rows(
         db,
         source=WEATHER_PREDICTION_SOURCE,
@@ -285,11 +289,21 @@ def _refresh_weather_orderbook(raw_market: dict, platform: str) -> dict | None:
     return None
 
 
-async def sync_weather_predictions(*, experiment: dict | None = None, run_id: str | None = None):
+async def sync_weather_predictions(*, experiment: dict | None = None, run_id: str | None = None,
+                                   shared_inputs: dict | None = None):
     logger.info("Starting rewritten weather prediction sync & portfolio optimization...")
     db = get_db()
     experiment = experiment or register_experiment(db)
     config = experiment["config"]
+    if config.get("mode") != "paper":
+        raise ValueError("WEATHER_EXPERIMENT_PAPER_ONLY")
+    calibration_mode = config.get("execution_calibration_mode", "required")
+    forecast_model_name = "ensemble_station_v2" if config.get("require_verified_station") else "ensemble"
+    if calibration_mode not in {"required", "observe_only"}:
+        raise ValueError("INVALID_WEATHER_CALIBRATION_MODE")
+    if calibration_mode == "observe_only" and config.get("exploratory") is not True:
+        raise ValueError("WEATHER_OBSERVE_ONLY_REQUIRES_EXPLORATORY_PAPER")
+    shared_inputs = shared_inputs if shared_inputs is not None else {}
     run_id = run_id or str(uuid.uuid4())
     # This path only simulates fills. It must never label simulated executions
     # as live, regardless of an unrelated dashboard/legacy trading toggle.
@@ -315,40 +329,54 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
         "venue_errors": {},
         "experiment_id": experiment["id"],
         "mode": mode,
+        "execution_calibration_mode": calibration_mode,
     }
     
-    # 1. Fetch active weather markets (platforms isolated — one failure must not
-    # skip the other; Kalshi is the primary paper-trading venue today).
-    markets = []
-    try:
-        from pavlov.polymarket import poly_client
+    # Share discovery across predefined arms, without sharing mutable reprices.
+    if "market_capture" in shared_inputs:
+        capture = shared_inputs["market_capture"]
+        markets = deepcopy(capture["markets"])
+        stats.update(deepcopy(capture["stats"]))
+    else:
+        shared_inputs["capture_id"] = str(uuid.uuid4())
+        shared_inputs["captured_at"] = datetime.now(timezone.utc).isoformat()
+        # 1. Fetch active weather markets (platforms isolated — one failure must not
+        # skip the other; Kalshi is the primary paper-trading venue today).
+        markets = []
+        try:
+            from pavlov.polymarket import poly_client
 
-        pm_markets = poly_client.get_weather_markets()
-        for m in pm_markets:
-            m["_platform"] = "polymarket"
-        markets.extend(pm_markets)
-        stats["polymarket_markets"] = len(pm_markets)
-        if not pm_markets:
-            stats["venue_errors"]["polymarket"] = "NO_CURRENT_MARKETS_RETURNED"
-        logger.info(f"Fetched {len(pm_markets)} Polymarket weather markets.")
-    except Exception as e:
-        stats["venue_errors"]["polymarket"] = str(e)
-        logger.warning(f"Failed to fetch Polymarket weather markets: {e}")
+            pm_markets = poly_client.get_weather_markets()
+            for m in pm_markets:
+                m["_platform"] = "polymarket"
+            markets.extend(pm_markets)
+            stats["polymarket_markets"] = len(pm_markets)
+            if not pm_markets:
+                stats["venue_errors"]["polymarket"] = "NO_CURRENT_MARKETS_RETURNED"
+            logger.info(f"Fetched {len(pm_markets)} Polymarket weather markets.")
+        except Exception as e:
+            stats["venue_errors"]["polymarket"] = str(e)
+            logger.warning(f"Failed to fetch Polymarket weather markets: {e}")
 
-    try:
-        _ensure_weather_pipeline_importable()
-        from pavlov.pipeline import kalshi_client
-        kalshi_markets = kalshi_client.get_weather_markets()
-        for m in kalshi_markets:
-            m["_platform"] = "kalshi"
-        markets.extend(kalshi_markets)
-        stats["kalshi_markets"] = len(kalshi_markets)
-        if not kalshi_markets:
-            stats["venue_errors"]["kalshi"] = "NO_CURRENT_MARKETS_RETURNED"
-        logger.info(f"Fetched {len(kalshi_markets)} Kalshi weather markets.")
-    except Exception as e:
-        stats["venue_errors"]["kalshi"] = str(e)
-        logger.warning(f"Failed to fetch Kalshi weather markets: {e}")
+        try:
+            _ensure_weather_pipeline_importable()
+            from pavlov.pipeline import kalshi_client
+            kalshi_markets = kalshi_client.get_weather_markets()
+            for m in kalshi_markets:
+                m["_platform"] = "kalshi"
+            markets.extend(kalshi_markets)
+            stats["kalshi_markets"] = len(kalshi_markets)
+            if not kalshi_markets:
+                stats["venue_errors"]["kalshi"] = "NO_CURRENT_MARKETS_RETURNED"
+            logger.info(f"Fetched {len(kalshi_markets)} Kalshi weather markets.")
+        except Exception as e:
+            stats["venue_errors"]["kalshi"] = str(e)
+            logger.warning(f"Failed to fetch Kalshi weather markets: {e}")
+
+        shared_inputs["market_capture"] = {
+            "markets": deepcopy(markets),
+            "stats": {key: deepcopy(stats[key]) for key in ("polymarket_markets", "kalshi_markets", "venue_errors")},
+        }
 
     if not markets:
         # Raise so run_sync prints WEATHER SYNC FAILED (silent return kept CI green
@@ -367,7 +395,12 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
     
     for m in markets:
         platform = m["_platform"]
-        normalized = normalize_market(m, platform)
+        try:
+            normalized = normalize_market(m, platform, require_verified_station=True) if config.get("require_verified_station") else normalize_market(m, platform)
+        except ValueError as exc:
+            reason = str(exc).split(":", 1)[0]
+            _record_weather_rejection(stats, reason, "station_reject")
+            continue
         if not normalized:
             continue
             
@@ -386,6 +419,11 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
         raw_by_group[group_key].append(m)
         
     stats["events"] = len(events_by_group)
+    if config.get("require_verified_station"):
+        for venue in config["venues"]:
+            if not any(key[4] == venue and key[0] in config["stations"]
+                       and key[5] in config["metrics"] for key in events_by_group):
+                stats["venue_errors"][venue] = "NO_VERIFIED_WEATHER_MARKETS_FOR_VENUE"
     logger.info(f"Normalized markets into {len(events_by_group)} distinct events.")
     if not events_by_group:
         msg = "Weather markets fetched but none normalized into events."
@@ -426,10 +464,12 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
         if mid:
             seen_legacy_keys.add(f"{mid}:{out}:{row_mode}")
 
-    execution_calibrators = {
-        venue: load_weather_execution_calibrator(db, venue=venue)
-        for venue in config["venues"]
-    }
+    if "execution_calibrators" not in shared_inputs:
+        shared_inputs["execution_calibrators"] = {
+            venue: load_weather_execution_calibrator(db, venue=venue)
+            for venue in config["venues"]
+        }
+    execution_calibrators = shared_inputs["execution_calibrators"]
     logger.info(
         "Weather experiment {}: independent paper balances and venue-specific calibration",
         experiment["id"],
@@ -446,6 +486,12 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
         sorted_pairs = sorted(zip(events, raw_markets), key=lambda x: (x[0].bucket_low_f, x[0].bucket_high_f, x[0].market_id))
         events = [p[0] for p in sorted_pairs]
         raw_markets = [p[1] for p in sorted_pairs]
+        if config.get("require_verified_station"):
+            if (events[0].bucket_low_f != float("-inf") or events[-1].bucket_high_f != float("inf")
+                    or any(e.bucket_low_f >= e.bucket_high_f for e in events)
+                    or any(a.bucket_high_f != b.bucket_low_f for a, b in zip(events, events[1:]))):
+                _record_weather_rejection(stats, "INVALID_WEATHER_BUCKET_PARTITION", "normalization_reject")
+                continue
         
         # Log orderbook snapshots
         now = datetime.now(timezone.utc)
@@ -517,6 +563,9 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
         from zoneinfo import ZoneInfo
         from pavlov.pipeline.station_mapper import get_tz_for_city
         local_now = datetime.now(ZoneInfo(get_tz_for_city(city)))
+        if shared_inputs.get("forecast_hour") and datetime.now(timezone.utc).strftime("%Y%m%dT%H") != shared_inputs["forecast_hour"]:
+            _record_weather_rejection(stats, "WEATHER_RESEARCH_HOUR_EXPIRED", "timing_reject")
+            continue
         lead_days = (event_date - local_now.date()).days
         hour = local_now.hour
         scope_reason = event_scope_reason(
@@ -544,7 +593,15 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
         
         # Get raw ensemble stats using a dummy threshold call (metric-aware:
         # LOW markets need the daily-minimum ensemble members, not the maximum)
-        ens_result = ensemble_client.get_ensemble_prob(city, date_str, 0.0, "above", metric=metric)
+        observation_timezone = getattr(events[0], "observation_timezone", None)
+        forecast_key = (station, date_str, metric, observation_timezone)
+        forecasts = shared_inputs.setdefault("forecasts", {})
+        first_forecast = forecast_key not in forecasts
+        if first_forecast:
+            station_args = {"settlement_station": station, "observation_timezone": observation_timezone} if config.get("require_verified_station") else {}
+            forecasts[forecast_key] = ensemble_client.get_ensemble_prob(
+                city, date_str, 0.0, "above", metric=metric, **station_args)
+        ens_result = forecasts[forecast_key]
         if not ens_result:
             stats["ensemble_fail"] += 1
             # INFO so CI logs show empty-ensemble / past-date skips (was silent at DEBUG).
@@ -558,10 +615,11 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
         # Record the raw (pre-MOS) forecast so the verification loop can grade it later
         try:
             from backend.ml.weather_verification import record_prediction
-            record_prediction(
-                events[0].settlement_station, max(lead_days, 0), date_str,
-                mean_f, metric=metric, model_name="ensemble",
-            )
+            if first_forecast:
+                record_prediction(
+                    events[0].settlement_station, max(lead_days, 0), date_str,
+                    mean_f, metric=metric, model_name=forecast_model_name,
+                )
         except Exception as exc:
             logger.debug(f"Verification record failed for {city} {date_str}: {exc}")
         
@@ -575,9 +633,11 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
         }
         try:
             from backend.ml.weather_mos import mos_engine
-            calibration = mos_engine.calculate_calibration(
-                events[0].settlement_station, "ensemble", max(lead_days, 0), metric
-            )
+            mos_cache = shared_inputs.setdefault("mos", {})
+            if forecast_key not in mos_cache:
+                mos_cache[forecast_key] = mos_engine.calculate_calibration(
+                    station, forecast_model_name, max(lead_days, 0), metric)
+            calibration = mos_cache[forecast_key]
             mos_bias = calibration.bias_correction
             empirical_sigma = calibration.residual_sigma
             calibration_meta = {
@@ -616,7 +676,10 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
             # For HIGH markets the running max rules out low buckets; for LOW
             # markets the running min rules out high buckets.
             if lead_days == 0:
-                obs = get_current_obs(city)
+                # Legacy city observations may refer to a different airport.
+                # Strict station research uses the station ensemble; these
+                # provisional observations are diagnostics only, never a mask.
+                obs = {} if config.get("require_verified_station") else get_current_obs(city)
                 if metric == "high":
                     observed_extreme = obs.get("high_so_far", -999.0)
                     nowcast_active = observed_extreme > -999.0
@@ -685,7 +748,12 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
                 execution_calibrations[selected_index] = (
                     selected_calibration.as_metadata()
                 )
-                if not selected_calibration.allowed:
+                if calibration_mode == "observe_only":
+                    execution_probabilities[selected_index] = P_adj[selected_index]
+                    execution_calibrations[selected_index]["execution_probability"] = P_adj[selected_index]
+                    execution_calibrations[selected_index]["calibration_gate_enforced"] = False
+                    execution_calibrations[selected_index]["calibrated_probability_diagnostic"] = selected_calibration.execution_probability
+                elif not selected_calibration.allowed:
                     execution_gate_reason = selected_calibration.reason
                     x_opt = [0.0 for _ in x_opt]
                 else:
@@ -740,6 +808,13 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
                     "entry_budget": budget,
                     "fee_estimates": [raw.get("fee_estimate") for raw in raw_markets],
                     "execution_enabled": execution_enabled,
+                    "execution_calibration_mode": calibration_mode,
+                    "exploratory": config.get("exploratory", False),
+                    "input_capture_id": shared_inputs.get("capture_id"),
+                    "input_captured_at": shared_inputs.get("captured_at"),
+                    "station_verified": bool(config.get("require_verified_station")),
+                    "settlement_source": events[0].settlement_source,
+                    "observation_timezone": observation_timezone,
                 },
                 execution_probabilities=execution_probabilities,
                 execution_calibrations=execution_calibrations,
@@ -824,7 +899,10 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
                     for i in range(len(events))
                     if P_adj[i] - Q_exec[i] >= float(config["min_net_edge"])
                 ]
-                if not any(depth_caps):
+                if not positive_edge_indexes:
+                    reason = "NO_BUCKET_MEETS_MIN_NET_EDGE"
+                    category = "edge_reject"
+                elif not any(depth_caps):
                     reason = "MISSING_EXECUTABLE_DEPTH"
                     category = "depth_reject"
                 elif positive_edge_indexes and not any(
@@ -970,6 +1048,7 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
             fresh_orderbook_ts = (fresh_book or {}).get("orderbook_timestamp")
             if (
                 not fresh_book
+                or fresh_book.get("ticker") != event.market_id
                 or fresh_ask <= 0.0
                 or fresh_ask >= 1.0
                 or fresh_depth <= 0.0
@@ -1046,6 +1125,14 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
                 continue
 
             # Convert to shared Execution schema
+            entry_time = datetime.now(timezone.utc)
+            if shared_inputs.get("forecast_hour") and entry_time.strftime("%Y%m%dT%H") != shared_inputs["forecast_hour"]:
+                _record_weather_rejection(stats, "WEATHER_RESEARCH_HOUR_EXPIRED", "timing_reject")
+                continue
+            close_time = _weather_market_close(raw_m)
+            if config.get("require_verified_station") and (close_time is None or close_time <= entry_time):
+                _record_weather_rejection(stats, "WEATHER_MARKET_CLOSE_NOT_VERIFIABLE", "execution_reject")
+                continue
             best_ask_p = _as_probability(raw_m.get("best_ask", raw_m.get("yes_ask", q_i))) or q_i
             candidate = TradeCandidate(
                 strategy="weather_portfolio",
@@ -1070,7 +1157,7 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
                 bankroll=bankroll,
                 event_exposure_cap=max_allowed,
                 bucket_or_outcome_exposure_cap=max_allowed,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=entry_time,
                 metadata={
                     "model_version": WEATHER_MODEL_VERSION,
                     "p_adj": P_adj[i],
@@ -1174,6 +1261,7 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
             # Record only filled paper/live bets in DB
             record = {
                 "id": bet_id,
+                "created_at": entry_time.isoformat(),
                 "venue": platform,
                 "bet_subject": virtual_match_id,
                 "market_id": event.market_id,
@@ -1186,7 +1274,7 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
                 # value remains available separately for calibration analysis.
                 "model_prob": execution_probabilities[i],
                 "market_prob": P_market[i],
-                "market_price": best_ask_p,
+                "market_price": fill.simulated_fill_price,
                 "edge": execution_probabilities[i] - q_i,
                 "raw_confidence": P_model[i],
                 "sport": "weather",
@@ -1232,11 +1320,18 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
                     "bucket_label": event.bucket_label,
                     "mos_bias": mos_bias,
                     "min_net_edge": float(config["min_net_edge"]),
+                    "execution_calibration_mode": calibration_mode,
+                    "exploratory": config.get("exploratory", False),
                     **calibration_meta,
                     **execution_calibrations[i],
                 }
             }
-            
+            if config.get("require_verified_station"):
+                from backend.trading.weather_clv_repair import build_weather_clv_payload
+                record["metadata"]["clv_obligation"] = build_weather_clv_payload(
+                    bet_id, candidate_id, platform, event.market_id, entry_time,
+                    close_time, fill.simulated_fill_price, fill.limit_price, clv_metadata)
+
             recorded = False
             try:
                 db.table("autobets").insert(record).execute()
@@ -1260,16 +1355,19 @@ async def sync_weather_predictions(*, experiment: dict | None = None, run_id: st
             # Side effects happen only after the durable idempotent insert.
             with open("paper_fills.jsonl", "a") as f:
                 f.write(json.dumps(paper_order) + "\n")
-            clv_rec = init_weather_clv_record(
-                candidate_id=f"weather-fill:{bet_id}",
-                market_id=event.market_id,
-                raw_m=raw_m,
-                fill=fill,
-                platform=platform,
-                due_close=(close_time - timedelta(minutes=5)) if close_time else None,
-                metadata=clv_metadata,
-            )
-            log_clv_record(clv_rec)
+            if config.get("require_verified_station"):
+                from backend.trading.weather_clv_repair import ensure_weather_clv_obligations
+                recovery = ensure_weather_clv_obligations(db, [record])
+                if recovery["errors"]:
+                    _record_weather_rejection(stats, "WEATHER_CLV_OBLIGATION_WRITE_FAILED", "persistence_reject")
+            else:
+                clv_rec = init_weather_clv_record(
+                    candidate_id=f"weather-fill:{bet_id}", market_id=event.market_id,
+                    raw_m=raw_m, fill=fill, platform=platform,
+                    due_close=(close_time - timedelta(minutes=5)) if close_time else None,
+                    metadata=clv_metadata,
+                )
+                log_clv_record(clv_rec)
         _append_weather_shadow_record(shadow_record)
 
     stats["bets_placed"] = bets_placed

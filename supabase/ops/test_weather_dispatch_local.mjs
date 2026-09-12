@@ -113,6 +113,28 @@ try {
   await db.exec(`select vault.create_secret('local_test_credential_not_real_000000', 'weather_github_actions_token');`);
   await db.exec(activate);
   check(await scalar('select count(*)::int from cron.job where active') === 4, 'activation enables four jobs with a valid test credential');
+  const upgrade = await load('upgrade_weather_dispatch_experiment.sql');
+  const dispatchDefinition = /create or replace function weather_scheduler\.dispatch\([\s\S]*?^\$function\$;/m;
+  check(upgrade.match(dispatchDefinition)?.[0] === hostedInstall.match(dispatchDefinition)?.[0],
+    'incremental upgrade exactly matches the installer dispatch function');
+  const jobsBefore = await scalar('select jsonb_agg(to_jsonb(j) order by jobid) from cron.job j');
+  const privilegesSql = `select jsonb_agg(jsonb_build_object('oid',p.oid,'owner',p.proowner,
+      'acl',p.proacl,'security_definer',p.prosecdef,'config',p.proconfig) order by p.oid)
+      from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+      where n.nspname in ('weather_scheduler','net','vault')`;
+  const privilegesBefore = await scalar(privilegesSql);
+  const auditBefore = await scalar('select count(*)::int from weather_scheduler.dispatch_audit');
+  const requestsBefore = await scalar('select count(*)::int from net.http_request_queue');
+  await db.exec(upgrade);
+  await db.exec(upgrade);
+  check(JSON.stringify(jobsBefore) === JSON.stringify(await scalar(
+    'select jsonb_agg(to_jsonb(j) order by jobid) from cron.job j')),
+    'incremental upgrade leaves all active job identities, schedules and commands unchanged');
+  check(JSON.stringify(privilegesBefore) === JSON.stringify(await scalar(privilegesSql)),
+    'incremental upgrade preserves function ownership, ACLs and SECURITY INVOKER');
+  check(auditBefore === await scalar('select count(*)::int from weather_scheduler.dispatch_audit')
+    && requestsBefore === await scalar('select count(*)::int from net.http_request_queue'),
+    'incremental upgrade retains audit history and sends no requests');
   await db.exec(await load('disable_weather_dispatch.sql'));
   check(await scalar('select count(*)::int from cron.job where active') === 0, 'disable stops only the new jobs');
   await db.exec('grant update on weather_scheduler.dispatch_audit to anon');

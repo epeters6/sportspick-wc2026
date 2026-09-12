@@ -12,6 +12,7 @@ declare
     audit_count integer;
     current_slot timestamptz := date_trunc('hour', clock_timestamp() at time zone 'UTC') at time zone 'UTC';
     claim_key text;
+    experiment_id text;
 begin
     if exists (select 1 from cron.job where active and jobname in (
         'weather-github-hourly', 'weather-github-watchdog', 'weather-github-clv', 'weather-github-receipts'
@@ -47,7 +48,10 @@ begin
     -- Mimic a primary whose HTTP response was lost and has had 20 minutes to run.
     update weather_scheduler.dispatch_audit
     set requested_at = clock_timestamp() - interval '20 minutes';
-    delete from public.app_settings where key = 'weather_cycle_latest';
+    insert into public.app_settings (key, value) values ('weather_cycle_latest', jsonb_build_object(
+        'experiment', jsonb_build_object('id', 'weather_forward_2026_09_v1'),
+        'timestamp', current_slot - interval '1 hour'
+    )) on conflict (key) do update set value = excluded.value;
     claim_key := 'weather_forecast_slot:weather_forward_2026_09_v1:' ||
         to_char(current_slot at time zone 'UTC', 'YYYYMMDD"T"HH24');
     delete from public.app_settings where key = claim_key;
@@ -60,27 +64,65 @@ begin
         raise exception 'LOST_RESPONSE_FALSELY_REPORTED_SUCCESS';
     end if;
 
+    foreach experiment_id in array array['weather_forward_2026_09_v1', 'weather_forward_2026_09_v2'] loop
+        claim_key := 'weather_forecast_slot:' || experiment_id || ':' ||
+            to_char(current_slot at time zone 'UTC', 'YYYYMMDD"T"HH24');
+        update public.app_settings set value = jsonb_build_object(
+            'experiment', jsonb_build_object('id', experiment_id),
+            'timestamp', current_slot - interval '1 hour'
+        ) where key = 'weather_cycle_latest';
+        delete from weather_scheduler.dispatch_audit where attempt = 'watchdog';
+        insert into public.app_settings (key, value)
+        values (claim_key, '{"run_id":"synthetic-failed-attempt","status":"failed"}'::jsonb);
+        request_two := weather_scheduler.dispatch('weather_cycle.yml', true);
+        if request_two is not null
+           or not exists (select 1 from weather_scheduler.dispatch_audit
+                          where reason = 'FORECAST_SLOT_ALREADY_ATTEMPTED' and state = 'skipped') then
+            raise exception 'FAILED_FORECAST_CLAIM_WAS_RETRIED_%', experiment_id;
+        end if;
+        delete from public.app_settings where key = claim_key;
+        delete from weather_scheduler.dispatch_audit where attempt = 'watchdog';
+        update public.app_settings set value = jsonb_build_object(
+            'experiment', jsonb_build_object('id', experiment_id),
+            'timestamp', clock_timestamp()
+        ) where key = 'weather_cycle_latest';
+        request_two := weather_scheduler.dispatch('weather_cycle.yml', true);
+        if request_two is not null
+           or not exists (select 1 from weather_scheduler.dispatch_audit
+                          where reason = 'CURRENT_HOUR_CYCLE_RECORDED') then
+            raise exception 'CURRENT_HOUR_REPORT_DID_NOT_SUPPRESS_WATCHDOG_%', experiment_id;
+        end if;
+    end loop;
+
+    -- An old baseline's immutable claim cannot suppress the active baseline.
     delete from weather_scheduler.dispatch_audit where attempt = 'watchdog';
-    insert into public.app_settings (key, value)
-    values (claim_key, '{"run_id":"synthetic-failed-attempt","status":"failed"}'::jsonb);
-    request_two := weather_scheduler.dispatch('weather_cycle.yml', true);
-    if request_two is not null
-       or not exists (select 1 from weather_scheduler.dispatch_audit
-                      where reason = 'FORECAST_SLOT_ALREADY_ATTEMPTED' and state = 'skipped') then
-        raise exception 'FAILED_FORECAST_CLAIM_WAS_RETRIED';
+    update public.app_settings set value = jsonb_build_object(
+        'experiment', jsonb_build_object('id', 'weather_forward_2026_09_v2'),
+        'timestamp', current_slot - interval '1 hour'
+    ) where key = 'weather_cycle_latest';
+    claim_key := 'weather_forecast_slot:weather_forward_2026_09_v1:' ||
+        to_char(current_slot at time zone 'UTC', 'YYYYMMDD"T"HH24');
+    insert into public.app_settings (key, value) values (claim_key, '{"status":"failed"}'::jsonb);
+    if weather_scheduler.dispatch('weather_cycle.yml', true) is null then
+        raise exception 'HISTORICAL_EXPERIMENT_CLAIM_SUPPRESSED_ACTIVE_EXPERIMENT';
     end if;
     delete from public.app_settings where key = claim_key;
-    delete from weather_scheduler.dispatch_audit where attempt = 'watchdog';
-    insert into public.app_settings (key, value) values ('weather_cycle_latest', jsonb_build_object(
-        'experiment', jsonb_build_object('id', 'weather_forward_2026_09_v1'),
-        'timestamp', clock_timestamp()
-    ));
-    request_two := weather_scheduler.dispatch('weather_cycle.yml', true);
-    if request_two is not null
-       or not exists (select 1 from weather_scheduler.dispatch_audit
-                      where reason = 'CURRENT_HOUR_CYCLE_RECORDED') then
-        raise exception 'CURRENT_HOUR_REPORT_DID_NOT_SUPPRESS_WATCHDOG';
-    end if;
+
+    -- Unknown/non-weather identities fail closed for the watchdog, not primary delivery.
+    foreach experiment_id in array array[null, '', 'sports_v2', 'weather_forward_2026_13_v2',
+                                        'weather_forward_2026_09_v0', 'weather_forward_2026_09_v2:injected'] loop
+        delete from weather_scheduler.dispatch_audit where attempt = 'watchdog';
+        update public.app_settings set value = jsonb_build_object(
+            'experiment', jsonb_build_object('id', experiment_id),
+            'timestamp', clock_timestamp()
+        ) where key = 'weather_cycle_latest';
+        request_two := weather_scheduler.dispatch('weather_cycle.yml', true);
+        if request_two is not null
+           or not exists (select 1 from weather_scheduler.dispatch_audit
+                          where reason = 'ACTIVE_WEATHER_EXPERIMENT_UNKNOWN' and state = 'skipped') then
+            raise exception 'INVALID_ACTIVE_EXPERIMENT_DID_NOT_FAIL_CLOSED_%', experiment_id;
+        end if;
+    end loop;
 
     request_two := weather_scheduler.dispatch('clv_checkpoints.yml');
     if request_two is null or weather_scheduler.dispatch('clv_checkpoints.yml') is not null then

@@ -1,0 +1,42 @@
+{
+  "id": "weather_forward_2026_09_v2",
+  "mode": "paper",
+  "notes": "Predefined September 12 paper research arm. Independent simulated capital; v1 history retained. Exact venue station required. No automatic live promotion; arm comparisons are exploratory and not independent samples.",
+  "venues": [
+    "kalshi",
+    "polymarket"
+  ],
+  "metrics": [
+    "high"
+  ],
+  "stations": [
+    "KNYC",
+    "KMDW",
+    "KMIA",
+    "KLAX",
+    "KSFO",
+    "KDEN",
+    "KPHL",
+    "KAUS"
+  ],
+  "min_net_edge": 0.05,
+  "max_lead_days": 1,
+  "seed_per_venue": 500,
+  "min_forward_days": 45,
+  "prediction_source": "weather_forward_v2",
+  "min_forward_events": 250,
+  "daily_loss_fraction": 0.02,
+  "decision_hours_local": [
+    8,
+    11,
+    14
+  ],
+  "max_drawdown_fraction": 0.1,
+  "max_open_risk_fraction": 0.05,
+  "max_event_risk_fraction": 0.005,
+  "paper_allow_receipt_timestamp": true,
+  "require_verified_station": true,
+  "execution_calibration_mode": "required",
+  "exploratory": true,
+  "research_label": "Corrected stations · 5% edge"
+}

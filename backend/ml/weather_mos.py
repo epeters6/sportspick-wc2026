@@ -33,15 +33,22 @@ class WeatherMOS:
     @staticmethod
     def _prior_observation(row: dict, cutoff: datetime) -> bool:
         """Require a completed station-local date and an actual available by cutoff."""
-        from pavlov.pipeline.station_mapper import STATION_MAP, get_tz_for_city
+        from pavlov.pipeline.station_mapper import (
+            STATION_MAP, get_tz_for_city, get_station_metadata, standard_timezone_for_station,
+        )
 
-        city = next((city for city, station in STATION_MAP.items() if station.get("station") == row.get("station_id")), None)
+        verified = get_station_metadata(row.get("station_id"))
+        city = verified["city"] if verified else next(
+            (city for city, station in STATION_MAP.items() if station.get("station") == row.get("station_id")), None)
         if city is None:
             return False
         try:
             target = date.fromisoformat(str(row.get("target_date")))
             updated = datetime.fromisoformat(str(row.get("updated_at")).replace("Z", "+00:00"))
-            local_day = cutoff.astimezone(ZoneInfo(get_tz_for_city(city))).date()
+            timezone_name = verified["timezone"] if verified else get_tz_for_city(city)
+            if row.get("model_name") == "ensemble_station_v2":
+                timezone_name = standard_timezone_for_station(row["station_id"])
+            local_day = cutoff.astimezone(ZoneInfo(timezone_name)).date()
             return (updated.tzinfo is not None and updated.astimezone(timezone.utc) <= cutoff
                     and target < min(cutoff.date(), local_day))
         except (TypeError, ValueError, KeyError):
@@ -98,7 +105,7 @@ class WeatherMOS:
             pooled_rows = (
                 self.db.table("weather_verification")
                 .select(
-                    "station_id,target_date,predicted_high,predicted_low,actual_high,actual_low,updated_at"
+                    "station_id,target_date,predicted_high,predicted_low,actual_high,actual_low,updated_at,model_name"
                 )
                 .eq("model_name", model_name)
                 .eq("lead_time_days", lead)

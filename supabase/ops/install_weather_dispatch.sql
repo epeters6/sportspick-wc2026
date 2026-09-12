@@ -145,6 +145,7 @@ declare
     token text;
     token_count integer;
     latest jsonb;
+    active_experiment_id text;
     latest_time timestamptz;
     skip_reason text;
 begin
@@ -173,21 +174,28 @@ begin
     end if;
 
     if p_watchdog then
-        if exists (
+        -- Read the baseline identity once. Experiment versions may advance while
+        -- historical claims remain immutable; never consult another version's slot.
+        select value into latest from public.app_settings where key = 'weather_cycle_latest';
+        active_experiment_id := latest #>> '{experiment,id}';
+        if active_experiment_id is null or active_experiment_id !~
+            '^weather_forward_[0-9]{4}_(0[1-9]|1[0-2])_v[1-9][0-9]*$' then
+            -- Primary delivery still bootstraps a missing report. The watchdog
+            -- cannot safely determine duplicate claims without a valid identity.
+            skip_reason := 'ACTIVE_WEATHER_EXPERIMENT_UNKNOWN';
+        elsif exists (
             select 1 from public.app_settings
-            where key = 'weather_forecast_slot:weather_forward_2026_09_v1:' ||
+            where key = 'weather_forecast_slot:' || active_experiment_id || ':' ||
                 to_char(slot at time zone 'UTC', 'YYYYMMDD"T"HH24')
         ) then
             skip_reason := 'FORECAST_SLOT_ALREADY_ATTEMPTED';
         else
-            select value into latest from public.app_settings where key = 'weather_cycle_latest';
             begin
                 latest_time := (latest->>'timestamp')::timestamptz;
             exception when others then
                 latest_time := null;
             end;
-            if latest #>> '{experiment,id}' = 'weather_forward_2026_09_v1'
-               and latest_time >= slot and latest_time <= dispatch_time then
+            if latest_time >= slot and latest_time <= dispatch_time then
                 skip_reason := 'CURRENT_HOUR_CYCLE_RECORDED';
             end if;
         end if;

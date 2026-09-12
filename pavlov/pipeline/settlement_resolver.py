@@ -1,10 +1,13 @@
 from typing import Literal, Optional, Tuple
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
 import re
 import math
 from loguru import logger
-from pavlov.pipeline.station_mapper import get_city_for_market, get_tz_for_city, STATION_MAP
+from pavlov.pipeline.station_mapper import (
+    get_city_for_market, get_tz_for_city, STATION_MAP, resolve_market_station, StationMappingError,
+    resolve_observation_timezone,
+)
 
 _KALSHI_TICKER_DATE_RE = re.compile(r'-(\d{2})([A-Z]{3})(\d{2})(?:-|$)')
 _ISO_DATE_RE = re.compile(r'(\d{4}-\d{2}-\d{2})')
@@ -72,6 +75,9 @@ class NormalizedWeatherEvent:
     contract_side: Literal["YES", "NO"]
     contract_url: Optional[str]
     metric: Literal["high", "low"] = "high"
+    station_verified: bool = False
+    station_provenance: str = "legacy_city_mapping"
+    observation_timezone: str | None = None
 
 
 def detect_metric(market: dict) -> str:
@@ -179,30 +185,30 @@ def parse_bucket_bounds(market: dict) -> Tuple[float, float, str]:
         
     raise ValueError(f"Could not parse bounds from title: {title}")
 
-def normalize_market(market: dict, platform: str) -> Optional[NormalizedWeatherEvent]:
-    """Normalize a raw platform market into a standardized event."""
+def normalize_market(
+    market: dict, platform: str, *, require_verified_station: bool = False,
+) -> Optional[NormalizedWeatherEvent]:
+    """Normalize a market, optionally requiring explicit contract station evidence.
+
+    The default preserves the frozen legacy experiment. New research must opt
+    into station verification; ambiguous or unsupported contracts fail closed.
+    """
     try:
         title = market.get("title", "")
         
-        # 1. Map to Canonical City
-        city = market.get("city_hint") or get_city_for_market(title)
-        if not city:
-            logger.debug(f"Normalization failed: No city match for '{title}'")
-            return None
-            
-        # 2. Get Station and Source
-        station_meta = STATION_MAP.get(city)
-        if not station_meta:
-            logger.debug(f"Normalization failed: No station meta for city '{city}'")
-            return None
-            
-        settlement_station = station_meta.get("station")
-        if not settlement_station:
-            logger.debug(f"Normalization failed: Missing station code for '{city}'")
-            return None
-            
-        # Standardize source - all Kalshi/Polymarket standard weather bets resolve to NWS CLI (Daily Climate Report)
-        settlement_source = "NWS CLI"
+        resolution = resolve_market_station(market, platform) if require_verified_station else None
+        if resolution:
+            city = resolution.city
+            settlement_station = resolution.station
+            settlement_source = resolution.settlement_source
+        else:
+            city = market.get("city_hint") or get_city_for_market(title)
+            station_meta = STATION_MAP.get(city)
+            if not station_meta or not station_meta.get("station"):
+                logger.debug(f"Normalization failed: No station meta for '{title}'")
+                return None
+            settlement_station = station_meta["station"]
+            settlement_source = "NWS CLI"
         
         # 3. Parse Bucket Bounds
         try:
@@ -229,6 +235,15 @@ def normalize_market(market: dict, platform: str) -> Optional[NormalizedWeatherE
             logger.debug(f"Normalization failed: Missing date for '{title}'")
             return None
 
+        observation_timezone = None
+        observation_window = None
+        if resolution:
+            from zoneinfo import ZoneInfo
+            observation_timezone = resolve_observation_timezone(market, platform, resolution, market_date)
+            start = datetime.combine(market_date, time(), ZoneInfo(observation_timezone))
+            observation_window = (start.astimezone(timezone.utc),
+                                  (start + timedelta(days=1)).astimezone(timezone.utc))
+
         return NormalizedWeatherEvent(
             platform=platform,
             market_id=market.get("ticker") or market.get("id", "unknown"),
@@ -237,15 +252,22 @@ def normalize_market(market: dict, platform: str) -> Optional[NormalizedWeatherE
             settlement_station=settlement_station,
             settlement_source=settlement_source,
             date=market_date,
-            local_timezone="America/New_York", # Default, could be mapped in STATION_MAP
-            observation_window=None,
+            local_timezone=resolution.timezone if resolution else "America/New_York",
+            observation_window=observation_window,
             bucket_low_f=lo_f,
             bucket_high_f=hi_f,
             bucket_label=bucket_label,
             contract_side="YES",
             contract_url=market.get("url"),
-            metric=detect_metric(market)
+            metric=detect_metric(market),
+            station_verified=bool(resolution),
+            station_provenance=resolution.provenance if resolution else "legacy_city_mapping",
+            observation_timezone=observation_timezone,
         )
+    except StationMappingError:
+        # Callers count precise station failures separately from malformed
+        # buckets/dates; missing metadata must not vanish behind a green run.
+        raise
     except Exception as e:
         logger.error(f"Error normalizing market {market.get('title')}: {e}")
         return None

@@ -101,6 +101,109 @@ def profitable_sample(count=250):
 
 
 class TestWeatherForwardReport(unittest.TestCase):
+
+    def test_forward_source_is_selected_from_the_manifest_and_isolates_arms(self):
+        predictions, bet, clv = fixture()
+        manifest = deepcopy(MANIFEST)
+        manifest["id"] = "forward-challenger"
+        manifest["config"]["prediction_source"] = "weather_forward_v2_edge03"
+        challenger_predictions, challenger_bet, challenger_clv = deepcopy((predictions, bet, clv))
+        for row in challenger_predictions:
+            row["source"] = manifest["config"]["prediction_source"]
+            row["metadata"]["experiment_id"] = manifest["id"]
+        challenger_bet["metadata"]["experiment_id"] = manifest["id"]
+        challenger_clv["metadata"]["experiment_id"] = manifest["id"]
+        database = Database(predictions + challenger_predictions,
+                            [bet, challenger_bet], [clv, challenger_clv])
+        report = build_forward_report(database, manifest)
+        self.assertEqual(report["forecast"]["scoped_rows"], 2)
+        self.assertEqual(report["venues"]["kalshi"]["verified_settled_bets"], 1)
+        self.assertEqual(report["venues"]["kalshi"]["closing_clv_complete_events"], 1)
+        self.assertEqual(report["prediction_source"], "weather_forward_v2_edge03")
+        self.assertIn(("model_predictions", "source", "weather_forward_v2_edge03"), database.filters)
+        self.assertFalse(report["live_ready"])
+
+    def test_non_forward_source_is_not_a_valid_forward_manifest(self):
+        for source in (None, "", "weather_calibrated_v2", "mlb_quant_all_games_v2",
+                       "weather_forward_", ["weather_forward_v2"]):
+            with self.subTest(source=source):
+                manifest = deepcopy(MANIFEST)
+                manifest["config"]["prediction_source"] = source
+                with self.assertRaisesRegex(ValueError, "INVALID_WEATHER_FORWARD_MANIFEST"):
+                    build_forward_report(Database(), manifest)
+
+    def test_actual_fill_obligation_id_receives_closing_coverage(self):
+        predictions, bet, clv = fixture()
+        clv["candidate_id"] = f"weather-fill:{bet['id']}"
+        clv["metadata"]["signal_candidate_id"] = bet["metadata"]["candidate_id"]
+        report = build_forward_report(Database(predictions, [bet], [clv]), MANIFEST)
+        venue = report["venues"]["kalshi"]
+        self.assertEqual(venue["closing_clv_observed_bets"], 1)
+        self.assertEqual(venue["closing_clv_event_coverage"], 1)
+        self.assertAlmostEqual(venue["mean_net_closing_clv"], 0.1)
+        self.assertEqual(venue["quarantined"], 0)
+
+    def test_fill_clv_requires_matching_trade_provenance(self):
+        for field in ("signal_candidate_id", "autobet_id", "config_hash", "missing_signal"):
+            with self.subTest(field=field):
+                predictions, bet, clv = fixture()
+                clv["candidate_id"] = f"weather-fill:{bet['id']}"
+                clv["metadata"]["signal_candidate_id"] = bet["metadata"]["candidate_id"]
+                if field == "missing_signal":
+                    del clv["metadata"]["signal_candidate_id"]
+                else:
+                    clv["metadata"][field] = "another-record"
+                report = build_forward_report(Database(predictions, [bet], [clv]), MANIFEST)
+                venue = report["venues"]["kalshi"]
+                self.assertEqual(venue["closing_clv_observed_bets"], 0)
+                self.assertEqual(venue["quarantine_reasons"]["INVALID_TRADED_CLOSING_CLV"], 1)
+
+    def test_other_experiment_fill_clv_cannot_cover_current_trade(self):
+        predictions, bet, clv = fixture()
+        clv["candidate_id"] = f"weather-fill:{bet['id']}"
+        clv["metadata"]["signal_candidate_id"] = bet["metadata"]["candidate_id"]
+        clv["metadata"]["experiment_id"] = "another-experiment"
+        report = build_forward_report(Database(predictions, [bet], [clv]), MANIFEST)
+        self.assertEqual(report["venues"]["kalshi"]["closing_clv_observed_bets"], 0)
+        self.assertEqual(report["venues"]["kalshi"]["closing_clv_event_coverage"], 0)
+
+    def test_ambiguous_fill_and_signal_obligations_cannot_both_count(self):
+        predictions, bet, legacy_clv = fixture()
+        fill_clv = deepcopy(legacy_clv)
+        fill_clv["candidate_id"] = f"weather-fill:{bet['id']}"
+        fill_clv["metadata"]["signal_candidate_id"] = bet["metadata"]["candidate_id"]
+        report = build_forward_report(Database(predictions, [bet], [legacy_clv, fill_clv]), MANIFEST)
+        venue = report["venues"]["kalshi"]
+        self.assertEqual(venue["closing_clv_observed_bets"], 0)
+        self.assertEqual(venue["quarantine_reasons"]["AMBIGUOUS_TRADED_CLOSING_CLV"], 1)
+
+    def test_exploratory_calibration_mode_is_visible_and_never_enables_live(self):
+        manifest = deepcopy(MANIFEST)
+        manifest["config"].update({"execution_calibration_mode": "observe_only",
+                                   "research_label": "Forecast-only paper challenger",
+                                   "exploratory": True})
+        report = build_forward_report(Database(), manifest)
+        self.assertEqual(report["execution_calibration_mode"], "observe_only")
+        self.assertEqual(report["research_label"], "Forecast-only paper challenger")
+        self.assertTrue(report["exploratory"])
+        self.assertFalse(report["historical_execution_filter_required"])
+        self.assertFalse(report["live_ready"])
+        self.assertIn("does not enforce", report["limitations"][-1])
+
+    def test_live_or_unknown_calibration_manifest_is_rejected(self):
+        for patch in ({"mode": "live"}, {"execution_calibration_mode": "disabled"}):
+            manifest = deepcopy(MANIFEST)
+            manifest["config"].update(patch)
+            with self.assertRaisesRegex(ValueError, "INVALID_WEATHER_FORWARD_MANIFEST"):
+                build_forward_report(Database(), manifest)
+
+    def test_malformed_signal_identity_is_quarantined_without_failing_report(self):
+        predictions, bet, clv = fixture()
+        bet["metadata"]["candidate_id"] = ["invalid", "identity"]
+        report = build_forward_report(Database(predictions, [bet], [clv]), MANIFEST)
+        self.assertEqual(report["venues"]["kalshi"]["closing_clv_observed_bets"], 0)
+        self.assertEqual(report["venues"]["kalshi"]["quarantine_reasons"]["INVALID_TRADED_CLOSING_CLV"], 1)
+
     def test_empty_data_is_collecting_and_never_live_ready(self):
         report = build_forward_report(Database(), MANIFEST)
         self.assertFalse(report["live_ready"])

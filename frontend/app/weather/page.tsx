@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { CloudRain, Thermometer, Shield, RefreshCw, ArrowRight } from "lucide-react";
-import { fetchWeatherPredictions, fetchWeatherExperiment, type WeatherPrediction } from "@/lib/api";
+import { fetchWeatherPredictions, fetchWeatherExperiment, weatherResearchArms, weatherResearchLabel, weatherReportNotice, type WeatherPrediction } from "@/lib/api";
 
 type Venue = "all" | "kalshi" | "polymarket";
 
@@ -32,11 +32,18 @@ function timestamp(value?: string) {
 }
 
 export default function WeatherPage() {
+  const [selectedArm, setSelectedArm] = useState("");
   const [venue, setVenue] = useState<Venue>("all");
   const experimentQuery = useQuery({
     queryKey: ["weather-experiment"], queryFn: fetchWeatherExperiment, refetchInterval: 120_000,
   });
-  const experiment = experimentQuery.data;
+  const report = experimentQuery.data;
+  const arms = weatherResearchArms(report);
+  const primaryId = report?.experiment?.id || arms[0]?.[0] || "";
+  const selectedId = arms.some(([id]) => id === selectedArm) ? selectedArm : primaryId;
+  const experiment = arms.length ? arms.find(([id]) => id === selectedId)?.[1] : report;
+  const reportNotice = weatherReportNotice(experiment);
+  const exploratoryForecast = experiment?.experiment?.config?.execution_calibration_mode === "observe_only";
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ["weather-predictions", 100],
     queryFn: () => fetchWeatherPredictions(100),
@@ -70,23 +77,36 @@ export default function WeatherPage() {
 
       <section className="glass-panel p-5 space-y-4" aria-label="Forward paper experiment">
         <div className="flex flex-wrap justify-between gap-3"><h2 className="font-semibold text-lg">Forward paper experiment</h2><span className="text-xs text-amber-300">Paper only · live trading not authorized</span></div>
+        {arms.length > 0 && <div className="space-y-2">
+          <label htmlFor="weather-research-arm" className="block text-xs text-gray-400">Research arm</label>
+          <select id="weather-research-arm" value={selectedId} onChange={(event) => setSelectedArm(event.target.value)} className="w-full md:max-w-xl rounded-lg border border-white/20 bg-slate-950 px-3 py-2 text-sm">
+            {arms.map(([id, arm]) => <option key={id} value={id}>{weatherResearchLabel(id, arm)}{id === primaryId ? " � Primary baseline" : ""}</option>)}
+          </select>
+          <p className="text-xs text-gray-400">Each arm and venue has its own paper balance and P&amp;L. Their overlapping markets are not independent samples.</p>
+        </div>}
         {experimentQuery.isError ? <p role="alert" className="text-sm text-amber-300">Experiment status unavailable. The weather API may need to be deployed or restored; no fresh status is assumed.</p>
           : experimentQuery.isLoading ? <p className="text-sm text-gray-400">Loading the durable experiment report…</p>
           : !experiment || experiment.status === "never_run" ? <p className="text-sm text-gray-400">No completed experiment report yet. The weather cycle will publish its first report after deployment and execution.</p>
           : <>
-            <p className="text-sm text-gray-400">Last recorded cycle: <span className={experiment.status === "healthy" ? "text-sky-300" : "text-amber-300"}>{experiment.status}</span> · Recorded {timestamp(experiment.timestamp)}. Cycle health describes operations, not profitability.</p>
+            {reportNotice && <p role="alert" className="text-sm text-amber-300">{reportNotice}</p>}
+            {report?.experiments && report.status !== "healthy" && <p role="alert" className="text-sm text-amber-300">Research suite: {report.status}. Another arm may be affected even if the selected arm is healthy.</p>}
+            <p className="text-sm text-sky-300">{exploratoryForecast ? "Exploratory forecast" : "Historical calibration required"}</p>
+            <p className="text-xs text-gray-400">{exploratoryForecast ? "The historical calibration filter is recorded for comparison but is not required for entry in this paper arm." : "Entries in this arm must pass the historical calibration filter."}</p>
+            <p className="text-sm text-gray-400">Last recorded cycle: <span className={experiment.status === "healthy" ? "text-sky-300" : "text-amber-300"}>{experiment.status}</span> · Recorded {timestamp(experiment.completed_at || experiment.timestamp)}. Cycle health describes operations, not profitability.</p>
             <p className="text-xs text-gray-500 break-all">Experiment {experiment.experiment?.id || "unavailable"} · {experiment.experiment?.config?.stations?.join(", ") || "Stations unavailable"}</p>
+            {Object.keys(experiment.venues ?? {}).length === 0 && <p className="text-sm text-amber-300">Venue balances are unavailable for this arm.</p>}
             <div className="grid md:grid-cols-2 gap-4">
               {Object.entries(experiment.venues ?? {}).map(([name, balance]) => <div key={name} className="rounded-xl border border-white/10 p-4"><h3 className="font-semibold mb-3">{venueLabel(name)}</h3><dl className="grid grid-cols-2 gap-3 text-sm">{[["Paper equity", balance.equity], ["Available cash", balance.available_cash], ["Reserved", balance.reserved], ["Realized P&L", balance.realized_pnl]].map(([label, value]) => <div key={label}><dt className="text-xs text-gray-500">{label}</dt><dd className="font-mono mt-1">{typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(2)}` : "—"}</dd></div>)}</dl><p className="text-xs text-gray-400 mt-3">{balance.settled} settled · {balance.open} open · {balance.quarantined} quarantined</p></div>)}
             </div>
-            <p className="text-xs text-gray-500">This experiment has a separately declared paper seed. Legacy losses remain in Positions &amp; history and are not erased or included as new profits.</p>
+            <p className="text-xs text-gray-500">This arm has a separately declared paper seed. Legacy losses remain in Positions &amp; history and are not included as new profits.</p>
+            {(report?.retired_experiments?.length ?? 0) > 0 && <div className="border-t border-white/10 pt-3 space-y-2"><p className="text-xs font-medium text-gray-400">Preserved historical experiments</p>{report?.retired_experiments?.map((retired) => <p key={retired.id} className="text-xs text-gray-500">{retired.id}: {retired.reason || "Retired; evidence preserved separately."}</p>)}</div>}
           </>}
       </section>
 
       <div className="grid md:grid-cols-2 gap-4">
         {[["Kalshi", kalshi, "Daily high and low temperature contracts"], ["Polymarket US", polymarket, "Weather contracts through the existing US integration"]].map(([name, count, description]) => (
           <div key={name} className="glass-panel p-5">
-            <div className="flex items-center justify-between gap-3"><h2 className="font-semibold text-lg">{name}</h2><span className="text-xs text-sky-300">{isLoading ? "Loading…" : isError ? "Data unavailable" : `${count} recent bucket records`}</span></div>
+            <div className="flex items-center justify-between gap-3"><h2 className="font-semibold text-lg">{name}</h2><span className="text-xs text-sky-300">{isLoading ? "Loading…" : isError ? "Data unavailable" : `${count} legacy bucket records`}</span></div>
             <p className="text-sm text-gray-400 mt-2">{description}</p>
           </div>
         ))}
@@ -94,7 +114,7 @@ export default function WeatherPage() {
 
       <section className="space-y-4" aria-label="Recent weather predictions">
         <div className="flex flex-wrap justify-between gap-4 items-center">
-          <div><h2 className="font-semibold text-lg">Recent model records</h2><p className="text-xs text-gray-400 mt-1">Latest available record: {timestamp(rows[0]?.created_at)}</p></div>
+          <div><h2 className="font-semibold text-lg">Legacy weather model records</h2><p className="text-xs text-gray-400 mt-1">Latest available record: {timestamp(rows[0]?.created_at)}</p></div>
           <button type="button" onClick={() => refetch()} disabled={isFetching} className="flex items-center gap-2 text-sm text-gray-300 disabled:opacity-50"><RefreshCw className={`w-4 h-4 ${isFetching ? "animate-spin" : ""}`} />Refresh data</button>
         </div>
         <div className="flex flex-wrap gap-2" aria-label="Filter by venue">
@@ -102,7 +122,7 @@ export default function WeatherPage() {
             <button type="button" key={value} onClick={() => setVenue(value)} aria-pressed={venue === value} className={`rounded-lg px-4 py-2 text-sm ${venue === value ? "bg-sky-600 text-white" : "bg-white/5 text-gray-400 hover:bg-white/10"}`}>{label}</button>
           ))}
         </div>
-        <p className="text-xs text-gray-400">Showing up to 100 recent bucket records, including settled events. {events} event groups and {official} official outcome labels in this view. These are not independent trades or a full performance sample.</p>
+        <p className="text-xs text-gray-400">This legacy model feed is separate from the selected research arm above. Showing up to 100 bucket records, including settled events. {events} event groups and {official} official outcome labels in this view. These are not independent trades or a full performance sample.</p>
 
         {isError ? (
           <div role="alert" className="glass-panel p-8 text-center text-amber-300">Weather data could not be loaded. Check the API connection and refresh; no current trading status can be inferred.</div>
