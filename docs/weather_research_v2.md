@@ -45,6 +45,8 @@ Apply supabase/ops/upgrade_weather_dispatch_experiment.sql for an existing activ
 
 The Weather Paper Research GitHub workflow invokes the suite. Its artifacts contain individual approach reports plus the combined index; balances are not summed. The hourly dispatcher and five-minute CLV collector remain separate. The existing monitor must inspect every active experiment and compare milestones by experiment and venue.
 
+The workflow also uses a [read-only observer](weather_opportunity_reporting.md) to explain the exact captured temperature ranges and publish a separate performance scorecard after the suite completes. Its supplementary reports do not change the v2 decisions or implementation hash.
+
 Verify production manifest identities and paper mode after publishing, then verify the next eligible forecast hour separately. A successful outside-window report proves report plumbing, not forecasting or fills.
 
 Sources: [NWS observation FAQ](https://www.weather.gov/lot/weather_observations_faq), [Kalshi weather markets](https://help.kalshi.com/en/articles/13823837-weather-markets).
