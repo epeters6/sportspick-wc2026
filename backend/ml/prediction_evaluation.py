@@ -9,6 +9,7 @@ from __future__ import annotations
 import inspect
 import math
 import re
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
@@ -338,6 +339,9 @@ async def resolve_weather_prediction_backlog(
 
     The METAR-backed fields remain in metadata for forecast diagnostics. Only
     these official labels are eligible for execution calibration.
+
+    Reuse exact final outcomes only within this invocation. Pending results and
+    failures are never cached, so later rows can still observe a new settlement.
     """
     summary: dict[str, Any] = {
         "candidate_rows": 0,
@@ -345,6 +349,8 @@ async def resolve_weather_prediction_backlog(
         "unresolved_rows": 0,
         "invalid_rows": 0,
         "errors": 0,
+        "resolution_requests": 0,
+        "resolved_cache_hits": 0,
     }
     try:
         query = (
@@ -372,6 +378,7 @@ async def resolve_weather_prediction_backlog(
     default_stamp = (resolved_at or datetime.now(timezone.utc)).astimezone(
         timezone.utc
     ).isoformat()
+    resolved_outcomes: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
         metadata = row.get("metadata") or {}
         if not isinstance(metadata, dict):
@@ -389,10 +396,17 @@ async def resolve_weather_prediction_backlog(
         ):
             summary["invalid_rows"] += 1
             continue
+        cache_key = (venue, market_id)
         try:
-            result = fetcher(venue, market_id)
-            if inspect.isawaitable(result):
-                result = await result
+            if cache_key in resolved_outcomes:
+                result = deepcopy(resolved_outcomes[cache_key])
+                summary["resolved_cache_hits"] += 1
+            else:
+                # Counts resolver calls, including failures, not transport retries.
+                summary["resolution_requests"] += 1
+                result = fetcher(venue, market_id)
+                if inspect.isawaitable(result):
+                    result = await result
         except Exception as exc:
             summary["errors"] += 1
             logger.warning(
@@ -412,6 +426,16 @@ async def resolve_weather_prediction_backlog(
         ):
             summary["unresolved_rows"] += 1
             continue
+
+        if (
+            cache_key not in resolved_outcomes
+            and result.get("market_id") == market_id
+            and ("venue" not in result or result.get("venue") == venue)
+        ):
+            # The legacy current-row contract permits an omitted result ID.
+            # Reuse requires explicit exact identity and consistent venue evidence.
+            resolved_outcomes[cache_key] = deepcopy(result)
+            result = deepcopy(resolved_outcomes[cache_key])
 
         updated_meta = dict(metadata)
         if (
