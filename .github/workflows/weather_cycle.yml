@@ -78,6 +78,33 @@ jobs:
             cat reports/weather/performance.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Restore independent weather learning cache
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            reports/weather_v3/cache
+            reports/weather_v3/model
+          key: weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-${{ github.run_id }}
+          restore-keys: |
+            weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-
+
+      - name: Collect station weather and train independent research models
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: python -m scripts.run_weather_learning --collect
+
+      - name: Show weather model learning evidence
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        run: |
+          if [ -f reports/weather_v3/model/training.md ]; then
+            cat reports/weather_v3/model/training.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload weather evidence even when a stage fails
         if: always() && steps.dispatch.outputs.execute == 'true'
         uses: actions/upload-artifact@v4
@@ -90,3 +117,17 @@ jobs:
             weather_shadow_decisions.jsonl
             weather_sync_status.json
             orderbook_snapshots.jsonl
+
+      - name: Upload weather learning evidence
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: weather-learning-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            reports/weather_v3/latest.json
+            reports/weather_v3/collection.json
+            reports/weather_v3/snapshots.jsonl
+            reports/weather_v3/market_capture.json
+            reports/weather_v3/model/**

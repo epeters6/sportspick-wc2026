@@ -483,6 +483,28 @@ export async function fetchWeatherExperiment(): Promise<WeatherExperimentStatus>
   return data;
 }
 
+export interface WeatherLearningStatus {
+  status: string;
+  completed_at?: string;
+  mode: "shadow";
+  live_ready: false;
+  stages: {
+    training?: {
+      status: string; trained_at: string; selected_model?: string; enriched_rows?: number;
+      quality: { station_days: number; distinct_dates: number; accepted_rows: number };
+      split?: Record<string, { station_days: number; dates: string[] }>;
+      evaluation?: Record<string, { test: { brier: number; log_loss: number; dates: number } }>;
+    };
+    collection?: { status: string; snapshots: number; stations: string[]; groups: number; errors?: unknown[] };
+    forward_evaluation?: { quality: { station_days: number; distinct_dates: number }; readiness: Record<string, boolean | string> };
+  };
+}
+
+export async function fetchWeatherLearning(): Promise<WeatherLearningStatus> {
+  const { data } = await api.get("/weather/learning");
+  return data;
+}
+
 export async function fetchTreasury() {
   const { data } = await api.get("/trading/treasury");
   return data;
