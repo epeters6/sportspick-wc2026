@@ -12,7 +12,7 @@ import numpy as np
 
 from backend.ml.weather_learning import SOURCE
 from backend.ml.weather_learning.contracts import Contract, resolve
-from backend.ml.weather_learning.collection import collect, normalized_quote
+from backend.ml.weather_learning.collection import collect, normalized_quote, refresh_quotes
 from backend.ml.weather_learning.feeds import PublicFeeds
 from backend.ml.weather_learning.dataset import features, partition_valid, prepare, utc, vector_key
 from backend.ml.weather_learning.nowcast import weather_features
@@ -228,6 +228,22 @@ class NowcastTests(unittest.TestCase):
 
 
 class CollectionTests(unittest.TestCase):
+    def test_polymarket_book_keeps_id_receipt_depth_and_one_sided_quotes(self):
+        feeds = Mock()
+        payload = {"marketSlug": "M", "state": "MARKET_STATE_OPEN", "bids": [],
+                   "offers": [{"px": {"value": ".01"}, "qty": "123.4"}], "transactTime": "2026-09-20T15:00:00Z"}
+        feeds.fetch.return_value = {"received_at": "2026-09-20T15:00:01Z", "data": {"marketData": payload}}
+        row = refresh_quotes([{"ticker": "M", "yes_bid": 70, "yes_ask": 80}], "polymarket", feeds)[0]
+        self.assertEqual((row["best_bid"], row["best_ask"], row["ask_size"]), (0, .01, 123.4))
+        self.assertEqual(row["received_timestamp"], "2026-09-20T15:00:01Z")
+        self.assertEqual(row["orderbook_timestamp"], payload["transactTime"])
+        payload["marketSlug"] = "OTHER"
+        with self.assertRaisesRegex(ValueError, "ID_OR_STATE_MISMATCH"):
+            refresh_quotes([{"ticker": "M"}], "polymarket", feeds)
+        payload.update(marketSlug="M", offers=[], lastTradePx={"value": ".80"})
+        with self.assertRaisesRegex(ValueError, "MISSING_POLYMARKET_BOOK"):
+            refresh_quotes([{"ticker": "M"}], "polymarket", feeds)
+
     def test_cents_are_unambiguous_including_one_cent(self):
         self.assertEqual(normalized_quote({"yes_bid": 0, "yes_ask": 1})["best_ask"], .01)
         self.assertEqual(normalized_quote({"yes_ask": 75, "best_ask": .01})["best_ask"], .01)
