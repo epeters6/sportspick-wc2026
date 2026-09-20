@@ -87,13 +87,26 @@ def refresh_quotes(markets, venue, feeds):
             row.update(get_weather_fee_metadata(market["ticker"]))
             result.append(row)
         return result
-    from pavlov.polymarket.poly_client import get_orderbook_as_parsed
+    from pavlov.polymarket.poly_client import _bbo_from_book, _amount_to_prob
     result = []
     for market in markets:
-        book = get_orderbook_as_parsed(market["ticker"])
-        if not book:
+        response = feeds.fetch("https://gateway.polymarket.us/v1/markets/" + market["ticker"] + "/book", {}, ttl=0)
+        payload = response["data"].get("marketData", {})
+        if payload.get("marketSlug") != market["ticker"] or payload.get("state") != "MARKET_STATE_OPEN":
+            raise ValueError("POLYMARKET_BOOK_ID_OR_STATE_MISMATCH")
+        book = _bbo_from_book(response["data"])
+        if not book or (book.get("bestBid") is None and book.get("bestAsk") is None):
             raise ValueError("MISSING_POLYMARKET_BOOK")
-        result.append({**market, **book})
+        # PublicFeeds provides pacing, bounded retries and the original receipt;
+        # never use last trades to manufacture a missing executable quote.
+        bid, ask = _amount_to_prob(book.get("bestBid")), _amount_to_prob(book.get("bestAsk"))
+        result.append({**market, "best_bid": bid or 0.0, "best_ask": ask or 0.0,
+                       "yes_bid": bid * 100 if bid is not None else 0.0,
+                       "yes_ask": ask * 100 if ask is not None else 0.0,
+                       "ask_size": book.get("ask_size", 0.0),
+                       "yes_ask_size": book.get("ask_size", 0.0), "yes_ask_qty": book.get("ask_size", 0.0),
+                       "received_timestamp": response["received_at"],
+                       "orderbook_timestamp": payload.get("transactTime"), "execution_price_source": "orderbook"})
     return result
 
 
