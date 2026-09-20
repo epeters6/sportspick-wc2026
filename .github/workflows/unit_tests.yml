@@ -26,6 +26,8 @@ jobs:
       PAVLOV_BYPASS_CONFIG: "1"
       # Never run external scrape integration in unit CI
       RUN_EXTERNAL_SYNC_INTEGRATION: "0"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
 
     steps:
       - name: Checkout

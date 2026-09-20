@@ -1,7 +1,7 @@
 """Weather mode cannot inherit live clearance or expose mutation endpoints anonymously."""
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 from backend.api import main as api
@@ -23,6 +23,21 @@ class TestWeatherAPIFocus(unittest.TestCase):
         with patch.object(api, "get_db", side_effect=RuntimeError("unavailable")):
             response = self.client.get("/weather/experiment")
         self.assertEqual(response.status_code, 503)
+
+    def test_learning_status_distinguishes_missing_invalid_and_healthy(self):
+        db = Mock()
+        result = db.table.return_value.select.return_value.eq.return_value.execute.return_value
+        with patch.object(api, "get_db", return_value=db):
+            result.data = []
+            self.assertEqual(self.client.get("/weather/learning").json()["status"], "never_run")
+            report = {"status": "healthy", "mode": "shadow", "live_ready": False,
+                      "completed_at": "2026-09-20T15:00:00Z", "stages": {}}
+            result.data = [{"value": report}]
+            self.assertEqual(self.client.get("/weather/learning").json(), report)
+            result.data = [{"value": {**report, "live_ready": True}}]
+            self.assertEqual(self.client.get("/weather/learning").status_code, 503)
+        with patch.object(api, "get_db", side_effect=RuntimeError("unavailable")):
+            self.assertEqual(self.client.get("/weather/learning").status_code, 503)
 
     def test_model_research_evidence_never_grants_live_clearance(self):
         evidence = {"forward_evaluation": {"research_evidence_ready": True,

@@ -92,6 +92,21 @@ def weather_experiment_status():
     return report
 
 
+@app.get("/weather/learning")
+def weather_learning_status():
+    from backend.trading.weather_experiment import metadata
+    try:
+        rows = get_db().table("app_settings").select("value").eq("key", "weather_station_learning_v3_latest").execute().data or []
+    except Exception:
+        raise HTTPException(status_code=503, detail="Weather learning status unavailable")
+    if not rows:
+        return {"status": "never_run", "mode": "shadow", "live_ready": False, "stages": {}}
+    report = metadata(rows[0].get("value"))
+    if report.get("mode") != "shadow" or report.get("live_ready") is not False or not report.get("completed_at"):
+        raise HTTPException(status_code=503, detail="Invalid weather learning status")
+    return report
+
+
 # ─── Influencers ─────────────────────────────────────────────────────────────
 
 @app.get("/influencers")

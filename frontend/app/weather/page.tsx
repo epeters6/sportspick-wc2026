@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
+import WeatherLearning from "@/components/weather-learning";
 import { CloudRain, Thermometer, Shield, RefreshCw, ArrowRight } from "lucide-react";
 import { fetchWeatherPredictions, fetchWeatherExperiment, weatherResearchArms, weatherResearchLabel, weatherReportNotice, type WeatherPrediction } from "@/lib/api";
 
@@ -75,12 +76,14 @@ export default function WeatherPage() {
         <p className="mt-1">An estimated edge is not an execution signal. Official settlement, available liquidity, fees, and forward results determine whether a strategy is ready. This screen does not enable trading.</p>
       </div>
 
+      <WeatherLearning />
+
       <section className="glass-panel p-5 space-y-4" aria-label="Forward paper experiment">
         <div className="flex flex-wrap justify-between gap-3"><h2 className="font-semibold text-lg">Forward paper experiment</h2><span className="text-xs text-amber-300">Paper only · live trading not authorized</span></div>
         {arms.length > 0 && <div className="space-y-2">
           <label htmlFor="weather-research-arm" className="block text-xs text-gray-400">Research arm</label>
           <select id="weather-research-arm" value={selectedId} onChange={(event) => setSelectedArm(event.target.value)} className="w-full md:max-w-xl rounded-lg border border-white/20 bg-slate-950 px-3 py-2 text-sm">
-            {arms.map(([id, arm]) => <option key={id} value={id}>{weatherResearchLabel(id, arm)}{id === primaryId ? " � Primary baseline" : ""}</option>)}
+            {arms.map(([id, arm]) => <option key={id} value={id}>{weatherResearchLabel(id, arm)}{id === primaryId ? " · Primary baseline" : ""}</option>)}
           </select>
           <p className="text-xs text-gray-400">Each arm and venue has its own paper balance and P&amp;L. Their overlapping markets are not independent samples.</p>
         </div>}
