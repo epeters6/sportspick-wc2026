@@ -88,6 +88,16 @@ jobs:
           key: weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-${{ github.run_id }}
           restore-keys: |
             weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-
+            weather-learning-v3-${{ runner.os }}-
+
+      - name: Restore incremental weather history
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        uses: actions/cache@v4
+        with:
+          path: reports/weather_v3/history
+          key: weather-history-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            weather-history-v1-${{ runner.os }}-
 
       - name: Collect station weather and train independent research models
         if: always() && steps.dispatch.outputs.execute == 'true'
