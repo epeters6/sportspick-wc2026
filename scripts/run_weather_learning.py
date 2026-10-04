@@ -21,7 +21,8 @@ def main():
     os.environ.update(LIVE_TRADING_ENABLED="false", POLYMARKET_LIVE_ENABLED="false", AUTO_BET_ENABLED="0",
                       POLY_AUTO_BET_ENABLED="0", PAVLOV_BYPASS_CONFIG="1", DISCORD_WEBHOOK_URL="")
     from backend.ml.weather_learning import SOURCE, VERSION
-    from backend.ml.weather_learning.dataset import load_history, utc
+    from backend.ml.weather_learning.dataset import TRAINING_SOURCES, utc
+    from backend.weather_history_cache import load_cached_history
     from backend.ml.weather_learning.feeds import PublicFeeds
     from backend.ml.weather_learning.training import load_artifact, train
     db = None
@@ -48,8 +49,12 @@ def main():
     rows = None
     if needs_train:
         try:
-            rows = json.loads(args.history.read_text(encoding="utf-8")) if args.history else load_history(db, since=(started - timedelta(days=120)).isoformat())
-            report["stages"]["training"] = train(rows, model_dir)
+            if args.history:
+                rows = json.loads(args.history.read_text(encoding="utf-8"))
+            else:
+                rows, report["stages"]["history_sync"] = load_cached_history(db, args.output / "history" / "rows.json.gz", TRAINING_SOURCES)
+            training_rows = [r for r in rows if utc(r["created_at"]) >= started - timedelta(days=120)]
+            report["stages"]["training"] = train(training_rows, model_dir)
             artifact = load_artifact(model_dir)
         except Exception as exc:
             report["errors"].append({"stage": "training", "reason": type(exc).__name__})
@@ -65,8 +70,8 @@ def main():
         from backend.ml.weather_learning.evaluation import forward_report
         try:
             if rows is None:
-                rows = load_history(db, since=(started - timedelta(days=120)).isoformat())
-            report["stages"]["forward_evaluation"] = forward_report(rows)
+                rows, report["stages"]["history_sync"] = load_cached_history(db, args.output / "history" / "rows.json.gz", TRAINING_SOURCES)
+            report["stages"]["forward_evaluation"] = forward_report([r for r in rows if utc(r["created_at"]) >= started - timedelta(days=120)])
         except Exception as exc:
             report["errors"].append({"stage": "forward_evaluation", "reason": type(exc).__name__})
     report["completed_at"] = datetime.now(timezone.utc).isoformat()
