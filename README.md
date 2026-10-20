@@ -170,3 +170,19 @@ python -m scripts.run_weather_decision_archive \
 Use `--plan-only` to inspect the request/location count before a larger range. Resume with identical plan arguments and the same cache; `--request-budget 0 --location-budget 0` verifies cached reconstruction without downloads. The importer enforces per-run and persistent daily location limits, preserves unavailable-run receipts, and fails closed on corrupt evidence or identity mismatches. Dataset/report snapshots are immutable; `latest.json` identifies the current dataset file. Run one importer process at a time.
 
 Original-run selection uses nominal release lags (six hours for GFS/ECMWF and three for HRRR), not verified historical publication times. Next-day HRRR uses the documented 48-hour 00/06/12/18 UTC cycles; ordinary hourly runs cover only 18 hours. Missing full-day coverage stays missing, including unavailable earlier runs needed for revisions. These archived rows remain offline-only and are not silently mixed into the correction model's captured-before-decision dataset. Sources: [Open-Meteo original runs](https://open-meteo.com/en/docs/single-runs-api), [GFS/HRRR horizons](https://open-meteo.com/en/docs/gfs-api), [model availability](https://open-meteo.com/en/docs/model-updates), [IEM NWS daily climate](https://mesonet.agron.iastate.edu/json/cli.py).
+
+### Full April–October archive and retest
+
+```bash
+python -m scripts.run_weather_full_backfill \
+  --archive reports/weather_decision_archive/full_2026_04_03_2026_10_19 \
+  --cache-dir reports/weather_historical_calibration/receipts \
+  --market-history reports/weather_segment_input.json \
+  --output reports/weather_full_history_retest
+```
+
+Each invocation resumes the same 200-day plan (April 3–October 19), across all 21 stations and four local decision hours. The plan contains 2,400 batched requests, 43,000 location units and 16,800 possible decision snapshots. One invocation downloads at most 1,000 location units. Persistent ledgers enforce 3,000 units per rolling hour and 6,000 per rolling 24 hours, leaving free-tier headroom for normal collection. October 20 retains a 2,000-unit daily allowance because the earlier GFS expansion was collected that day. Run once every four hours; do not run importers concurrently. `--cache-only` reconstructs evidence without any downloads. Preserve stale locks for inspection, never delete corrupt caches or budget ledgers to bypass a stop.
+
+The worker records progress and only starts the final retest after every planned request has been processed. Unavailable runs and missing official labels remain explicit gaps. The retest requires all 21 stations in each partition, fits a fixed ridge correction to the three-model temperature ensemble through August 29, calibrates residual bias/uncertainty on August 31–September 18, and evaluates temperature errors on September 20–October 19. Snapshot duplication cannot reduce ridge regularization. Report high and low errors against each raw model and the equal-weight ensemble.
+
+Where saved market quotes exist, the archived temperature distributions are compared with both market probabilities and the probabilities originally saved by the current model. A bounded market blend is selected only on September 20–October 1, with label-availability checks before the October 3–19 market test. Missing older market prices are never reconstructed. This is exploratory retrospective analysis with unverified archival publication times, not an as-of backtest or proven profit. Fee/depth/slippage diagnostics remain separate from forecast accuracy. Final reports and model artifacts are immutable; `completion.json` prevents repeated automatic retraining. No production model, frozen experiment or risk stop is changed.
