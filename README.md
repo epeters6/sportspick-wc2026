@@ -129,3 +129,18 @@ The recent prediction feed is not a complete performance sample. Bucket rows fro
 | `reports/weather/` | Generated cycle evidence; not source code |
 
 The repository began as SportsPick Tracker for World Cup 2026. Its older scrapers, sports models, and separate arbitrage scanner are preserved for reference and historical settlement, rather than expanded as part of the active weather experiment.
+
+## Offline weather probability screen
+
+Use the saved, validated original-run history to reject weak probability candidates before spending future collection time on them:
+
+```bash
+python -m scripts.run_weather_probability_screen \
+  --history reports/weather_historical_calibration/gfs_2026_all_stations/dataset.json \
+  --market-history reports/weather_segment_input.json \
+  --expected-history-hash a894ca6ae9a527ca3b8fcddc2fc688d3698e47f3b281f4a2d70d5a151de6711e
+```
+
+This command uses saved files only. It fits station-specific overnight-low residual distributions through August 29, 2026, then scores a fixed residual model and a fixed 50/50 market blend on later, officially settled next-day market vectors. It enforces the original GFS run, station, standard-day window, complete bucket partition, and quote timing. Repeated snapshots and venues share one station/date weight. Outputs include immutable specifications, model and implementation hashes, paired calendar-block uncertainty, rejected evidence, and separately labelled quote-only diagnostics.
+
+The archive's historical public availability and the historical publication time of final NWS observations are unverified, so this is an exploratory retrospective screen. It creates no forward forecasts, sends no database writes, and changes no existing model, frozen study, risk stop, workflow, or trading setting. A candidate that trails the same market baseline fails the screen. Even a better retrospective candidate requires a separately frozen prospective trial; nothing is promoted automatically. Reuse the saved receipt cache when refreshing history and preserve any corrupt or conflicting evidence for investigation.
