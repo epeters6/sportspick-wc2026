@@ -22,7 +22,7 @@ jobs:
   weather:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
+    env: &weather_environment
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -78,43 +78,6 @@ jobs:
             cat reports/weather/performance.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Restore independent weather learning cache
-        if: always() && steps.dispatch.outputs.execute == 'true'
-        uses: actions/cache@v4
-        with:
-          path: |
-            reports/weather_v3/cache
-            reports/weather_v3/model
-          key: weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-${{ github.run_id }}
-          restore-keys: |
-            weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-
-            weather-learning-v3-${{ runner.os }}-
-
-      - name: Restore incremental weather history
-        if: always() && steps.dispatch.outputs.execute == 'true'
-        uses: actions/cache@v4
-        with:
-          path: reports/weather_v3/history
-          key: weather-history-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            weather-history-v1-${{ runner.os }}-
-
-      - name: Collect station weather and train independent research models
-        if: always() && steps.dispatch.outputs.execute == 'true'
-        continue-on-error: true
-        timeout-minutes: 10
-        env:
-          OMP_NUM_THREADS: "1"
-          OPENBLAS_NUM_THREADS: "1"
-        run: python -m scripts.run_weather_learning --collect
-
-      - name: Show weather model learning evidence
-        if: always() && steps.dispatch.outputs.execute == 'true'
-        run: |
-          if [ -f reports/weather_v3/model/training.md ]; then
-            cat reports/weather_v3/model/training.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       - name: Upload weather evidence even when a stage fails
         if: always() && steps.dispatch.outputs.execute == 'true'
         uses: actions/upload-artifact@v4
@@ -127,6 +90,92 @@ jobs:
             weather_shadow_decisions.jsonl
             weather_sync_status.json
             orderbook_snapshots.jsonl
+
+
+  learning:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env: *weather_environment
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            pavlov/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r pavlov/requirements.txt
+
+      - name: Validate Supabase configuration
+        run: python scripts/ci_check_env.py
+
+      - name: Require a current trigger with enough time before the UTC boundary
+        id: dispatch
+        env:
+          WEATHER_SCHEDULED_FOR: ${{ inputs.scheduled_for }}
+        run: python scripts/check_weather_dispatch.py weather
+
+      - name: Restore independent weather learning cache
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            reports/weather_v3/cache
+            reports/weather_v3/model
+          key: weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-${{ github.run_id }}
+          restore-keys: |
+            weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-
+            weather-learning-v3-${{ runner.os }}-
+
+      - name: Restore incremental weather history
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: reports/weather_v3/history
+          key: weather-history-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            weather-history-v1-${{ runner.os }}-
+
+      - name: Collect station weather and train independent research models
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        timeout-minutes: 20
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: python -m scripts.run_weather_learning --collect
+
+      - name: Show weather model learning evidence
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        run: |
+          if [ -f reports/weather_v3/model/training.md ]; then
+            cat reports/weather_v3/model/training.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Keep incremental receipts even if collection fails. Cache readers still
+      # reject corrupt or incompatible contents; no cache is deleted or reset.
+      - name: Preserve weather learning cache
+        if: always() && steps.dispatch.outputs.execute == 'true' && hashFiles('reports/weather_v3/model/**') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            reports/weather_v3/cache
+            reports/weather_v3/model
+          key: weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-${{ github.run_id }}
+
+      - name: Preserve incremental weather history
+        if: always() && steps.dispatch.outputs.execute == 'true' && hashFiles('reports/weather_v3/history/**') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: reports/weather_v3/history
+          key: weather-history-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload weather learning evidence
         if: always() && steps.dispatch.outputs.execute == 'true'

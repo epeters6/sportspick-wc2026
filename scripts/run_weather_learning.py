@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -32,13 +33,16 @@ def main():
     started = datetime.now(timezone.utc)
     report = {"version": VERSION, "started_at": started.isoformat(), "mode": "shadow", "live_ready": False,
               "paper_execution_enabled": False, "stages": {}, "errors": []}
+    from backend.weather_stage_report import StageReport
+    progress = StageReport(report, args.output, db=db, source=SOURCE)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda signum, frame: progress.interrupt(signum))
+    progress.save()
     feeds = PublicFeeds(args.output / "cache")
     if db is not None:
         from backend.ml.weather_learning.outcomes import label_pending
-        try:
+        with progress.stage("labels"):
             report["stages"]["labels"] = label_pending(db, feeds)
-        except Exception as exc:
-            report["errors"].append({"stage": "labels", "reason": type(exc).__name__})
     model_dir = args.output / "model"
     artifact = None
     try:
@@ -48,7 +52,7 @@ def main():
     needs_train = args.force_train or not artifact or (started - utc(artifact["trained_at"])).total_seconds() >= 86400
     rows = None
     if needs_train:
-        try:
+        with progress.stage("training"):
             if args.history:
                 rows = json.loads(args.history.read_text(encoding="utf-8"))
             else:
@@ -56,33 +60,22 @@ def main():
             training_rows = [r for r in rows if utc(r["created_at"]) >= started - timedelta(days=120)]
             report["stages"]["training"] = train(training_rows, model_dir)
             artifact = load_artifact(model_dir)
-        except Exception as exc:
-            report["errors"].append({"stage": "training", "reason": type(exc).__name__})
     else:
         report["stages"]["training"] = json.loads((model_dir / "training.json").read_text(encoding="utf-8"))
     if args.collect:
         from backend.ml.weather_learning.collection import collect
-        try:
+        with progress.stage("collection"):
             report["stages"]["collection"] = collect(args.output, db=db, artifact=artifact, feeds=feeds)
-        except Exception as exc:
-            report["errors"].append({"stage": "collection", "reason": type(exc).__name__})
     if db is not None or rows is not None:
         from backend.ml.weather_learning.evaluation import forward_report
-        try:
+        with progress.stage("forward_evaluation"):
             if rows is None:
                 rows, report["stages"]["history_sync"] = load_cached_history(db, args.output / "history" / "rows.json.gz", TRAINING_SOURCES)
             report["stages"]["forward_evaluation"] = forward_report([r for r in rows if utc(r["created_at"]) >= started - timedelta(days=120)])
-        except Exception as exc:
-            report["errors"].append({"stage": "forward_evaluation", "reason": type(exc).__name__})
-    report["completed_at"] = datetime.now(timezone.utc).isoformat()
-    report["status"] = "degraded" if report["errors"] or any(v.get("errors") for v in report["stages"].values()) else "healthy"
-    args.output.mkdir(parents=True, exist_ok=True)
-    (args.output / "latest.json").write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
-    if db is not None:
-        db.table("app_settings").upsert({"key": SOURCE + "_latest", "value": report, "updated_at": report["completed_at"]}, on_conflict="key").execute()
+    progress.save(complete=True)
     print(json.dumps({"status": report["status"], "training": report["stages"].get("training", {}).get("status"),
                       "snapshots": report["stages"].get("collection", {}).get("snapshots", 0), "errors": report["errors"]}))
-    return 1 if report["errors"] else 0
+    return 1 if report["status"] == "degraded" else 0
 
 
 if __name__ == "__main__":
