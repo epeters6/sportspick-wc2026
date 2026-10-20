@@ -129,3 +129,44 @@ The recent prediction feed is not a complete performance sample. Bucket rows fro
 | `reports/weather/` | Generated cycle evidence; not source code |
 
 The repository began as SportsPick Tracker for World Cup 2026. Its older scrapers, sports models, and separate arbitrage scanner are preserved for reference and historical settlement, rather than expanded as part of the active weather experiment.
+
+## Offline weather probability screen
+
+Use the saved, validated original-run history to reject weak probability candidates before spending future collection time on them:
+
+```bash
+python -m scripts.run_weather_probability_screen \
+  --history reports/weather_historical_calibration/gfs_2026_all_stations/dataset.json \
+  --market-history reports/weather_segment_input.json \
+  --expected-history-hash a894ca6ae9a527ca3b8fcddc2fc688d3698e47f3b281f4a2d70d5a151de6711e
+```
+
+This command uses saved files only. It fits station-specific overnight-low residual distributions through August 29, 2026, then scores a fixed residual model and a fixed 50/50 market blend on later, officially settled next-day market vectors. It enforces the original GFS run, station, standard-day window, complete bucket partition, and quote timing. Repeated snapshots and venues share one station/date weight. Outputs include immutable specifications, model and implementation hashes, paired calendar-block uncertainty, rejected evidence, and separately labelled quote-only diagnostics.
+
+The archive's historical public availability and the historical publication time of final NWS observations are unverified, so this is an exploratory retrospective screen. It creates no forward forecasts, sends no database writes, and changes no existing model, frozen study, risk stop, workflow, or trading setting. A candidate that trails the same market baseline fails the screen. Even a better retrospective candidate requires a separately frozen prospective trial; nothing is promoted automatically. Reuse the saved receipt cache when refreshing history and preserve any corrupt or conflicting evidence for investigation.
+
+### Decision-time inputs and conservative market corrections
+
+```bash
+python -m scripts.run_weather_market_correction \
+  --history reports/weather_segment_input.json \
+  --output reports/weather_market_correction
+```
+
+This separate research candidate uses the GFS, HRRR, ECMWF, observations, and forecast changes actually saved before each decision. It does not interpret download age as model-run age. A regularized correction to the market's log probabilities is fit on earlier dates; the correction weight is selected on a later calibration partition, with label-availability embargoes before subsequent decisions. The market itself is an explicit fallback. A nonzero correction must improve both calibration Brier score and log loss, and each bucket's probability change is capped at five percentage points. High/low outcomes and venues share one station/date weight.
+
+The final chronological partition includes comparison with the same market baseline and quote-only cost sensitivity. Costs use the saved ask-based fee-inclusive execution estimate, require fresh fee/quote evidence and two displayed contracts for a one-contract diagnostic, and add zero, one-cent, and three-cent slippage scenarios. Zero-fill and adverse-selection scenarios remain explicit. No price-only calculation is called realized profit, and no candidate is automatically promoted. Old data already inspected in research is not a permanent unseen holdout. Prospective prediction additionally rejects models created after their decisions.
+
+For longer original-run history, the bounded archive importer supports all 21 stations and explicit local decision hours:
+
+```bash
+python -m scripts.run_weather_decision_archive \
+  --start 2026-09-30 --days 2 --hours 8 11 14 17 --lead-days 1 \
+  --request-budget 60 --location-budget 700 \
+  --cache-dir reports/weather_historical_calibration/receipts \
+  --output reports/weather_decision_archive/extended_runs_2026_09_30
+```
+
+Use `--plan-only` to inspect the request/location count before a larger range. Resume with identical plan arguments and the same cache; `--request-budget 0 --location-budget 0` verifies cached reconstruction without downloads. The importer enforces per-run and persistent daily location limits, preserves unavailable-run receipts, and fails closed on corrupt evidence or identity mismatches. Dataset/report snapshots are immutable; `latest.json` identifies the current dataset file. Run one importer process at a time.
+
+Original-run selection uses nominal release lags (six hours for GFS/ECMWF and three for HRRR), not verified historical publication times. Next-day HRRR uses the documented 48-hour 00/06/12/18 UTC cycles; ordinary hourly runs cover only 18 hours. Missing full-day coverage stays missing, including unavailable earlier runs needed for revisions. These archived rows remain offline-only and are not silently mixed into the correction model's captured-before-decision dataset. Sources: [Open-Meteo original runs](https://open-meteo.com/en/docs/single-runs-api), [GFS/HRRR horizons](https://open-meteo.com/en/docs/gfs-api), [model availability](https://open-meteo.com/en/docs/model-updates), [IEM NWS daily climate](https://mesonet.agron.iastate.edu/json/cli.py).
