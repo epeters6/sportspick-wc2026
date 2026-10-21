@@ -62,10 +62,42 @@ def main():
             artifact = load_artifact(model_dir)
     else:
         report["stages"]["training"] = json.loads((model_dir / "training.json").read_text(encoding="utf-8"))
+    # Separate shadow policy; frozen v3 probabilities and their hash stay intact.
+    guard = None
+    if args.collect and artifact and (db is not None or args.history):
+        from backend.weather_market_guard import fit, load_model, save_model
+        with progress.stage("market_guard_training"):
+            guard_dir = args.output / "market_guard"
+            if (guard_dir / "latest_model.json").exists():
+                guard = load_model(guard_dir)  # Corrupt evidence fails visibly.
+            if guard is None or (started - utc(guard["created_at"])).total_seconds() >= 86400:
+                if rows is None:
+                    if args.history:
+                        rows = json.loads(args.history.read_text(encoding="utf-8"))
+                    else:
+                        rows, report["stages"]["history_sync"] = load_cached_history(db, args.output / "history" / "rows.json.gz", TRAINING_SOURCES)
+                candidate_guard = fit(rows, as_of=started)
+                save_model(candidate_guard, guard_dir)
+                guard = candidate_guard
+            report["stages"]["market_guard_training"] = {k: guard[k] for k in (
+                "model_id", "created_at", "selected", "weight", "reason", "calibration_station_dates", "calibration_dates")}
+            (guard_dir / "artifact_model.json").write_text(json.dumps(guard, indent=2, allow_nan=False), encoding="utf-8")
+            from backend.weather_market_guard import SPEC
+            from backend.weather_probability_screen import write_once
+            write_once(guard_dir / "spec.json", SPEC)
+        if report["stage_progress"]["market_guard_training"]["status"] != "completed":
+            guard = None
     if args.collect:
         from backend.ml.weather_learning.collection import collect
         with progress.stage("collection"):
             report["stages"]["collection"] = collect(args.output, db=db, artifact=artifact, feeds=feeds)
+        if guard is not None:
+            from backend.weather_market_guard import predict_forward
+            with progress.stage("market_guard_forecasts"):
+                current = [json.loads(line) for line in (args.output / "snapshots.jsonl").read_text(encoding="utf-8").splitlines() if line]
+                if any(utc(r["metadata"]["decision_at"]) < started for r in current):
+                    raise ValueError("STALE_COLLECTION_FILE_FOR_MARKET_GUARD")
+                report["stages"]["market_guard_forecasts"] = predict_forward(current, guard, args.output / "market_guard")
     if db is not None or rows is not None:
         from backend.ml.weather_learning.evaluation import forward_report
         with progress.stage("forward_evaluation"):
