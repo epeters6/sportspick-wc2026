@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -75,6 +76,8 @@ class FullBackfillCache(ArchiveBudgetCache):
 
 def run_batch(archive, cache_dir, market_history, output, *, cache_only=False):
     archive, cache_dir, output = Path(archive), Path(cache_dir), Path(output)
+    from backend.weather_backfill_checkpoint import validate_owner
+    validate_owner(cache_dir, os.environ.get("WEATHER_BACKFILL_EXECUTOR", "local"))
     cache_dir.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
     lock = cache_dir / "weather_full_backfill_worker.lock"

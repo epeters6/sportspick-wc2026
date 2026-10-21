@@ -130,6 +130,8 @@ jobs:
           path: |
             reports/weather_v3/cache
             reports/weather_v3/model
+            reports/weather_v3/market_guard/models
+            reports/weather_v3/market_guard/latest_model.json
           key: weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-${{ github.run_id }}
           restore-keys: |
             weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-
@@ -168,6 +170,8 @@ jobs:
           path: |
             reports/weather_v3/cache
             reports/weather_v3/model
+            reports/weather_v3/market_guard/models
+            reports/weather_v3/market_guard/latest_model.json
           key: weather-learning-v3-${{ runner.os }}-${{ hashFiles('backend/ml/weather_learning/**', 'scripts/run_weather_learning.py') }}-${{ github.run_id }}
 
       - name: Preserve incremental weather history
@@ -190,3 +194,15 @@ jobs:
             reports/weather_v3/snapshots.jsonl
             reports/weather_v3/market_capture.json
             reports/weather_v3/model/**
+
+      - name: Upload separate market guard forward evidence
+        if: always() && steps.dispatch.outputs.execute == 'true' && hashFiles('reports/weather_v3/market_guard/artifact_model.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: weather-market-guard-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            reports/weather_v3/market_guard/artifact_model.json
+            reports/weather_v3/market_guard/spec.json
+            reports/weather_v3/market_guard/forecasts/**
