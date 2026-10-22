@@ -10,6 +10,30 @@ from scripts.run_weather_learning import main
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def no_real_catalog(monkeypatch):
+    monkeypatch.setattr('backend.weather_collection_runtime.discover_catalog', lambda feeds: ([], [], []))
+
+
+@pytest.mark.parametrize('stale_file', [False, True])
+def test_duplicate_hour_does_not_fail_guard_or_replay_old_rows(tmp_path, monkeypatch, stale_file):
+    artifact = {'trained_at':datetime.now(timezone.utc).isoformat(), 'model_id':'prior'}
+    (tmp_path/'model').mkdir()
+    (tmp_path/'model/training.json').write_text(json.dumps(artifact))
+    (tmp_path/'history.json').write_text('[]')
+    if stale_file:
+        (tmp_path/'snapshots.jsonl').write_text('stale invalid file must not be read')
+    monkeypatch.setattr('sys.argv', ['run','--no-persist','--collect','--output',str(tmp_path),'--history',str(tmp_path/'history.json')])
+    monkeypatch.setattr('scripts.run_weather_learning.signal.signal', lambda *a:None)
+    monkeypatch.setattr('backend.ml.weather_learning.training.load_artifact', lambda _:artifact)
+    monkeypatch.setattr('backend.ml.weather_learning.collection.collect', lambda *a,**k: {
+        'status':'skipped','reason':'HOURLY_SLOT_ALREADY_ATTEMPTED','snapshots':0,'errors':[]})
+    assert main() == 0
+    report = json.loads((tmp_path/'latest.json').read_text())
+    assert report['stages']['market_guard_forecasts']['status'] == 'skipped'
+    assert not list((tmp_path/'market_guard/forecasts').glob('*.json'))
+
+
 @pytest.mark.parametrize('fault', [None, 'stale_collection', 'corrupt_guard'])
 def test_market_guard_runs_before_current_collection_and_failures_are_visible(tmp_path, monkeypatch, fault):
     from datetime import timedelta
