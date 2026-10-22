@@ -206,3 +206,63 @@ jobs:
             reports/weather_v3/market_guard/artifact_model.json
             reports/weather_v3/market_guard/spec.json
             reports/weather_v3/market_guard/forecasts/**
+
+  daytime-paper:
+    # Independent from the frozen v2/v3 runners and their time budgets.
+    if: github.ref == 'refs/heads/main' && vars.WEATHER_DAYTIME_PAPER_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env: *weather_environment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            pavlov/requirements.txt
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r pavlov/requirements.txt
+      - name: Require the ordinary current weather trigger
+        id: dispatch
+        env:
+          WEATHER_SCHEDULED_FOR: ${{ inputs.scheduled_for }}
+        run: python scripts/check_weather_dispatch.py weather
+      - name: Restore optional public receipts
+        if: steps.dispatch.outputs.execute == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            reports/weather_daytime_paper/gfs_receipts
+            reports/weather_daytime_paper/public_cache
+          key: weather-daytime-receipts-v1-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: weather-daytime-receipts-v1-${{ runner.os }}-
+      - name: Collect and grade the separate daytime paper experiment
+        if: steps.dispatch.outputs.execute == 'true'
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: python -m scripts.run_weather_daytime_paper
+      - name: Preserve public receipts
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            reports/weather_daytime_paper/gfs_receipts
+            reports/weather_daytime_paper/public_cache
+          key: weather-daytime-receipts-v1-${{ runner.os }}-${{ github.run_id }}
+      - name: Preserve daytime paper evidence
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: weather-daytime-paper-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: warn
+          path: |
+            research/weather_daytime_paper/model.json
+            reports/weather_daytime_paper/latest.json
+            reports/weather_daytime_paper/decision/**
+            reports/weather_daytime_paper/settlement/**

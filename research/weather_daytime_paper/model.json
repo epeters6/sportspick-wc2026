@@ -1,0 +1,283 @@
+{
+  "created_at": "2026-10-22T01:42:05.918137+00:00",
+  "spec": {
+    "version": "weather_daytime_paper_v1",
+    "mode": "paper",
+    "live_ready": false,
+    "metric": "high",
+    "stations": [
+      "KATL",
+      "KAUS",
+      "KBOS",
+      "KDCA",
+      "KDEN",
+      "KDFW",
+      "KHOU",
+      "KIAH",
+      "KLAS",
+      "KLAX",
+      "KMDW",
+      "KMIA",
+      "KMSP",
+      "KNYC",
+      "KOKC",
+      "KORD",
+      "KPHL",
+      "KPHX",
+      "KSAT",
+      "KSEA",
+      "KSFO"
+    ],
+    "first_target": "2026-10-23",
+    "last_target": "2026-11-05",
+    "decision_hours_local": [
+      8,
+      11,
+      14,
+      17
+    ],
+    "lead_days": 1,
+    "forecast_model": "gfs_global",
+    "run_policy": "target minus one day, 00 UTC",
+    "candidate": "PR20 residual_recenter_only, PR19 Gaussian width",
+    "fit_policy": "Fit once before launch; no retraining or station selection during this cohort",
+    "min_net_edge": 0.05,
+    "slippage_per_share": 0.005,
+    "shares": 1,
+    "seed_per_venue": 500.0,
+    "max_open_risk": 25.0,
+    "daily_loss_stop": 10.0,
+    "cumulative_loss_stop": 50.0,
+    "max_event_cost": 1.0,
+    "execution": "Simulated one-contract purchase at observed ask plus conservative fee and slippage",
+    "independence": "Station/date; venues share one event's weight"
+  },
+  "spec_hash": "9c962eaf5ca4a04b26a9a1fa8615d08c339f0ee32f4341e0d8115671a4400454",
+  "implementation_hash": "a09a22cd4d50094ebcc9890fbba175b7fd97da3ee6e6ed637f652f8212a2bac8",
+  "parameters": {
+    "KATL": {
+      "bias_f": -1.7288324795473657,
+      "residual_shift_f": 0.40081796739817493,
+      "sigma_f": 2.9159255942877036
+    },
+    "KAUS": {
+      "bias_f": 0.371167520452634,
+      "residual_shift_f": 1.4988412232121295,
+      "sigma_f": 3.2741637045492924
+    },
+    "KBOS": {
+      "bias_f": 1.6056502790733234,
+      "residual_shift_f": 0.943879982902052,
+      "sigma_f": 2.955933338696166
+    },
+    "KDCA": {
+      "bias_f": -0.5133152381680559,
+      "residual_shift_f": 1.2305854092586395,
+      "sigma_f": 3.228722662090562
+    },
+    "KDEN": {
+      "bias_f": 0.5349606239009105,
+      "residual_shift_f": 0.7679109906539895,
+      "sigma_f": 2.940225750946602
+    },
+    "KDFW": {
+      "bias_f": -0.14779799678874547,
+      "residual_shift_f": 1.3034148666229817,
+      "sigma_f": 3.0715968213440528
+    },
+    "KHOU": {
+      "bias_f": -0.2753842036852973,
+      "residual_shift_f": 1.7342288201113532,
+      "sigma_f": 3.2092437308017616
+    },
+    "KIAH": {
+      "bias_f": 0.07289165838366804,
+      "residual_shift_f": 1.8548877348400346,
+      "sigma_f": 3.007655892970981
+    },
+    "KLAS": {
+      "bias_f": 0.7901330376940138,
+      "residual_shift_f": 0.2803528511191058,
+      "sigma_f": 2.590254246333357
+    },
+    "KLAX": {
+      "bias_f": 1.35047786528022,
+      "residual_shift_f": 1.2012055642973996,
+      "sigma_f": 3.6951602673021715
+    },
+    "KMDW": {
+      "bias_f": -0.0564186864439173,
+      "residual_shift_f": 0.818066029413679,
+      "sigma_f": 2.943139444040466
+    },
+    "KMIA": {
+      "bias_f": -1.1977979967887453,
+      "residual_shift_f": 0.7308954867780195,
+      "sigma_f": 2.6747831002722777
+    },
+    "KMSP": {
+      "bias_f": -0.4753842036852968,
+      "residual_shift_f": 1.8603916108090282,
+      "sigma_f": 3.8205291168553868
+    },
+    "KNYC": {
+      "bias_f": -1.8840048933404692,
+      "residual_shift_f": 1.260042773599726,
+      "sigma_f": 3.225111263336295
+    },
+    "KOKC": {
+      "bias_f": 0.11082269286642708,
+      "residual_shift_f": 1.954073781351663,
+      "sigma_f": 3.461700083718283
+    },
+    "KORD": {
+      "bias_f": 0.28496062390091,
+      "residual_shift_f": 1.0264768821268573,
+      "sigma_f": 2.816326045325511
+    },
+    "KPHL": {
+      "bias_f": 0.9004778652802203,
+      "residual_shift_f": 1.4569807580958507,
+      "sigma_f": 3.1336733252595197
+    },
+    "KPHX": {
+      "bias_f": 1.0075037927412769,
+      "residual_shift_f": 0.41633379852404456,
+      "sigma_f": 3.053928348840339
+    },
+    "KSAT": {
+      "bias_f": 0.27461579631470306,
+      "residual_shift_f": 1.129538897630733,
+      "sigma_f": 3.1766040693686
+    },
+    "KSEA": {
+      "bias_f": -1.3081428243749522,
+      "residual_shift_f": 0.897717192204377,
+      "sigma_f": 3.8402743342060317
+    },
+    "KSFO": {
+      "bias_f": -4.556418686443918,
+      "residual_shift_f": -0.7232518000436845,
+      "sigma_f": 5.050268226966914
+    }
+  },
+  "locations": {
+    "KATL": {
+      "lat": 33.62972,
+      "lon": -84.44223,
+      "elev": 309
+    },
+    "KAUS": {
+      "lat": 30.1831,
+      "lon": -97.68063,
+      "elev": 148
+    },
+    "KBOS": {
+      "lat": 42.36057,
+      "lon": -71.00974,
+      "elev": 4
+    },
+    "KDCA": {
+      "lat": 38.8472,
+      "lon": -77.03453,
+      "elev": 4
+    },
+    "KDEN": {
+      "lat": 39.84657,
+      "lon": -104.65623,
+      "elev": 1656
+    },
+    "KDFW": {
+      "lat": 32.89744,
+      "lon": -97.02195,
+      "elev": 168
+    },
+    "KHOU": {
+      "lat": 29.64582,
+      "lon": -95.28214,
+      "elev": 13
+    },
+    "KIAH": {
+      "lat": 29.98438,
+      "lon": -95.36072,
+      "elev": 27
+    },
+    "KLAS": {
+      "lat": 36.07188,
+      "lon": -115.16343,
+      "elev": 662
+    },
+    "KLAX": {
+      "lat": 33.93817,
+      "lon": -118.3866,
+      "elev": 30
+    },
+    "KMDW": {
+      "lat": 41.78412,
+      "lon": -87.75515,
+      "elev": 186
+    },
+    "KMIA": {
+      "lat": 25.78806,
+      "lon": -80.31692,
+      "elev": 1
+    },
+    "KMSP": {
+      "lat": 44.88523,
+      "lon": -93.23132,
+      "elev": 255
+    },
+    "KNYC": {
+      "lat": 40.779,
+      "lon": -73.9692,
+      "elev": 33
+    },
+    "KOKC": {
+      "lat": 35.3843,
+      "lon": -97.60033,
+      "elev": 391
+    },
+    "KORD": {
+      "lat": 41.96017,
+      "lon": -87.93161,
+      "elev": 202
+    },
+    "KPHL": {
+      "lat": 39.87328,
+      "lon": -75.22682,
+      "elev": 2
+    },
+    "KPHX": {
+      "lat": 33.42779,
+      "lon": -112.00366,
+      "elev": 338
+    },
+    "KSAT": {
+      "lat": 29.54429,
+      "lon": -98.48394,
+      "elev": 246
+    },
+    "KSEA": {
+      "lat": 47.44467,
+      "lon": -122.31442,
+      "elev": 115
+    },
+    "KSFO": {
+      "lat": 37.61961,
+      "lon": -122.36561,
+      "elev": 2
+    }
+  },
+  "training_last_target": "2026-10-18",
+  "training_station_dates": 4153,
+  "training_dataset_hash": "a894ca6ae9a527ca3b8fcddc2fc688d3698e47f3b281f4a2d70d5a151de6711e",
+  "input_sha256": "a932f1da8fa62cbaf04fcf3e314e6b01d3472aa031b73c4552b35132f59ed8b1",
+  "status_sha256": "ae8044cae4fc80fa0acd71ed412863cb31391402fd0061085977ad361625d25a",
+  "base_fit_hash": "7ff059bef1d3f84cf4647e0631a9a9f6f47c1b9a5df47c5d3ea377bcf2e84832",
+  "residual_fit_hash": "5c760245045ba1459db6407f2d560403e671b00100e3f494950509a593a6ec15",
+  "historical_as_of_verified": false,
+  "archive_production_training_eligible": false,
+  "experimental_forward_paper_only": true,
+  "live_ready": false,
+  "model_id": "7b7d1c759cf762af36dec1d9789ac7666220631e2b6ecb4fd509785da3da6c18"
+}
