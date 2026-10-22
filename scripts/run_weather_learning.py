@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import signal
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -24,13 +25,14 @@ def main():
     from backend.ml.weather_learning import SOURCE, VERSION
     from backend.ml.weather_learning.dataset import TRAINING_SOURCES, utc
     from backend.weather_history_cache import load_cached_history
-    from backend.ml.weather_learning.feeds import PublicFeeds
+    from backend.weather_collection_runtime import CollectionFeeds, collect_current, guard_inputs
     from backend.ml.weather_learning.training import load_artifact, train
     db = None
     if not args.no_persist:
         from backend.db import get_db
         db = get_db()
     started = datetime.now(timezone.utc)
+    collection_deadline = time.monotonic() + 17 * 60
     report = {"version": VERSION, "started_at": started.isoformat(), "mode": "shadow", "live_ready": False,
               "paper_execution_enabled": False, "stages": {}, "errors": []}
     from backend.weather_stage_report import StageReport
@@ -38,7 +40,7 @@ def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda signum, frame: progress.interrupt(signum))
     progress.save()
-    feeds = PublicFeeds(args.output / "cache")
+    feeds = CollectionFeeds(args.output / "cache")
     if db is not None:
         from backend.ml.weather_learning.outcomes import label_pending
         with progress.stage("labels"):
@@ -90,14 +92,15 @@ def main():
     if args.collect:
         from backend.ml.weather_learning.collection import collect
         with progress.stage("collection"):
-            report["stages"]["collection"] = collect(args.output, db=db, artifact=artifact, feeds=feeds)
+            feeds.deadline = collection_deadline
+            report["stages"]["collection"] = collect_current(args.output, collector=collect, db=db, artifact=artifact, feeds=feeds)
         if guard is not None:
             from backend.weather_market_guard import predict_forward
             with progress.stage("market_guard_forecasts"):
-                current = [json.loads(line) for line in (args.output / "snapshots.jsonl").read_text(encoding="utf-8").splitlines() if line]
-                if any(utc(r["metadata"]["decision_at"]) < started for r in current):
-                    raise ValueError("STALE_COLLECTION_FILE_FOR_MARKET_GUARD")
-                report["stages"]["market_guard_forecasts"] = predict_forward(current, guard, args.output / "market_guard")
+                current = guard_inputs(args.output, report["stages"].get("collection", {}), started)
+                report["stages"]["market_guard_forecasts"] = (
+                    {"status": "skipped", "reason": "HOURLY_SLOT_ALREADY_ATTEMPTED", "forecast_vectors": 0}
+                    if current is None else predict_forward(current, guard, args.output / "market_guard"))
     if db is not None or rows is not None:
         from backend.ml.weather_learning.evaluation import forward_report
         with progress.stage("forward_evaluation"):
