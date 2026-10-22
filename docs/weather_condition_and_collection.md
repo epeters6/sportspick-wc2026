@@ -96,6 +96,10 @@ catalog candidates and 96 rule-verified contracts across six currently listed
 stations in two requests (about 1.45 seconds); one candidate failed station
 verification. No order books or historical forecasts were requested by that
 probe. This is catalog verification, not a completed hosted collection run.
+A subsequent fresh-process check of both venues completed in 47.34 seconds,
+with 456 verified Kalshi contracts and 96 verified Polymarket contracts across
+40 catalog requests, zero discovery errors and zero database writes. The same
+single unsupported-station candidate remained rejected. Quotes were not fetched.
 
 Hosted verification must occur after merge on an ordinary eligible run, with
 persisted snapshots and guard artifacts checked. Unit-test CI remains disabled.

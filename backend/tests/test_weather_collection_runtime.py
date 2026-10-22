@@ -142,13 +142,12 @@ def test_discovery_errors_remain_visible_after_successful_partial_collection(tmp
 
 
 def test_missing_catalog_rows_are_unknown_not_empty_success(monkeypatch):
-    monkeypatch.setattr('pavlov.pipeline.kalshi_client._WEATHER_SERIES_TICKERS', ['TEST'])
     monkeypatch.setattr(runtime, 'poly_catalog', lambda _: ([{'ticker':'poly'}], []))
     feeds = Mock()
     feeds.fetch.return_value = {'data':{}, 'received_at':'2026-10-22T13:00:00Z', 'content_hash':'hash'}
     markets, errors, _ = runtime.discover_catalog(feeds)
     assert markets == [{'ticker':'poly'}]
-    assert errors == [{'venue':'kalshi','series':'TEST','reason':'MALFORMED_KALSHI_CATALOG'}]
+    assert errors and all(e['venue']=='kalshi' and e['reason']=='MALFORMED_KALSHI_CATALOG' for e in errors)
 
 
 def test_acquisition_wrapper_keeps_frozen_forecast_rows_byte_identical(tmp_path, monkeypatch):

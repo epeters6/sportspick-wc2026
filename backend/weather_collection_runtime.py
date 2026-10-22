@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,6 +108,12 @@ def poly_catalog(feeds):
 
 
 def discover_catalog(feeds):
+    # Legacy Kalshi imports use the standalone Pavlov config module. Preserve
+    # the frozen discovery entry point's initialization in a fresh process.
+    os.environ["PAVLOV_BYPASS_CONFIG"] = "1"
+    pavlov_path = str(Path(__file__).resolve().parents[1] / "pavlov")
+    if pavlov_path not in sys.path:
+        sys.path.insert(0, pavlov_path)
     from pavlov.pipeline.kalshi_client import _WEATHER_SERIES_TICKERS, _parse_market
     markets, errors, receipts = [], [], []
     for series in _WEATHER_SERIES_TICKERS:
