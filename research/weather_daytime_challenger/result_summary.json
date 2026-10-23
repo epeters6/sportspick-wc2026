@@ -1,0 +1,395 @@
+{
+  "run_id": "374f1fb3fc545bf0c87b50a6523d0ab1567ae80929a92a48e101ffd8a946806a",
+  "identity": {
+    "spec_hash": "dbce84c22d2014117c0572a325c9e55a586bc2bdc095308f19c6c4eebd7e4a24",
+    "implementation_hash": "17680873caf2214347e34c7da12e86e4c997d7525e892a509a1dbe924f3d75df",
+    "input_sha256": "a932f1da8fa62cbaf04fcf3e314e6b01d3472aa031b73c4552b35132f59ed8b1",
+    "status_sha256": "ae8044cae4fc80fa0acd71ed412863cb31391402fd0061085977ad361625d25a",
+    "market_input_sha256": "7566329065f783920c9215c86d35714a313d40e43d5dd9392f1555f51f6cda4d",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1"
+  },
+  "artifact_id": "cdb40e8ee7408c3183b3931fbea4d21ca7fb549c567a91d268f08cb66ca31606",
+  "report_hash": "b4001ae8d3d10e5188fb435adceb38ac5e28d13103707ae3553e7fbe9e494759",
+  "created_at": "2026-10-23T04:11:09.404590+00:00",
+  "status": "separate_challenger_tested_no_promotion",
+  "limitations": [
+    "Previously inspected months; exploratory research, not an unseen holdout.",
+    "Historical forecast publication and CLI label timing are unverified; three-day temperature label lag is assumed.",
+    "Earlier evaluation labels may enter later temperature fits; market guard is frozen before its test decisions.",
+    "A probability adjustment is not proven by matching the market. Few date blocks limit uncertainty estimates.",
+    "No retrospective predictions are written as prospective decisions. Quote sensitivity is not realized profit."
+  ],
+  "live_ready": false,
+  "paper_execution_enabled": false,
+  "profitability_proven": false,
+  "frozen_daytime_changed": false,
+  "hosted_backfill_changed": false,
+  "coverage": {
+    "source_station_dates": 4153,
+    "source_dates": 198,
+    "stations": [
+      "KATL",
+      "KAUS",
+      "KBOS",
+      "KDCA",
+      "KDEN",
+      "KDFW",
+      "KHOU",
+      "KIAH",
+      "KLAS",
+      "KLAX",
+      "KMDW",
+      "KMIA",
+      "KMSP",
+      "KNYC",
+      "KOKC",
+      "KORD",
+      "KPHL",
+      "KPHX",
+      "KSAT",
+      "KSEA",
+      "KSFO"
+    ]
+  },
+  "temperature": {
+    "station_dates": 608,
+    "dates": [
+      "2026-09-20",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-26",
+      "2026-09-27",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-03",
+      "2026-10-04",
+      "2026-10-05",
+      "2026-10-06",
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-10",
+      "2026-10-11",
+      "2026-10-12",
+      "2026-10-13",
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-16",
+      "2026-10-17",
+      "2026-10-18"
+    ],
+    "overall": {
+      "reference_gaussian": {
+        "mae_f": 2.3094911280442325,
+        "forecast_bias_f": 0.03883165379495912,
+        "crps_f": 1.6898827808743366,
+        "nll": 2.5124341032810507,
+        "coverage_50": 0.6036184210526315,
+        "width_50_f": 4.441792169351857,
+        "miss_below_50": 0.20723684210526316,
+        "miss_above_50": 0.18914473684210525,
+        "interval_score_50_f": 7.6809002082386195,
+        "coverage_80": 0.84375,
+        "width_80_f": 8.439543679947366,
+        "miss_below_80": 0.0805921052631579,
+        "miss_above_80": 0.0756578947368421,
+        "interval_score_80_f": 11.206721250410856,
+        "coverage_90": 0.9243421052631579,
+        "width_90_f": 10.832037044001167,
+        "miss_below_90": 0.03453947368421053,
+        "miss_above_90": 0.04111842105263158,
+        "interval_score_90_f": 13.354639142300474,
+        "coverage_95": 0.9555921052631579,
+        "width_95_f": 12.907168235263496,
+        "miss_below_95": 0.024671052631578948,
+        "miss_above_95": 0.019736842105263157,
+        "interval_score_95_f": 15.408947969989086,
+        "rmse_f": 3.144949094860642
+      },
+      "calibrated_shape": {
+        "mae_f": 2.3094911280442325,
+        "forecast_bias_f": 0.03883165379495912,
+        "crps_f": 1.6776649123451417,
+        "nll": 2.4988842519135033,
+        "coverage_50": 0.5115131578947368,
+        "width_50_f": 3.6933988191293654,
+        "miss_below_50": 0.24835526315789475,
+        "miss_above_50": 0.24013157894736842,
+        "interval_score_50_f": 7.5801710386831305,
+        "coverage_80": 0.7927631578947368,
+        "width_80_f": 7.370068589718891,
+        "miss_below_80": 0.10855263157894737,
+        "miss_above_80": 0.09868421052631579,
+        "interval_score_80_f": 11.084538664708113,
+        "coverage_90": 0.8848684210526315,
+        "width_90_f": 9.871881861557025,
+        "miss_below_90": 0.054276315789473686,
+        "miss_above_90": 0.06085526315789474,
+        "interval_score_90_f": 13.392155495674178,
+        "coverage_95": 0.9490131578947368,
+        "width_95_f": 12.607842728494392,
+        "miss_below_95": 0.02631578947368421,
+        "miss_above_95": 0.024671052631578948,
+        "interval_score_95_f": 15.529530530408579,
+        "rmse_f": 3.144949094860642
+      }
+    },
+    "paired_uncertainty": {
+      "calendar_blocks": 5,
+      "calendar_block_days": 7,
+      "scores": {
+        "mae_f": {
+          "candidate_minus_baseline": 0.0,
+          "bootstrap_95_percent_interval": [
+            0.0,
+            0.0
+          ]
+        },
+        "crps_f": {
+          "candidate_minus_baseline": -0.012217868529195186,
+          "bootstrap_95_percent_interval": [
+            -0.031074570725636047,
+            0.000358049433236843
+          ]
+        }
+      },
+      "interpretation": "Exploratory; few calendar blocks, no multiple-comparison or model-selection guarantee."
+    }
+  },
+  "market": {
+    "status": "retrospective_only_market_fallback",
+    "test_dates": [
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-03",
+      "2026-10-04"
+    ],
+    "test_station_dates": 76,
+    "test_vectors": 96,
+    "scores": {
+      "market": {
+        "brier": 0.6889026146688344,
+        "log_loss": 1.353487324615478
+      },
+      "saved_original": {
+        "brier": 0.74311971829668,
+        "log_loss": 1.4504219612534412
+      },
+      "reference": {
+        "brier": 0.8450147980996496,
+        "log_loss": 1.8186515849853042
+      },
+      "candidate": {
+        "brier": 0.8408240363078738,
+        "log_loss": 1.798275454958741
+      },
+      "guarded": {
+        "brier": 0.6889026146688344,
+        "log_loss": 1.353487324615478
+      }
+    },
+    "by_venue": {
+      "kalshi": {
+        "market": {
+          "brier": 0.6869762353610821,
+          "log_loss": 1.3429916652340612
+        },
+        "saved_original": {
+          "brier": 0.7424361765416629,
+          "log_loss": 1.4444086412569495
+        },
+        "reference": {
+          "brier": 0.8450147980996496,
+          "log_loss": 1.8186515849853042
+        },
+        "candidate": {
+          "brier": 0.8408240363078738,
+          "log_loss": 1.798275454958741
+        },
+        "guarded": {
+          "brier": 0.6869762353610821,
+          "log_loss": 1.3429916652340612
+        }
+      },
+      "polymarket": {
+        "market": {
+          "brier": 0.683623634737439,
+          "log_loss": 1.3357038194094382
+        },
+        "saved_original": {
+          "brier": 0.7684476223891272,
+          "log_loss": 1.497063357794734
+        },
+        "reference": {
+          "brier": 0.9419302408238168,
+          "log_loss": 1.963902103320741
+        },
+        "candidate": {
+          "brier": 0.9448797605836661,
+          "log_loss": 1.9692127435775892
+        },
+        "guarded": {
+          "brier": 0.683623634737439,
+          "log_loss": 1.3357038194094382
+        }
+      }
+    },
+    "guard_reasons": {
+      "no_qualified_gain": 96
+    },
+    "guard": {
+      "weight": 0.0,
+      "reason": "no_qualified_gain",
+      "dates": [
+        "2026-09-21",
+        "2026-09-22",
+        "2026-09-23",
+        "2026-09-24",
+        "2026-09-25",
+        "2026-09-26",
+        "2026-09-27",
+        "2026-09-28",
+        "2026-09-29"
+      ],
+      "station_dates": 153,
+      "latest_label_at": "2026-09-30T12:18:12.878041+00:00",
+      "fit_before": "2026-09-30T12:23:37.025395+00:00",
+      "selection_used_test_outcomes": false
+    },
+    "cost_sensitivity": {
+      "reference": {
+        "kalshi": {
+          "0.0": {
+            "contracts": 73,
+            "station_dates": 73,
+            "hypothetical_unit_pnl": -0.03500000000000016,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.01": {
+            "contracts": 71,
+            "station_dates": 71,
+            "hypothetical_unit_pnl": -0.5850000000000002,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.03": {
+            "contracts": 66,
+            "station_dates": 66,
+            "hypothetical_unit_pnl": -1.3800000000000003,
+            "missing_cost_evidence_buckets": 5
+          }
+        },
+        "polymarket": {
+          "0.0": {
+            "contracts": 15,
+            "station_dates": 15,
+            "hypothetical_unit_pnl": -2.325,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.01": {
+            "contracts": 15,
+            "station_dates": 15,
+            "hypothetical_unit_pnl": -2.475,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.03": {
+            "contracts": 15,
+            "station_dates": 15,
+            "hypothetical_unit_pnl": -2.7750000000000004,
+            "missing_cost_evidence_buckets": 0
+          }
+        }
+      },
+      "candidate": {
+        "kalshi": {
+          "0.0": {
+            "contracts": 72,
+            "station_dates": 72,
+            "hypothetical_unit_pnl": -0.9900000000000002,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.01": {
+            "contracts": 67,
+            "station_dates": 67,
+            "hypothetical_unit_pnl": -1.1050000000000002,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.03": {
+            "contracts": 63,
+            "station_dates": 63,
+            "hypothetical_unit_pnl": -1.9750000000000003,
+            "missing_cost_evidence_buckets": 5
+          }
+        },
+        "polymarket": {
+          "0.0": {
+            "contracts": 15,
+            "station_dates": 15,
+            "hypothetical_unit_pnl": -2.395,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.01": {
+            "contracts": 15,
+            "station_dates": 15,
+            "hypothetical_unit_pnl": -2.5450000000000004,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.03": {
+            "contracts": 14,
+            "station_dates": 14,
+            "hypothetical_unit_pnl": -2.7800000000000002,
+            "missing_cost_evidence_buckets": 0
+          }
+        }
+      },
+      "guarded": {
+        "kalshi": {
+          "0.0": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.01": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.03": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 5
+          }
+        },
+        "polymarket": {
+          "0.0": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.01": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.03": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 0
+          }
+        }
+      }
+    }
+  }
+}
