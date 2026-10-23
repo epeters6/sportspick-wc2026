@@ -1,0 +1,91 @@
+{
+  "version": "weather_daytime_challenger_v1",
+  "metric": "high",
+  "stations": [
+    "KATL",
+    "KAUS",
+    "KBOS",
+    "KDCA",
+    "KDEN",
+    "KDFW",
+    "KHOU",
+    "KIAH",
+    "KLAS",
+    "KLAX",
+    "KMDW",
+    "KMIA",
+    "KMSP",
+    "KNYC",
+    "KOKC",
+    "KORD",
+    "KPHL",
+    "KPHX",
+    "KSAT",
+    "KSEA",
+    "KSFO"
+  ],
+  "start": "2026-04-03",
+  "end": "2026-10-18",
+  "temperature_test_start": "2026-09-20",
+  "assumed_label_lag_days": 3,
+  "mean": "PR20 rolling residual recentering; unchanged PR19 reference width",
+  "shape": "Symmetric piecewise-normal quantile warp of earlier standardized prediction errors",
+  "shape_window_days": 60,
+  "minimum_shape_station_dates": 21,
+  "shape_pool_prior": 30,
+  "coverages": [
+    0.5,
+    0.8,
+    0.9,
+    0.95
+  ],
+  "shape_scale_bounds": [
+    0.5,
+    1.5
+  ],
+  "market_cal_start": "2026-09-21",
+  "market_cal_end": "2026-09-29",
+  "market_test_start": "2026-10-01",
+  "market_test_end": "2026-10-18",
+  "minimum_guard_dates": 7,
+  "minimum_guard_station_dates": 75,
+  "minimum_band_station_dates": 40,
+  "market_probability_bins": [
+    0.0,
+    0.05,
+    0.15,
+    0.35,
+    0.65,
+    1.000001
+  ],
+  "weights": [
+    0.0,
+    0.1,
+    0.25,
+    0.5
+  ],
+  "maximum_probability_change": 0.05,
+  "minimum_gain": 0.001,
+  "minimum_fraction_dates_improved": 0.6,
+  "bootstrap_calendar_days": 3,
+  "bootstrap_samples": 2000,
+  "seed": 231,
+  "minimum_edge_after_cost": 0.05,
+  "extra_slippage": [
+    0.0,
+    0.01,
+    0.03
+  ],
+  "decision_hours_local": [
+    8,
+    11,
+    14,
+    17
+  ],
+  "sampling": "First valid saved next-day high vector per venue/station/date; venues share station/date weight",
+  "selection": "Earlier calibration labels only; both proper scores and positive-adjustment price bands must pass; otherwise market",
+  "evaluation": "Exploratory replay of previously inspected months, never an unseen holdout",
+  "mode": "offline_research",
+  "live_ready": false,
+  "paper_execution_enabled": false
+}
