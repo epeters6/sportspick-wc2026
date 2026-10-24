@@ -1,0 +1,169 @@
+{
+  "station": "KPHL",
+  "target": "2026-10-24",
+  "no_database_writes": true,
+  "no_paper_decisions": true,
+  "models": {
+    "gfs_global": {
+      "status": "verified",
+      "current": {
+        "model": "gfs_global",
+        "station": "KPHL",
+        "target_date": "2026-10-24",
+        "initialization_at": "2026-10-23T06:00:00+00:00",
+        "received_at": "2026-10-23T20:44:27.372518+00:00",
+        "available_by": "2026-10-23T20:44:27.372518+00:00",
+        "availability_basis": "successful_exact_run_response",
+        "exact_publication_time_verified": false,
+        "known_before_decision": true,
+        "run_age_hours": 14.741455973055555,
+        "receipt_age_seconds": 1.868985,
+        "receipt_id": "3ab8533a80850b972d62896cc526d7c1a492358b54ec194a536b2dd520923393",
+        "standard_day_start": "2026-10-24T05:00:00+00:00",
+        "standard_day_end": "2026-10-25T05:00:00+00:00",
+        "grid": {
+          "latitude": 39.88936,
+          "longitude": -75.234375,
+          "elevation": 2.0
+        },
+        "high_f": 64.1,
+        "low_f": 49.1
+      },
+      "previous": {
+        "model": "gfs_global",
+        "station": "KPHL",
+        "target_date": "2026-10-24",
+        "initialization_at": "2026-10-23T00:00:00+00:00",
+        "received_at": "2026-10-23T20:44:29.234751+00:00",
+        "available_by": "2026-10-23T20:44:29.234751+00:00",
+        "availability_basis": "successful_exact_run_response",
+        "exact_publication_time_verified": false,
+        "known_before_decision": true,
+        "run_age_hours": 20.741455973055555,
+        "receipt_age_seconds": 0.006752,
+        "receipt_id": "682202cb05ff7f6660c721f1583a10d7f00e5bf93d74fab2bf8554ad564eb7a0",
+        "standard_day_start": "2026-10-24T05:00:00+00:00",
+        "standard_day_end": "2026-10-25T05:00:00+00:00",
+        "grid": {
+          "latitude": 39.88936,
+          "longitude": -75.234375,
+          "elevation": 2.0
+        },
+        "high_f": 64.3,
+        "low_f": 49.6
+      },
+      "high_revision_f": -0.20000000000000284,
+      "low_revision_f": -0.5,
+      "revision_kind": "exact_initialization_run_change",
+      "first_seen_order_required": false
+    },
+    "gfs_hrrr": {
+      "status": "verified",
+      "current": {
+        "model": "gfs_hrrr",
+        "station": "KPHL",
+        "target_date": "2026-10-24",
+        "initialization_at": "2026-10-23T18:00:00+00:00",
+        "received_at": "2026-10-23T20:44:35.357494+00:00",
+        "available_by": "2026-10-23T20:44:35.357494+00:00",
+        "availability_basis": "successful_exact_run_response",
+        "exact_publication_time_verified": false,
+        "known_before_decision": true,
+        "run_age_hours": 2.7436467766666666,
+        "receipt_age_seconds": 1.770902,
+        "receipt_id": "05d842e0f64e9bbe4e3d00564e5b0436a6d5bfe5d84e698bfb850a8d3bab3743",
+        "standard_day_start": "2026-10-24T05:00:00+00:00",
+        "standard_day_end": "2026-10-25T05:00:00+00:00",
+        "grid": {
+          "latitude": 39.863625,
+          "longitude": -75.22328,
+          "elevation": 2.0
+        },
+        "high_f": 60.4,
+        "low_f": 38.7
+      },
+      "previous": {
+        "model": "gfs_hrrr",
+        "station": "KPHL",
+        "target_date": "2026-10-24",
+        "initialization_at": "2026-10-23T12:00:00+00:00",
+        "received_at": "2026-10-23T20:44:37.123117+00:00",
+        "available_by": "2026-10-23T20:44:37.123117+00:00",
+        "availability_basis": "successful_exact_run_response",
+        "exact_publication_time_verified": false,
+        "known_before_decision": true,
+        "run_age_hours": 8.743646776666667,
+        "receipt_age_seconds": 0.005279,
+        "receipt_id": "8d09badf20fb64ebc4e0af89b53f5ee4aa5a782b8359210fe6980113790daad7",
+        "standard_day_start": "2026-10-24T05:00:00+00:00",
+        "standard_day_end": "2026-10-25T05:00:00+00:00",
+        "grid": {
+          "latitude": 39.863625,
+          "longitude": -75.22328,
+          "elevation": 2.0
+        },
+        "high_f": 60.6,
+        "low_f": 39.4
+      },
+      "high_revision_f": -0.20000000000000284,
+      "low_revision_f": -0.6999999999999957,
+      "revision_kind": "exact_initialization_run_change",
+      "first_seen_order_required": false
+    },
+    "ecmwf_ifs025": {
+      "status": "verified",
+      "current": {
+        "model": "ecmwf_ifs025",
+        "station": "KPHL",
+        "target_date": "2026-10-24",
+        "initialization_at": "2026-10-23T06:00:00+00:00",
+        "received_at": "2026-10-23T20:44:41.624193+00:00",
+        "available_by": "2026-10-23T20:44:41.624193+00:00",
+        "availability_basis": "successful_exact_run_response",
+        "exact_publication_time_verified": false,
+        "known_before_decision": true,
+        "run_age_hours": 14.74546061388889,
+        "receipt_age_seconds": 2.034017,
+        "receipt_id": "7cb2e057282ed8038526fe47dcc248a23ae201613d94ff9759118fcee541d953",
+        "standard_day_start": "2026-10-24T05:00:00+00:00",
+        "standard_day_end": "2026-10-25T05:00:00+00:00",
+        "grid": {
+          "latitude": 39.75,
+          "longitude": -75.25,
+          "elevation": 2.0
+        },
+        "high_f": 60.6,
+        "low_f": 38.6
+      },
+      "previous": {
+        "model": "ecmwf_ifs025",
+        "station": "KPHL",
+        "target_date": "2026-10-24",
+        "initialization_at": "2026-10-23T00:00:00+00:00",
+        "received_at": "2026-10-23T20:44:43.650615+00:00",
+        "available_by": "2026-10-23T20:44:43.650615+00:00",
+        "availability_basis": "successful_exact_run_response",
+        "exact_publication_time_verified": false,
+        "known_before_decision": true,
+        "run_age_hours": 20.745460613888888,
+        "receipt_age_seconds": 0.007595,
+        "receipt_id": "c2e07753f7e4e90349a6c1aed48781b3841a45b96e42c795680dc6e33945509a",
+        "standard_day_start": "2026-10-24T05:00:00+00:00",
+        "standard_day_end": "2026-10-25T05:00:00+00:00",
+        "grid": {
+          "latitude": 39.75,
+          "longitude": -75.25,
+          "elevation": 2.0
+        },
+        "high_f": 60.6,
+        "low_f": 38.6
+      },
+      "high_revision_f": 0.0,
+      "low_revision_f": 0.0,
+      "revision_kind": "exact_initialization_run_change",
+      "first_seen_order_required": false
+    }
+  },
+  "completed_at": "2026-10-23T20:44:43.658210+00:00",
+  "location_units": 6
+}
