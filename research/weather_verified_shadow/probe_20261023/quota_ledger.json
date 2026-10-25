@@ -1,0 +1,98 @@
+[
+  {
+    "reserved_at": "2026-10-23T20:44:25.453210+00:00",
+    "url": "https://single-runs-api.open-meteo.com/v1/forecast",
+    "params": {
+      "latitude": 39.87328,
+      "longitude": -75.22682,
+      "elevation": 2,
+      "models": "gfs_global",
+      "run": "2026-10-23T06:00",
+      "hourly": "temperature_2m",
+      "forecast_days": 3,
+      "temperature_unit": "fahrenheit",
+      "timeformat": "unixtime",
+      "timezone": "GMT"
+    }
+  },
+  {
+    "reserved_at": "2026-10-23T20:44:27.378358+00:00",
+    "url": "https://single-runs-api.open-meteo.com/v1/forecast",
+    "params": {
+      "latitude": 39.87328,
+      "longitude": -75.22682,
+      "elevation": 2,
+      "models": "gfs_global",
+      "run": "2026-10-23T00:00",
+      "hourly": "temperature_2m",
+      "forecast_days": 3,
+      "temperature_unit": "fahrenheit",
+      "timeformat": "unixtime",
+      "timezone": "GMT"
+    }
+  },
+  {
+    "reserved_at": "2026-10-23T20:44:32.408136+00:00",
+    "url": "https://single-runs-api.open-meteo.com/v1/forecast",
+    "params": {
+      "latitude": 39.87328,
+      "longitude": -75.22682,
+      "elevation": 2,
+      "models": "gfs_hrrr",
+      "run": "2026-10-23T18:00",
+      "hourly": "temperature_2m",
+      "forecast_days": 3,
+      "temperature_unit": "fahrenheit",
+      "timeformat": "unixtime",
+      "timezone": "GMT"
+    }
+  },
+  {
+    "reserved_at": "2026-10-23T20:44:35.363662+00:00",
+    "url": "https://single-runs-api.open-meteo.com/v1/forecast",
+    "params": {
+      "latitude": 39.87328,
+      "longitude": -75.22682,
+      "elevation": 2,
+      "models": "gfs_hrrr",
+      "run": "2026-10-23T12:00",
+      "hourly": "temperature_2m",
+      "forecast_days": 3,
+      "temperature_unit": "fahrenheit",
+      "timeformat": "unixtime",
+      "timezone": "GMT"
+    }
+  },
+  {
+    "reserved_at": "2026-10-23T20:44:39.264087+00:00",
+    "url": "https://single-runs-api.open-meteo.com/v1/forecast",
+    "params": {
+      "latitude": 39.87328,
+      "longitude": -75.22682,
+      "elevation": 2,
+      "models": "ecmwf_ifs025",
+      "run": "2026-10-23T06:00",
+      "hourly": "temperature_2m",
+      "forecast_days": 3,
+      "temperature_unit": "fahrenheit",
+      "timeformat": "unixtime",
+      "timezone": "GMT"
+    }
+  },
+  {
+    "reserved_at": "2026-10-23T20:44:41.631384+00:00",
+    "url": "https://single-runs-api.open-meteo.com/v1/forecast",
+    "params": {
+      "latitude": 39.87328,
+      "longitude": -75.22682,
+      "elevation": 2,
+      "models": "ecmwf_ifs025",
+      "run": "2026-10-23T00:00",
+      "hourly": "temperature_2m",
+      "forecast_days": 3,
+      "temperature_unit": "fahrenheit",
+      "timeformat": "unixtime",
+      "timezone": "GMT"
+    }
+  }
+]

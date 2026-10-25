@@ -266,3 +266,50 @@ jobs:
             reports/weather_daytime_paper/latest.json
             reports/weather_daytime_paper/decision/**
             reports/weather_daytime_paper/settlement/**
+
+  verified-run-shadow:
+    # Separately initialized, no accounts or orders. Existing jobs stay frozen.
+    if: github.ref == 'refs/heads/main' && vars.WEATHER_VERIFIED_RUN_SHADOW_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env: *weather_environment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            pavlov/requirements.txt
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r pavlov/requirements.txt
+      - name: Require the ordinary current weather trigger
+        id: dispatch
+        env:
+          WEATHER_SCHEDULED_FOR: ${{ inputs.scheduled_for }}
+        run: python scripts/check_weather_dispatch.py weather
+      - name: Capture and grade the isolated forecast-age comparison
+        if: steps.dispatch.outputs.execute == 'true'
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: python -m scripts.run_weather_verified_shadow
+      - name: Preserve verified-run shadow evidence
+        if: always() && steps.dispatch.outputs.execute == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: weather-verified-run-shadow-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: warn
+          path: |
+            research/weather_daytime_paper/model.json
+            reports/weather_verified_shadow/latest.json
+            reports/weather_verified_shadow/spec/**
+            reports/weather_verified_shadow/receipt/**
+            reports/weather_verified_shadow/metadata/**
+            reports/weather_verified_shadow/decision/**
+            reports/weather_verified_shadow/settlement/**
+            reports/weather_verified_shadow/public_cache/**

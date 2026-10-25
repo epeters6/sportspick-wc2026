@@ -1,0 +1,57 @@
+{
+  "metadata_receipt_id": "dee4ac2d8bf85976e61b05692c909500e9cce55a2bd2f6ea5be83d9eab07730a",
+  "pair": {
+    "current": {
+      "model": "gfs_global",
+      "station": "KPHL",
+      "target_date": "2026-10-25",
+      "initialization_at": "2026-10-24T12:00:00+00:00",
+      "received_at": "2026-10-24T23:12:15.919719+00:00",
+      "available_by": "2026-10-24T23:12:15.919719+00:00",
+      "availability_basis": "successful_exact_run_response",
+      "exact_publication_time_verified": false,
+      "known_before_decision": true,
+      "run_age_hours": 11.205202401666668,
+      "receipt_age_seconds": 2.808927,
+      "receipt_id": "13ef5cc366c5c86122d7c3cf8ac51e3264cbeb9c9b42b9e529ce12288768ce16",
+      "standard_day_start": "2026-10-25T05:00:00+00:00",
+      "standard_day_end": "2026-10-26T05:00:00+00:00",
+      "grid": {
+        "latitude": 39.88936,
+        "longitude": -75.234375,
+        "elevation": 2.0
+      },
+      "high_f": 66.2,
+      "low_f": 49.5
+    },
+    "previous": {
+      "model": "gfs_global",
+      "station": "KPHL",
+      "target_date": "2026-10-25",
+      "initialization_at": "2026-10-24T06:00:00+00:00",
+      "received_at": "2026-10-24T23:12:18.721001+00:00",
+      "available_by": "2026-10-24T23:12:18.721001+00:00",
+      "availability_basis": "successful_exact_run_response",
+      "exact_publication_time_verified": false,
+      "known_before_decision": true,
+      "run_age_hours": 17.205202401666668,
+      "receipt_age_seconds": 0.007645,
+      "receipt_id": "4a6f13865df1f9ea31af97b252bbd634b1073717679cddd876b38b73a167c9e1",
+      "standard_day_start": "2026-10-25T05:00:00+00:00",
+      "standard_day_end": "2026-10-26T05:00:00+00:00",
+      "grid": {
+        "latitude": 39.88936,
+        "longitude": -75.234375,
+        "elevation": 2.0
+      },
+      "high_f": 66.2,
+      "low_f": 49.2
+    },
+    "high_revision_f": 0.0,
+    "low_revision_f": 0.29999999999999716,
+    "revision_kind": "exact_initialization_run_change",
+    "first_seen_order_required": false
+  },
+  "location_units": 2,
+  "completed_at": "2026-10-24T23:12:18.731735+00:00"
+}
