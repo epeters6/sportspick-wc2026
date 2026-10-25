@@ -1,0 +1,144 @@
+{
+  "protocol_id": "810ddfe5adea57b1cea9680f52045232b00b38141a413089ff7b3be99c389219",
+  "observed_at": "2026-10-25T18:23:09.742132+00:00",
+  "status": "awaiting_verified_revision_training_data",
+  "artifact_decisions_verified": 1,
+  "forecast_receipts_verified": 6,
+  "official_settlements_verified": 0,
+  "eligible_feature_vectors": {},
+  "verified_feature_inventory": {
+    "kalshi:KDEN:2026-10-26": {
+      "decision_fingerprint": "ba09993c47e8c63c2665ba039e3f7990351d3037bc96dc5572d8e3eab6c9ebef",
+      "target_date": "2026-10-26",
+      "reason": null,
+      "features": [
+        [
+          -0.3869094110806684,
+          -0.24192698719278308,
+          0.010107304985869245,
+          -0.14358034226765698
+        ],
+        [
+          0.11326766625823888,
+          0.12946996121610188,
+          -0.002103262705956754,
+          0.01837959063833415
+        ],
+        [
+          0.1411811208257618,
+          0.07727115222766795,
+          -0.0039397823196729515,
+          0.08451175669027484
+        ],
+        [
+          0.08894198816668368,
+          0.02783062153632492,
+          -0.002740980159258203,
+          0.039749697590004525
+        ],
+        [
+          0.033909256834900474,
+          0.006335553847281907,
+          -0.0010470185426628715,
+          0.007344421732349649
+        ],
+        [
+          0.009609378995083616,
+          0.001019698365406422,
+          -0.00027626125831846566,
+          -0.006405124383306357
+        ]
+      ],
+      "diagnostic_only_not_training_eligibility": true
+    }
+  },
+  "coverage": {
+    "train": {
+      "rows": 0,
+      "station_dates": 0,
+      "dates": 0,
+      "stations": 0
+    },
+    "validation": {
+      "rows": 0,
+      "station_dates": 0,
+      "dates": 0,
+      "stations": 0
+    },
+    "test": {
+      "rows": 0,
+      "station_dates": 0,
+      "dates": 0,
+      "stations": 0
+    }
+  },
+  "excluded_or_pending": {
+    "DECISION_BEFORE_PROTOCOL": 1
+  },
+  "decision_fingerprints": [
+    "ba09993c47e8c63c2665ba039e3f7990351d3037bc96dc5572d8e3eab6c9ebef"
+  ],
+  "settlement_fingerprints": [],
+  "fit": {
+    "fitted": false,
+    "selected": "market",
+    "reason": "FIXED_TRAINING_VALIDATION_WINDOWS_PENDING",
+    "candidate_coefficients": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "selected_coefficients": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "retrospective_test": {
+    "paired_station_dates": 0,
+    "paired_target_dates": 0,
+    "scores": {
+      "brier": null,
+      "log_loss": null
+    },
+    "same_rows_market": {
+      "brier": null,
+      "log_loss": null
+    },
+    "minus_market": {
+      "brier": {
+        "mean": null,
+        "interval_95": null,
+        "target_dates": 0,
+        "station_dates": 0
+      },
+      "log_loss": {
+        "mean": null,
+        "interval_95": null,
+        "target_dates": 0,
+        "station_dates": 0
+      }
+    },
+    "quote_only_cost_sensitivity": {}
+  },
+  "test_support_sufficient": false,
+  "replayed_test_vectors": {},
+  "live_ready": false,
+  "paper_execution_enabled": false,
+  "profitability_proven": false,
+  "new_forward_predictions": 0,
+  "collector_extension_authorized": false,
+  "limitations": [
+    "Offline replay only. These challenger probabilities were not saved before outcomes.",
+    "Current PR24 collection ends November 5 and cannot meet the full training/validation/test windows.",
+    "Additional prospective collection needs separate authorization; this code does not extend it.",
+    "The 3F kernel is a fixed feature basis, not an estimated or calibrated forecast uncertainty.",
+    "Same station/date across venues shares weight. Model agreement is not independent evidence.",
+    "Missing models/labels and unsupported cases are coverage gaps, not zero-return trades.",
+    "Quote-only costs with 1c/3c sensitivity do not establish fills, profit, or live readiness.",
+    "Passing validation would only select an offline challenger, never deploy it."
+  ],
+  "evidence_hash": "833fe312a93a6289be22a87b928a2a4ec71800e230903917308d94130b02443e"
+}

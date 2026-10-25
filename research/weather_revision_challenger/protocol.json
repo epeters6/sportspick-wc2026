@@ -1,0 +1,48 @@
+{
+  "spec": {
+    "version": "weather_revision_challenger_v1",
+    "models": [
+      "gfs_global",
+      "gfs_hrrr",
+      "ecmwf_ifs025"
+    ],
+    "first_target": "2026-10-27",
+    "train_end": "2026-11-09",
+    "validation_start": "2026-11-12",
+    "validation_end": "2026-11-18",
+    "test_start": "2026-11-21",
+    "test_end": "2026-11-27",
+    "features": [
+      "gfs_revision",
+      "hrrr_revision",
+      "ecmwf_revision",
+      "consensus_minus_market"
+    ],
+    "kernel_width_f": 3.0,
+    "coefficient_bound": 2.0,
+    "ridge": 0.1,
+    "maximum_probability_change": 0.025,
+    "minimum_gain": 0.001,
+    "minimum_train_dates": 14,
+    "minimum_train_station_dates": 100,
+    "minimum_validation_dates": 7,
+    "minimum_validation_station_dates": 50,
+    "minimum_stations": 10,
+    "minimum_test_dates": 7,
+    "minimum_test_station_dates": 50,
+    "minimum_fraction_validation_dates_improved": 0.7,
+    "minimum_quote_edge": 0.05,
+    "slippage_stress": [
+      0.0,
+      0.01,
+      0.03
+    ],
+    "collector_extension_authorized": false,
+    "mode": "offline_research",
+    "paper_execution_enabled": false,
+    "live_ready": false
+  },
+  "created_at": "2026-10-25T18:23:09.664442+00:00",
+  "implementation_hash": "c5951798c93b4a26a309f2606b702a5b302fff89d9795a16fe9cd9c70ce0f4c9",
+  "protocol_id": "810ddfe5adea57b1cea9680f52045232b00b38141a413089ff7b3be99c389219"
+}
