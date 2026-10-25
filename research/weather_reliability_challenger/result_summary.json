@@ -1,0 +1,951 @@
+{
+  "run_id": "af21820310efcf6a0d142e1fa0d169c19d309ebc09fb01a99113e24a718c4ecb",
+  "identity": {
+    "spec_hash": "8df7c33960380f529173ff696a13adc3f65fbd5ba56bef1083f1808cbd86dbb0",
+    "implementation_hash": "5c82138c1f67ca77692257143bccd705d9b672afd02f0a3898a6861448605385",
+    "input_sha256": "a932f1da8fa62cbaf04fcf3e314e6b01d3472aa031b73c4552b35132f59ed8b1",
+    "status_sha256": "ae8044cae4fc80fa0acd71ed412863cb31391402fd0061085977ad361625d25a",
+    "market_input_sha256": "7e8a6fbc7eb626380ff61275cb6841282bd55d6eba4f3cb47bd652cfd0382f64",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1"
+  },
+  "artifact_id": "826e7286c17f1593f9230fc399f85962fe021b7bdded2f9c61c79a914ee2a44a",
+  "report_hash": "4469eef42490fe4bc0889a53e57871a7a43c84280092a2d9fe04ecd412a82dd2",
+  "created_at": "2026-10-25T17:00:27.836513+00:00",
+  "status": "offline_challenger_tested_no_promotion",
+  "coverage": {
+    "source_station_dates": 4153,
+    "source_dates": 198,
+    "stations": [
+      "KATL",
+      "KAUS",
+      "KBOS",
+      "KDCA",
+      "KDEN",
+      "KDFW",
+      "KHOU",
+      "KIAH",
+      "KLAS",
+      "KLAX",
+      "KMDW",
+      "KMIA",
+      "KMSP",
+      "KNYC",
+      "KOKC",
+      "KORD",
+      "KPHL",
+      "KPHX",
+      "KSAT",
+      "KSEA",
+      "KSFO"
+    ],
+    "market_quality": {
+      "source_quality": {
+        "input_rows": 33288,
+        "accepted_rows": 31380,
+        "rejected_rows_by_reason": {
+          "INCOMPLETE_OR_CONFLICTING_LABEL_VECTOR": 1908
+        },
+        "station_days": 786,
+        "distinct_dates": 21,
+        "dataset_hash": "8b97c1d9ff1517d0b309a29d1d617cb3509d9917a829230d9bcce09014cae4eb",
+        "matched_vectors": 5230,
+        "matched_station_dates": 394,
+        "matched_dates": 21,
+        "rejected_vectors": {},
+        "input_hash": "d79c892b8c288fec089dc89028bd30b916183cd5edec1adb8622441016ea05c0"
+      },
+      "rejected": {
+        "OUTSIDE_DAYTIME_SCOPE": 3981,
+        "LATER_REPEATED_SNAPSHOT": 637,
+        "NO_COMPLETED_GFS_HISTORY_MATCH": 281
+      }
+    }
+  },
+  "temperature": {
+    "station_dates": 608,
+    "dates": [
+      "2026-09-20",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-26",
+      "2026-09-27",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-03",
+      "2026-10-04",
+      "2026-10-05",
+      "2026-10-06",
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-10",
+      "2026-10-11",
+      "2026-10-12",
+      "2026-10-13",
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-16",
+      "2026-10-17",
+      "2026-10-18"
+    ],
+    "overall": {
+      "raw_mean_same_width": {
+        "mae_f": 2.5055921052631582,
+        "forecast_bias_f": 0.043749999999999734,
+        "crps_f": 1.8046454799681393,
+        "nll": 2.5756298484446716,
+        "coverage_50": 0.45394736842105265,
+        "width_50_f": 3.693398819129364,
+        "miss_below_50": 0.24013157894736842,
+        "miss_above_50": 0.3059210526315789,
+        "interval_score_50_f": 8.13701270863529,
+        "coverage_80": 0.7779605263157895,
+        "width_80_f": 7.370068589718891,
+        "miss_below_80": 0.11019736842105263,
+        "miss_above_80": 0.1118421052631579,
+        "interval_score_80_f": 11.724876515418362,
+        "coverage_90": 0.875,
+        "width_90_f": 9.871881861557025,
+        "miss_below_90": 0.06414473684210527,
+        "miss_above_90": 0.06085526315789474,
+        "interval_score_90_f": 14.183890660969508,
+        "coverage_95": 0.9407894736842105,
+        "width_95_f": 12.607842728494392,
+        "miss_below_95": 0.03453947368421053,
+        "miss_above_95": 0.024671052631578948,
+        "interval_score_95_f": 16.421412049683727,
+        "rmse_f": 3.443682239757474
+      },
+      "reference_gaussian": {
+        "mae_f": 2.3094911280442325,
+        "forecast_bias_f": 0.03883165379495912,
+        "crps_f": 1.6898827808743366,
+        "nll": 2.5124341032810507,
+        "coverage_50": 0.6036184210526315,
+        "width_50_f": 4.441792169351857,
+        "miss_below_50": 0.20723684210526316,
+        "miss_above_50": 0.18914473684210525,
+        "interval_score_50_f": 7.6809002082386195,
+        "coverage_80": 0.84375,
+        "width_80_f": 8.439543679947366,
+        "miss_below_80": 0.0805921052631579,
+        "miss_above_80": 0.0756578947368421,
+        "interval_score_80_f": 11.206721250410856,
+        "coverage_90": 0.9243421052631579,
+        "width_90_f": 10.832037044001167,
+        "miss_below_90": 0.03453947368421053,
+        "miss_above_90": 0.04111842105263158,
+        "interval_score_90_f": 13.354639142300474,
+        "coverage_95": 0.9555921052631579,
+        "width_95_f": 12.907168235263496,
+        "miss_below_95": 0.024671052631578948,
+        "miss_above_95": 0.019736842105263157,
+        "interval_score_95_f": 15.408947969989086,
+        "rmse_f": 3.144949094860642
+      },
+      "pr23": {
+        "mae_f": 2.3094911280442325,
+        "forecast_bias_f": 0.03883165379495912,
+        "crps_f": 1.6776649123451417,
+        "nll": 2.4988842519135033,
+        "coverage_50": 0.5115131578947368,
+        "width_50_f": 3.6933988191293654,
+        "miss_below_50": 0.24835526315789475,
+        "miss_above_50": 0.24013157894736842,
+        "interval_score_50_f": 7.5801710386831305,
+        "coverage_80": 0.7927631578947368,
+        "width_80_f": 7.370068589718891,
+        "miss_below_80": 0.10855263157894737,
+        "miss_above_80": 0.09868421052631579,
+        "interval_score_80_f": 11.084538664708113,
+        "coverage_90": 0.8848684210526315,
+        "width_90_f": 9.871881861557025,
+        "miss_below_90": 0.054276315789473686,
+        "miss_above_90": 0.06085526315789474,
+        "interval_score_90_f": 13.392155495674178,
+        "coverage_95": 0.9490131578947368,
+        "width_95_f": 12.607842728494392,
+        "miss_below_95": 0.02631578947368421,
+        "miss_above_95": 0.024671052631578948,
+        "interval_score_95_f": 15.529530530408579,
+        "rmse_f": 3.144949094860642
+      },
+      "reliability_same_shape": {
+        "mae_f": 2.3383571336670927,
+        "forecast_bias_f": -0.12977664902466102,
+        "crps_f": 1.7059845592133347,
+        "nll": 2.5160750439987534,
+        "coverage_50": 0.5164473684210527,
+        "width_50_f": 3.693398819129364,
+        "miss_below_50": 0.21217105263157895,
+        "miss_above_50": 0.2713815789473684,
+        "interval_score_50_f": 7.6988086527984745,
+        "coverage_80": 0.7927631578947368,
+        "width_80_f": 7.370068589718891,
+        "miss_below_80": 0.09868421052631579,
+        "miss_above_80": 0.10855263157894737,
+        "interval_score_80_f": 11.350997546642043,
+        "coverage_90": 0.881578947368421,
+        "width_90_f": 9.871881861557025,
+        "miss_below_90": 0.05098684210526316,
+        "miss_above_90": 0.06743421052631579,
+        "interval_score_90_f": 13.833949285632421,
+        "coverage_95": 0.9457236842105263,
+        "width_95_f": 12.607842728494392,
+        "miss_below_95": 0.023026315789473683,
+        "miss_above_95": 0.03125,
+        "interval_score_95_f": 16.015408970309608,
+        "rmse_f": 3.2290128229598483
+      },
+      "reliability_global_shape": {
+        "mae_f": 2.3383571336670927,
+        "forecast_bias_f": -0.12977664902466102,
+        "crps_f": 1.7083551547412832,
+        "nll": 2.52463808631156,
+        "coverage_50": 0.5164473684210527,
+        "width_50_f": 3.675529575776943,
+        "miss_below_50": 0.21217105263157895,
+        "miss_above_50": 0.2713815789473684,
+        "interval_score_50_f": 7.718771190359661,
+        "coverage_80": 0.7911184210526315,
+        "width_80_f": 7.49964119465656,
+        "miss_below_80": 0.09703947368421052,
+        "miss_above_80": 0.1118421052631579,
+        "interval_score_80_f": 11.392374888882058,
+        "coverage_90": 0.8848684210526315,
+        "width_90_f": 9.89079387617733,
+        "miss_below_90": 0.047697368421052634,
+        "miss_above_90": 0.06743421052631579,
+        "interval_score_90_f": 13.890508867314876,
+        "coverage_95": 0.944078947368421,
+        "width_95_f": 12.56033642122661,
+        "miss_below_95": 0.024671052631578948,
+        "miss_above_95": 0.03125,
+        "interval_score_95_f": 16.128560269602474,
+        "rmse_f": 3.2290128229598483
+      },
+      "reliability_context_shape": {
+        "mae_f": 2.3383571336670927,
+        "forecast_bias_f": -0.12977664902466102,
+        "crps_f": 1.7118344899787423,
+        "nll": 2.516774836074764,
+        "coverage_50": 0.5131578947368421,
+        "width_50_f": 3.689898954288072,
+        "miss_below_50": 0.21875,
+        "miss_above_50": 0.2680921052631579,
+        "interval_score_50_f": 7.751299201246665,
+        "coverage_80": 0.7861842105263158,
+        "width_80_f": 7.392765180393623,
+        "miss_below_80": 0.10197368421052631,
+        "miss_above_80": 0.1118421052631579,
+        "interval_score_80_f": 11.468832384380509,
+        "coverage_90": 0.8733552631578947,
+        "width_90_f": 9.666886375687618,
+        "miss_below_90": 0.05263157894736842,
+        "miss_above_90": 0.07401315789473684,
+        "interval_score_90_f": 13.762866425410996,
+        "coverage_95": 0.9325657894736842,
+        "width_95_f": 12.087891315108566,
+        "miss_below_95": 0.029605263157894735,
+        "miss_above_95": 0.03782894736842105,
+        "interval_score_95_f": 15.695813000562893,
+        "rmse_f": 3.2290128229598483
+      }
+    },
+    "by_station": {
+      "KATL": {
+        "pr23": {
+          "mae_f": 2.1955948553403637,
+          "forecast_bias_f": -0.044465203179903524,
+          "crps_f": 1.6187184233837497,
+          "coverage_90": 0.8275862068965517
+        },
+        "reliability_context_shape": {
+          "mae_f": 2.1955948553403637,
+          "forecast_bias_f": -0.044465203179903524,
+          "crps_f": 1.6090346753922182,
+          "coverage_90": 0.7931034482758621
+        }
+      },
+      "KAUS": {
+        "pr23": {
+          "mae_f": 2.1581852518505,
+          "forecast_bias_f": -0.3091599669091508,
+          "crps_f": 1.6351673213702012,
+          "coverage_90": 0.896551724137931
+        },
+        "reliability_context_shape": {
+          "mae_f": 2.505925584373082,
+          "forecast_bias_f": -0.8602181921375704,
+          "crps_f": 1.8334780956102492,
+          "coverage_90": 0.7931034482758621
+        }
+      },
+      "KBOS": {
+        "pr23": {
+          "mae_f": 1.7044169667238938,
+          "forecast_bias_f": 0.15637515441907465,
+          "crps_f": 1.2151455391776647,
+          "coverage_90": 0.9310344827586207
+        },
+        "reliability_context_shape": {
+          "mae_f": 1.7044169667238938,
+          "forecast_bias_f": 0.15637515441907465,
+          "crps_f": 1.227560096737919,
+          "coverage_90": 0.9655172413793104
+        }
+      },
+      "KDCA": {
+        "pr23": {
+          "mae_f": 2.6515583222268844,
+          "forecast_bias_f": -0.9484511546486124,
+          "crps_f": 1.8032893210785605,
+          "coverage_90": 0.896551724137931
+        },
+        "reliability_context_shape": {
+          "mae_f": 2.4912186142782446,
+          "forecast_bias_f": -0.19173372675097977,
+          "crps_f": 1.698026657852152,
+          "coverage_90": 0.896551724137931
+        }
+      },
+      "KDEN": {
+        "pr23": {
+          "mae_f": 1.7158214595359529,
+          "forecast_bias_f": 0.43482981597718373,
+          "crps_f": 1.2569164904699859,
+          "coverage_90": 1.0
+        },
+        "reliability_context_shape": {
+          "mae_f": 1.7620689655172415,
+          "forecast_bias_f": -1.0103448275862086,
+          "crps_f": 1.2859463613276256,
+          "coverage_90": 0.9310344827586207
+        }
+      },
+      "KDFW": {
+        "pr23": {
+          "mae_f": 2.059105346723452,
+          "forecast_bias_f": 0.12723977766300817,
+          "crps_f": 1.4628001180902905,
+          "coverage_90": 0.8620689655172413
+        },
+        "reliability_context_shape": {
+          "mae_f": 2.0541215558911516,
+          "forecast_bias_f": -0.11467085702117699,
+          "crps_f": 1.4710444917906893,
+          "coverage_90": 0.896551724137931
+        }
+      },
+      "KHOU": {
+        "pr23": {
+          "mae_f": 1.3364942213972797,
+          "forecast_bias_f": -0.457251920932139,
+          "crps_f": 0.9997203195424385,
+          "coverage_90": 1.0
+        },
+        "reliability_context_shape": {
+          "mae_f": 1.2473835208943935,
+          "forecast_bias_f": -0.5352049770165116,
+          "crps_f": 0.995280866055359,
+          "coverage_90": 1.0
+        }
+      },
+      "KIAH": {
+        "pr23": {
+          "mae_f": 1.5271796836728908,
+          "forecast_bias_f": -0.7537461738057002,
+          "crps_f": 1.0942729525689625,
+          "coverage_90": 0.9310344827586207
+        },
+        "reliability_context_shape": {
+          "mae_f": 1.4978652266377532,
+          "forecast_bias_f": -0.8800471635534338,
+          "crps_f": 1.100207893613133,
+          "coverage_90": 0.9655172413793104
+        }
+      },
+      "KLAS": {
+        "pr23": {
+          "mae_f": 1.87894397305207,
+          "forecast_bias_f": 0.9580303268328696,
+          "crps_f": 1.404434072495157,
+          "coverage_90": 0.8275862068965517
+        },
+        "reliability_context_shape": {
+          "mae_f": 1.913350590543334,
+          "forecast_bias_f": 0.6883607590384502,
+          "crps_f": 1.4167404784017434,
+          "coverage_90": 0.8620689655172413
+        }
+      },
+      "KLAX": {
+        "pr23": {
+          "mae_f": 3.252411385212585,
+          "forecast_bias_f": 0.3641439922223972,
+          "crps_f": 2.3063358981672395,
+          "coverage_90": 0.7931034482758621
+        },
+        "reliability_context_shape": {
+          "mae_f": 3.3551724137931034,
+          "forecast_bias_f": -1.7206896551724136,
+          "crps_f": 2.4373177826177623,
+          "coverage_90": 0.8620689655172413
+        }
+      },
+      "KMDW": {
+        "pr23": {
+          "mae_f": 1.8683026059889842,
+          "forecast_bias_f": 0.09261525659021136,
+          "crps_f": 1.4335484197471895,
+          "coverage_90": 0.8620689655172413
+        },
+        "reliability_context_shape": {
+          "mae_f": 1.868944167289591,
+          "forecast_bias_f": -0.055193763744892634,
+          "crps_f": 1.3983499906229848,
+          "coverage_90": 0.896551724137931
+        }
+      },
+      "KMIA": {
+        "pr23": {
+          "mae_f": 1.7279338133976179,
+          "forecast_bias_f": -0.37764305043261986,
+          "crps_f": 1.242482740904961,
+          "coverage_90": 0.8620689655172413
+        },
+        "reliability_context_shape": {
+          "mae_f": 1.6261255191622557,
+          "forecast_bias_f": 0.000483358583540037,
+          "crps_f": 1.234045550064299,
+          "coverage_90": 0.9310344827586207
+        }
+      },
+      "KMSP": {
+        "pr23": {
+          "mae_f": 2.8611244844625348,
+          "forecast_bias_f": -0.6136069656320101,
+          "crps_f": 2.066636382077654,
+          "coverage_90": 0.8620689655172413
+        },
+        "reliability_context_shape": {
+          "mae_f": 2.7948595970976973,
+          "forecast_bias_f": -0.6291879543341665,
+          "crps_f": 2.005274458039368,
+          "coverage_90": 0.8620689655172413
+        }
+      },
+      "KNYC": {
+        "pr23": {
+          "mae_f": 3.046311055293529,
+          "forecast_bias_f": -0.5735188430266466,
+          "crps_f": 2.219095363548145,
+          "coverage_90": 0.7931034482758621
+        },
+        "reliability_context_shape": {
+          "mae_f": 3.156525132782813,
+          "forecast_bias_f": -0.35337213950599083,
+          "crps_f": 2.2790446084272236,
+          "coverage_90": 0.6206896551724138
+        }
+      },
+      "KOKC": {
+        "pr23": {
+          "mae_f": 2.096855799377992,
+          "forecast_bias_f": -0.30974872808411624,
+          "crps_f": 1.5863897044846385,
+          "coverage_90": 0.8620689655172413
+        },
+        "reliability_context_shape": {
+          "mae_f": 2.1196676691124745,
+          "forecast_bias_f": -0.39179254003428465,
+          "crps_f": 1.582004976648832,
+          "coverage_90": 0.8620689655172413
+        }
+      },
+      "KORD": {
+        "pr23": {
+          "mae_f": 1.7164261609838893,
+          "forecast_bias_f": -0.017124207011319913,
+          "crps_f": 1.2356730462508958,
+          "coverage_90": 0.896551724137931
+        },
+        "reliability_context_shape": {
+          "mae_f": 1.6642755421011235,
+          "forecast_bias_f": -0.5470341627907785,
+          "crps_f": 1.2064731240226962,
+          "coverage_90": 0.896551724137931
+        }
+      },
+      "KPHL": {
+        "pr23": {
+          "mae_f": 2.2202204973925697,
+          "forecast_bias_f": -0.5313732491569167,
+          "crps_f": 1.6245917421204963,
+          "coverage_90": 0.8620689655172413
+        },
+        "reliability_context_shape": {
+          "mae_f": 2.2724137931034494,
+          "forecast_bias_f": -1.5620689655172417,
+          "crps_f": 1.690965507515789,
+          "coverage_90": 0.8620689655172413
+        }
+      },
+      "KPHX": {
+        "pr23": {
+          "mae_f": 2.302157730020899,
+          "forecast_bias_f": 0.5693330223468399,
+          "crps_f": 1.675515955264249,
+          "coverage_90": 0.9642857142857143
+        },
+        "reliability_context_shape": {
+          "mae_f": 2.302157730020899,
+          "forecast_bias_f": 0.5693330223468399,
+          "crps_f": 1.6731640419973244,
+          "coverage_90": 0.9642857142857143
+        }
+      },
+      "KSAT": {
+        "pr23": {
+          "mae_f": 1.7115461682566133,
+          "forecast_bias_f": 0.039989458378204876,
+          "crps_f": 1.3048452449509773,
+          "coverage_90": 0.896551724137931
+        },
+        "reliability_context_shape": {
+          "mae_f": 1.8559320582613688,
+          "forecast_bias_f": -0.7626859085955936,
+          "crps_f": 1.3955677271534728,
+          "coverage_90": 0.8620689655172413
+        }
+      },
+      "KSEA": {
+        "pr23": {
+          "mae_f": 3.269093240679422,
+          "forecast_bias_f": 0.427177197841808,
+          "crps_f": 2.3331127213611946,
+          "coverage_90": 0.896551724137931
+        },
+        "reliability_context_shape": {
+          "mae_f": 3.19832515122146,
+          "forecast_bias_f": 1.0110036796984845,
+          "crps_f": 2.298867926449665,
+          "coverage_90": 0.8275862068965517
+        }
+      },
+      "KSFO": {
+        "pr23": {
+          "mae_f": 5.199377791545055,
+          "forecast_bias_f": 2.6001133408813994,
+          "crps_f": 3.7121972802250167,
+          "coverage_90": 0.8620689655172413
+        },
+        "reliability_context_shape": {
+          "mae_f": 5.517906897565106,
+          "forecast_bias_f": 4.53195166338417,
+          "crps_f": 4.108795515489583,
+          "coverage_90": 0.7931034482758621
+        }
+      }
+    },
+    "paired_vs_pr23": {
+      "calendar_blocks": 5,
+      "calendar_block_days": 7,
+      "scores": {
+        "mae_f": {
+          "candidate_minus_baseline": 0.02886600562285992,
+          "bootstrap_95_percent_interval": [
+            -0.04261859527779147,
+            0.12884380600445308
+          ]
+        },
+        "crps_f": {
+          "candidate_minus_baseline": 0.03416957763360059,
+          "bootstrap_95_percent_interval": [
+            -0.021966328021663196,
+            0.10558780630899657
+          ]
+        }
+      },
+      "interpretation": "Exploratory; few calendar blocks, no multiple-comparison or model-selection guarantee."
+    },
+    "paired_context_vs_global": {
+      "calendar_blocks": 5,
+      "calendar_block_days": 7,
+      "scores": {
+        "mae_f": {
+          "candidate_minus_baseline": 0.0,
+          "bootstrap_95_percent_interval": [
+            0.0,
+            0.0
+          ]
+        },
+        "crps_f": {
+          "candidate_minus_baseline": 0.0034793352374589415,
+          "bootstrap_95_percent_interval": [
+            -0.0021441147631701676,
+            0.008534094609882905
+          ]
+        }
+      },
+      "interpretation": "Exploratory; few calendar blocks, no multiple-comparison or model-selection guarantee."
+    },
+    "correction_weights": {
+      "1.0": 121,
+      "0.75": 186,
+      "0.0": 214,
+      "0.25": 24,
+      "0.5": 63
+    },
+    "age_conditioned_predictions": 0
+  },
+  "age_effect_status": "not_estimable_from_archive_without_actual_decision_times",
+  "live_ready": false,
+  "paper_execution_enabled": false,
+  "profitability_proven": false,
+  "frozen_daytime_changed": false,
+  "hosted_backfill_changed": false,
+  "limitations": [
+    "Previously inspected months; no untouched-test or forward-performance claim.",
+    "Historical run publication and CLI label availability unverified; three-day maturity lag assumed.",
+    "No age labels invented; verified forward observations are needed before fitting age-specific effects.",
+    "Corrections and widths are selected using earlier events only; repeated research creates selection risk.",
+    "The price guard can match market and abstain; this is not an edge. Costs are quote-only sensitivities.",
+    "No historical importer, in-progress archive, frozen paper book, or existing shadow recipe changed."
+  ],
+  "market": {
+    "status": "retrospective_only_market_fallback",
+    "test_dates": [
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-03",
+      "2026-10-04"
+    ],
+    "test_station_dates": 76,
+    "test_vectors": 96,
+    "scores": {
+      "market": {
+        "brier": 0.6889026146688344,
+        "log_loss": 1.353487324615478
+      },
+      "saved_original": {
+        "brier": 0.74311971829668,
+        "log_loss": 1.4504219612534412
+      },
+      "reference": {
+        "brier": 0.8450147980996496,
+        "log_loss": 1.8186515849853042
+      },
+      "candidate": {
+        "brier": 0.8280923630756656,
+        "log_loss": 1.7727897944498452
+      },
+      "guarded": {
+        "brier": 0.6889026146688344,
+        "log_loss": 1.353487324615478
+      },
+      "pr23": {
+        "brier": 0.8408240363078738,
+        "log_loss": 1.798275454958741
+      }
+    },
+    "by_venue": {
+      "kalshi": {
+        "market": {
+          "brier": 0.6869762353610821,
+          "log_loss": 1.3429916652340612
+        },
+        "saved_original": {
+          "brier": 0.7424361765416629,
+          "log_loss": 1.4444086412569495
+        },
+        "reference": {
+          "brier": 0.8450147980996496,
+          "log_loss": 1.8186515849853042
+        },
+        "candidate": {
+          "brier": 0.8280923630756656,
+          "log_loss": 1.7727897944498452
+        },
+        "guarded": {
+          "brier": 0.6869762353610821,
+          "log_loss": 1.3429916652340612
+        }
+      },
+      "polymarket": {
+        "market": {
+          "brier": 0.683623634737439,
+          "log_loss": 1.3357038194094382
+        },
+        "saved_original": {
+          "brier": 0.7684476223891272,
+          "log_loss": 1.497063357794734
+        },
+        "reference": {
+          "brier": 0.9419302408238168,
+          "log_loss": 1.963902103320741
+        },
+        "candidate": {
+          "brier": 0.978889724109407,
+          "log_loss": 2.05820206953805
+        },
+        "guarded": {
+          "brier": 0.683623634737439,
+          "log_loss": 1.3357038194094382
+        }
+      }
+    },
+    "paired_vs_market": {
+      "saved_original": {
+        "brier": {
+          "blocks": 2,
+          "upper_95": null
+        },
+        "log_loss": {
+          "blocks": 2,
+          "upper_95": null
+        }
+      },
+      "reference": {
+        "brier": {
+          "blocks": 2,
+          "upper_95": null
+        },
+        "log_loss": {
+          "blocks": 2,
+          "upper_95": null
+        }
+      },
+      "candidate": {
+        "brier": {
+          "blocks": 2,
+          "upper_95": null
+        },
+        "log_loss": {
+          "blocks": 2,
+          "upper_95": null
+        }
+      },
+      "guarded": {
+        "brier": {
+          "blocks": 2,
+          "upper_95": null
+        },
+        "log_loss": {
+          "blocks": 2,
+          "upper_95": null
+        }
+      }
+    },
+    "guard_reasons": {
+      "no_qualified_gain": 96
+    },
+    "guard": {
+      "weight": 0.0,
+      "supported_bands": [],
+      "reason": "no_qualified_gain",
+      "fit_before": "2026-09-30T12:23:37.025395+00:00",
+      "dates": [
+        "2026-09-21",
+        "2026-09-22",
+        "2026-09-23",
+        "2026-09-24",
+        "2026-09-25",
+        "2026-09-26",
+        "2026-09-27",
+        "2026-09-28",
+        "2026-09-29"
+      ],
+      "station_dates": 153,
+      "calibration_hash": "cbb00b86ea1805ee5361f81f9c15bcdd8fe44ca7b6a20d34339262182aae4c72",
+      "market_scores": {
+        "brier": 0.6408429250219337,
+        "log_loss": 1.2423735460651386
+      },
+      "latest_label_at": "2026-09-30T12:18:12.878041+00:00",
+      "selection_used_test_outcomes": false
+    },
+    "cost_sensitivity": {
+      "reference": {
+        "kalshi": {
+          "0.0": {
+            "contracts": 73,
+            "station_dates": 73,
+            "hypothetical_unit_pnl": -0.03500000000000016,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.01": {
+            "contracts": 71,
+            "station_dates": 71,
+            "hypothetical_unit_pnl": -0.5850000000000002,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.03": {
+            "contracts": 66,
+            "station_dates": 66,
+            "hypothetical_unit_pnl": -1.3800000000000003,
+            "missing_cost_evidence_buckets": 5
+          }
+        },
+        "polymarket": {
+          "0.0": {
+            "contracts": 15,
+            "station_dates": 15,
+            "hypothetical_unit_pnl": -2.325,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.01": {
+            "contracts": 15,
+            "station_dates": 15,
+            "hypothetical_unit_pnl": -2.475,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.03": {
+            "contracts": 15,
+            "station_dates": 15,
+            "hypothetical_unit_pnl": -2.7750000000000004,
+            "missing_cost_evidence_buckets": 0
+          }
+        }
+      },
+      "candidate": {
+        "kalshi": {
+          "0.0": {
+            "contracts": 70,
+            "station_dates": 70,
+            "hypothetical_unit_pnl": -1.2500000000000002,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.01": {
+            "contracts": 70,
+            "station_dates": 70,
+            "hypothetical_unit_pnl": -1.9500000000000004,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.03": {
+            "contracts": 65,
+            "station_dates": 65,
+            "hypothetical_unit_pnl": -2.7550000000000003,
+            "missing_cost_evidence_buckets": 5
+          }
+        },
+        "polymarket": {
+          "0.0": {
+            "contracts": 16,
+            "station_dates": 16,
+            "hypothetical_unit_pnl": -2.9000000000000004,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.01": {
+            "contracts": 16,
+            "station_dates": 16,
+            "hypothetical_unit_pnl": -3.0600000000000005,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.03": {
+            "contracts": 16,
+            "station_dates": 16,
+            "hypothetical_unit_pnl": -3.3800000000000003,
+            "missing_cost_evidence_buckets": 0
+          }
+        }
+      },
+      "guarded": {
+        "kalshi": {
+          "0.0": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.01": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.03": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 5
+          }
+        },
+        "polymarket": {
+          "0.0": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.01": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.03": {
+            "contracts": 0,
+            "station_dates": 0,
+            "hypothetical_unit_pnl": 0,
+            "missing_cost_evidence_buckets": 0
+          }
+        }
+      },
+      "pr23": {
+        "kalshi": {
+          "0.0": {
+            "contracts": 72,
+            "station_dates": 72,
+            "hypothetical_unit_pnl": -0.9900000000000002,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.01": {
+            "contracts": 67,
+            "station_dates": 67,
+            "hypothetical_unit_pnl": -1.1050000000000002,
+            "missing_cost_evidence_buckets": 5
+          },
+          "0.03": {
+            "contracts": 63,
+            "station_dates": 63,
+            "hypothetical_unit_pnl": -1.9750000000000003,
+            "missing_cost_evidence_buckets": 5
+          }
+        },
+        "polymarket": {
+          "0.0": {
+            "contracts": 15,
+            "station_dates": 15,
+            "hypothetical_unit_pnl": -2.395,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.01": {
+            "contracts": 15,
+            "station_dates": 15,
+            "hypothetical_unit_pnl": -2.5450000000000004,
+            "missing_cost_evidence_buckets": 0
+          },
+          "0.03": {
+            "contracts": 14,
+            "station_dates": 14,
+            "hypothetical_unit_pnl": -2.7800000000000002,
+            "missing_cost_evidence_buckets": 0
+          }
+        }
+      }
+    }
+  },
+  "local_validation": {
+    "tests_passed": 108,
+    "hosted_ci_verified": false,
+    "temperature_age_effect_estimated": false
+  }
+}
